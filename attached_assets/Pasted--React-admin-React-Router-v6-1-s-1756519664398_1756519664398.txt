@@ -1,0 +1,293 @@
+下面是最小骨架（关键节点，非完整代码），按你指定的路由与可见性规则组织。可直接嵌入 React-admin（React Router v6）。
+
+1) 角色工具 & 受保护路由（前端可见性）
+// src/auth/roles.ts
+export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support';
+
+export const R = {
+  SUPER: ['super_admin'] as AdminRole[],
+  SUPER_OR_FIN: ['super_admin', 'admin_finance'] as AdminRole[],
+  SUPER_OR_VER: ['super_admin', 'admin_verifier'] as AdminRole[],
+  SUPER_OR_SUP: ['super_admin', 'admin_support'] as AdminRole[],
+};
+
+// src/routing/Protect.tsx
+import { usePermissions } from 'react-admin';
+import { Navigate } from 'react-router-dom';
+import type { AdminRole } from '../auth/roles';
+
+export function Protect({ allow, element }:{
+  allow: AdminRole[];
+  element: JSX.Element;
+}) {
+  const { permissions, isLoading } = usePermissions<AdminRole>();
+  if (isLoading) return null;
+  return permissions && allow.includes(permissions) ? element : <Navigate to="/forbidden" replace />;
+}
+
+2) 自定义菜单（左侧导航）
+// src/layout/MyMenu.tsx
+import { usePermissions, MenuItemLink } from 'react-admin';
+import { useState } from 'react';
+import { R, AdminRole } from '../auth/roles';
+import { List, ListItemButton, ListItemText, Collapse } from '@mui/material';
+
+export function MyMenu() {
+  const { permissions } = usePermissions<AdminRole>();
+  const [openAdmin, setOpenAdmin] = useState(true);
+  const [openFin, setOpenFin]   = useState(true);
+  const [openVer, setOpenVer]   = useState(true);
+  const [openSup, setOpenSup]   = useState(true);
+
+  return (
+    <List component="nav" sx={{ mt: 1 }}>
+      {/* super_admin only */}
+      {permissions === 'super_admin' && (
+        <MenuItemLink to="/pending-admin-requests" primaryText="Pending Requests" />
+      )}
+
+      {/* Admin Management (super_admin only) */}
+      {permissions === 'super_admin' && (
+        <>
+          <ListItemButton onClick={() => setOpenAdmin(v => !v)}>
+            <ListItemText primary="Admin Management" />
+          </ListItemButton>
+          <Collapse in={openAdmin} unmountOnExit>
+            <List sx={{ pl: 2 }}>
+              <MenuItemLink to="/admin-management/create" primaryText="Create Admin" />
+              <MenuItemLink to="/admin-management/change-role" primaryText="Change Role" />
+              <MenuItemLink to="/admin-management/delete" primaryText="Delete Admin" />
+            </List>
+          </Collapse>
+        </>
+      )}
+
+      {/* Finance / Verifier / Support section titles only (pages show title only) */}
+      {(permissions === 'super_admin' || permissions === 'admin_finance') && (
+        <>
+          <ListItemButton onClick={() => setOpenFin(v => !v)}>
+            <ListItemText primary="Finance Management" />
+          </ListItemButton>
+          <Collapse in={openFin} unmountOnExit>
+            <List sx={{ pl: 2 }}>
+              <MenuItemLink to="/finance-management" primaryText="Overview" />
+            </List>
+          </Collapse>
+        </>
+      )}
+
+      {(permissions === 'super_admin' || permissions === 'admin_verifier') && (
+        <>
+          <ListItemButton onClick={() => setOpenVer(v => !v)}>
+            <ListItemText primary="Verifier Management" />
+          </ListItemButton>
+          <Collapse in={openVer} unmountOnExit>
+            <List sx={{ pl: 2 }}>
+              <MenuItemLink to="/verifier-management" primaryText="Overview" />
+            </List>
+          </Collapse>
+        </>
+      )}
+
+      {(permissions === 'super_admin' || permissions === 'admin_support') && (
+        <>
+          <ListItemButton onClick={() => setOpenSup(v => !v)}>
+            <ListItemText primary="Support Management" />
+          </ListItemButton>
+          <Collapse in={openSup} unmountOnExit>
+            <List sx={{ pl: 2 }}>
+              <MenuItemLink to="/support-management" primaryText="Overview" />
+            </List>
+          </Collapse>
+        </>
+      )}
+    </List>
+  );
+}
+
+3) 自定义路由挂载（仅骨架）
+// src/admin/routes.tsx
+import { CustomRoutes } from 'react-admin';
+import { Route } from 'react-router-dom';
+import { Protect } from '../routing/Protect';
+import { R } from '../auth/roles';
+
+// Pages (skeletons)
+import { PendingAdminRequests } from './views/PendingAdminRequests';
+import { AdminManagementPage } from './views/AdminManagementPage';
+import { CreateAdminPage } from './views/CreateAdminPage';
+import { ChangeRoleHubPage } from './views/ChangeRoleHubPage';
+import { DeleteAdminHubPage } from './views/DeleteAdminHubPage';
+import { AdminProfilePage } from './views/AdminProfilePage';
+import { RequestChangeRolePage } from './views/RequestChangeRolePage';
+import { RequestDeletePage } from './views/RequestDeletePage';
+
+// Placeholder pages (title only)
+import { FinanceManagement } from './views/FinanceManagement';
+import { VerifierManagement } from './views/VerifierManagement';
+import { SupportManagement } from './views/SupportManagement';
+
+export function AdminCustomRoutes() {
+  return (
+    <CustomRoutes>
+      {/* super_admin only */}
+      <Route path="/pending-admin-requests" element={
+        <Protect allow={R.SUPER} element={<PendingAdminRequests />} />
+      } />
+      <Route path="/admin-management" element={
+        <Protect allow={R.SUPER} element={<AdminManagementPage />} />
+      } />
+      <Route path="/admin-management/create" element={
+        <Protect allow={R.SUPER} element={<CreateAdminPage />} />
+      } />
+      <Route path="/admin-management/change-role" element={
+        <Protect allow={R.SUPER} element={<ChangeRoleHubPage />} />
+      } />
+      <Route path="/admin-management/delete" element={
+        <Protect allow={R.SUPER} element={<DeleteAdminHubPage />} />
+      } />
+      <Route path="/admin/users/:id/profile" element={
+        <Protect allow={R.SUPER} element={<AdminProfilePage />} />
+      } />
+      <Route path="/admin/users/:id/request-change-role" element={
+        <Protect allow={R.SUPER} element={<RequestChangeRolePage />} />
+      } />
+      <Route path="/admin/users/:id/request-delete" element={
+        <Protect allow={R.SUPER} element={<RequestDeletePage />} />
+      } />
+
+      {/* role-gated sections: title only */}
+      <Route path="/finance-management" element={
+        <Protect allow={R.SUPER_OR_FIN} element={<FinanceManagement />} />
+      } />
+      <Route path="/verifier-management" element={
+        <Protect allow={R.SUPER_OR_VER} element={<VerifierManagement />} />
+      } />
+      <Route path="/support-management" element={
+        <Protect allow={R.SUPER_OR_SUP} element={<SupportManagement />} />
+      } />
+    </CustomRoutes>
+  );
+}
+
+4) 页面骨架（最小 UI）
+4.1 PendingAdminRequests（仅标题）
+export function PendingAdminRequests() {
+  return <h2>Pending Admin Requests</h2>;
+}
+
+4.2 AdminManagementPage（标题 + 右上按钮 + 已通过列表 + 行点击跳 profile）
+import { useNavigate } from 'react-router-dom';
+
+export function AdminManagementPage() {
+  const navigate = useNavigate();
+  // TODO: 拉取 active admins 列表
+  const admins = []; // [{id,name,email,role,lastLoginAt}]
+
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <h2>Admin Management</h2>
+        <button onClick={() => navigate('/admin-management/create')}>Create a new admin</button>
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <h3>All Active Admins</h3>
+        <table width="100%">
+          <thead>
+            <tr><th>Name</th><th>Role</th><th>Last Login</th></tr>
+          </thead>
+          <tbody>
+            {admins.map(a => (
+              <tr key={a.id} style={{ cursor:'pointer' }}
+                  onClick={() => navigate(`/admin/users/${a.id}/profile`)}>
+                <td>{a.name ?? a.email}</td>
+                <td>{a.role}</td>
+                <td>{a.lastLoginAt ?? '-'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+4.3 CreateAdminPage（只保留标题，表单你已有）
+export function CreateAdminPage() {
+  return <h2>Create Admin</h2>;
+}
+
+4.4 ChangeRoleHubPage / DeleteAdminHubPage（仅标题占位）
+export function ChangeRoleHubPage() {
+  return <h2>Change Role</h2>;
+}
+export function DeleteAdminHubPage() {
+  return <h2>Delete Admin</h2>;
+}
+
+4.5 AdminProfilePage（标题 + 基本信息 + 工作记录标题 + 两个按钮跳转）
+import { useParams, useNavigate } from 'react-router-dom';
+
+export function AdminProfilePage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  // TODO: 拉取 admin 基本信息
+  const admin = { id, name: '—', email: '—', role: '—', lastLoginAt: '—', status: 'active' };
+
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <h2>Admin Profile</h2>
+        <div>
+          <button onClick={() => navigate(`/admin/users/${id}/request-change-role`)}>Change role</button>
+          <button style={{ marginLeft: 8 }} onClick={() => navigate(`/admin/users/${id}/request-delete`)}>Delete admin</button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <div><b>Email:</b> {admin.email}</div>
+        <div><b>Role:</b> {admin.role}</div>
+        <div><b>Last login:</b> {admin.lastLoginAt}</div>
+        <div><b>Status:</b> {admin.status}</div>
+      </div>
+
+      <div style={{ marginTop: 20 }}>
+        <h3>Work Activity</h3>
+        {/* 按要求：此处只显示标题，不展示任何数据 */}
+      </div>
+    </div>
+  );
+}
+
+4.6 RequestChangeRolePage / RequestDeletePage（仅标题）
+export function RequestChangeRolePage() {
+  return <h2>Request Change Role</h2>;
+}
+export function RequestDeletePage() {
+  return <h2>Request Delete Admin</h2>;
+}
+
+4.7 三个业务管理入口（仅标题）
+export function FinanceManagement() { return <h2>Finance Management</h2>; }
+export function VerifierManagement() { return <h2>Verifier Management</h2>; }
+export function SupportManagement() { return <h2>Support Management</h2>; }
+
+5) 接入到 <Admin>（示意）
+// src/App.tsx
+import { Admin } from 'react-admin';
+import dataProvider from './dataProvider';
+import authProvider from './authProvider';
+import { MyLayout } from './layout/MyLayout';
+import { AdminCustomRoutes } from './admin/routes';
+
+export default function App() {
+  return (
+    <Admin basename="/admin" dataProvider={dataProvider} authProvider={authProvider} layout={MyLayout}>
+      <AdminCustomRoutes />
+    </Admin>
+  );
+}
+
+
+服务端务必也做基于角色的鉴权，与前端显示规则一致。
