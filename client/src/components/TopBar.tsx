@@ -56,14 +56,14 @@ export default function TopBar({ onToggleSidebar }: TopBarProps) {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="flex items-center space-x-2" data-testid="button-user-menu">
               <Avatar className="w-8 h-8">
-                <AvatarImage src={user?.profileImageUrl} />
+                <AvatarImage src={(user as any)?.profileImageUrl} />
                 <AvatarFallback className="bg-primary text-primary-foreground">
-                  {adminUser?.name?.[0] || user?.email?.[0] || '?'}
+                  {adminUser?.name?.[0] || (user as any)?.email?.[0] || '?'}
                 </AvatarFallback>
               </Avatar>
               <div className="hidden sm:block text-left">
                 <div className="text-sm font-medium text-foreground" data-testid="text-user-name">
-                  {adminUser?.name || user?.email || 'Unknown'}
+                  {adminUser?.name || (user as any)?.email || 'Unknown'}
                 </div>
                 <div className="text-xs text-muted-foreground" data-testid="text-user-role">
                   {adminUser?.role || 'No Role'}

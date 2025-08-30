@@ -65,7 +65,7 @@ export const adminUsers = pgTable("admin_users", {
   passwordHash: text("password_hash").notNull(),
   role: adminRoleEnum("role").notNull(),
   status: adminStatusEnum("status").notNull().default('pending'),
-  createdBy: integer("created_by").references(() => adminUsers.id),
+  createdBy: integer("created_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   lastLoginAt: timestamp("last_login_at"),
@@ -75,10 +75,10 @@ export const adminUsers = pgTable("admin_users", {
 // Admin user approvals table
 export const adminUserApprovals = pgTable("admin_user_approvals", {
   id: serial("id").primaryKey(),
-  targetAdminId: integer("target_admin_id").references(() => adminUsers.id).notNull(),
+  targetAdminId: integer("target_admin_id").notNull(),
   action: varchar("action", { length: 50 }).notNull(), // 'create', 'change_role', 'delete'
-  requestedBy: integer("requested_by").references(() => adminUsers.id).notNull(),
-  approvedBy: integer("approved_by").references(() => adminUsers.id),
+  requestedBy: integer("requested_by").notNull(),
+  approvedBy: integer("approved_by"),
   status: varchar("status", { length: 20 }).notNull().default('pending'), // 'pending', 'approved', 'rejected'
   requestData: jsonb("request_data"), // Store additional data like old/new role
   createdAt: timestamp("created_at").defaultNow(),

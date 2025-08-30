@@ -92,15 +92,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const saltRounds = 12;
       const passwordHash = await bcrypt.hash(validatedData.passwordHash, saltRounds);
       
+      // Create admin user
       const newAdmin = await storage.createAdminUser({
         ...validatedData,
         passwordHash,
         createdBy: req.adminUser.id,
       });
       
+      // Create approval request for the new admin
+      await storage.createApprovalRequest({
+        targetAdminId: newAdmin.id,
+        action: 'create',
+        requestedBy: req.adminUser.id,
+        requestData: {
+          adminData: {
+            name: newAdmin.name,
+            email: newAdmin.email,
+            role: newAdmin.role
+          }
+        }
+      });
+      
       res.status(201).json(newAdmin);
-    } catch (error) {
-      res.status(400).json({ message: "Failed to create admin user", error: error.message });
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to create admin user", error: error?.message || 'Unknown error' });
     }
   });
 

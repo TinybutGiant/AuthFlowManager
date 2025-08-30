@@ -94,8 +94,6 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listAdminUsers(filters?: { role?: AdminRole; status?: AdminStatus }): Promise<AdminUser[]> {
-    let query = db.select().from(adminUsers);
-    
     const conditions = [];
     if (filters?.role) {
       conditions.push(eq(adminUsers.role, filters.role));
@@ -105,10 +103,10 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (conditions.length > 0) {
-      query = query.where(and(...conditions));
+      return await db.select().from(adminUsers).where(and(...conditions)).orderBy(desc(adminUsers.createdAt));
     }
 
-    return await query.orderBy(desc(adminUsers.createdAt));
+    return await db.select().from(adminUsers).orderBy(desc(adminUsers.createdAt));
   }
 
   // Admin approval operations
@@ -126,13 +124,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listApprovalRequests(filters?: { status?: ApprovalStatus }): Promise<AdminUserApproval[]> {
-    let query = db.select().from(adminUserApprovals);
-    
     if (filters?.status) {
-      query = query.where(eq(adminUserApprovals.status, filters.status));
+      return await db.select().from(adminUserApprovals).where(eq(adminUserApprovals.status, filters.status)).orderBy(desc(adminUserApprovals.createdAt));
     }
 
-    return await query.orderBy(desc(adminUserApprovals.createdAt));
+    return await db.select().from(adminUserApprovals).orderBy(desc(adminUserApprovals.createdAt));
   }
 
   async updateApprovalRequest(id: number, updates: Partial<AdminUserApproval>): Promise<AdminUserApproval> {
