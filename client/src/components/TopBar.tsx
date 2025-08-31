@@ -8,6 +8,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Bell, Menu, ChevronDown, Settings, LogOut } from "lucide-react";
+import { tokenManager } from "@/lib/queryClient";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface TopBarProps {
   onToggleSidebar: () => void;
@@ -16,9 +18,12 @@ interface TopBarProps {
 export default function TopBar({ onToggleSidebar }: TopBarProps) {
   const { user } = useAuth();
   const adminUser = (user as any)?.adminUser;
+  const queryClient = useQueryClient();
 
   const handleLogout = () => {
-    window.location.href = "/api/logout";
+    tokenManager.removeToken();
+    queryClient.clear();
+    window.location.reload();
   };
 
   return (

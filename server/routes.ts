@@ -1,48 +1,105 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, requireAuth, requireRole, jwtUtils } from "./jwtAuth";
 import { insertAdminUserSchema, insertAdminUserApprovalSchema, type AdminRole } from "@shared/schema";
+import { z } from "zod";
 import bcrypt from 'bcrypt';
 
-// Role-based authorization middleware
-function requireRole(allowedRoles: AdminRole[]) {
-  return async (req: any, res: any, next: any) => {
-    try {
-      const userId = req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+// Login/Register schemas
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+});
 
-      // Get admin user by their Replit user ID (stored in a separate mapping table in real implementation)
-      // For now, we'll check if user exists and has proper role
-      const user = await storage.getUser(userId);
-      if (!user?.email) {
-        return res.status(401).json({ message: "User not found" });
-      }
-
-      const admin = await storage.getAdminUserByEmail(user.email);
-      if (!admin || !allowedRoles.includes(admin.role)) {
-        return res.status(403).json({ message: "Insufficient permissions" });
-      }
-
-      req.adminUser = admin;
-      next();
-    } catch (error) {
-      res.status(500).json({ message: "Authorization error" });
-    }
-  };
-}
+const registerSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+});
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
   // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
+      const { email, password } = loginSchema.parse(req.body);
+      
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      const isValid = await jwtUtils.comparePassword(password, user.passwordHash);
+      if (!isValid) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      if (user.isActive !== 'true') {
+        return res.status(401).json({ message: "Account is not active" });
+      }
+
+      // Update last login
+      await storage.updateUser(user.id, { lastLoginAt: new Date() });
+
+      const token = jwtUtils.generateToken({ userId: user.id, email: user.email });
+      
+      res.json({ 
+        token, 
+        user: { 
+          id: user.id, 
+          email: user.email, 
+          firstName: user.firstName, 
+          lastName: user.lastName 
+        }
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: "Login failed", error: error?.message });
+    }
+  });
+
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const { email, password, firstName, lastName } = registerSchema.parse(req.body);
+      
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ message: "User already exists" });
+      }
+
+      const passwordHash = await jwtUtils.hashPassword(password);
+      
+      const newUser = await storage.createUser({
+        email,
+        passwordHash,
+        firstName,
+        lastName,
+        isActive: 'true',
+      });
+
+      const token = jwtUtils.generateToken({ userId: newUser.id, email: newUser.email });
+      
+      res.status(201).json({ 
+        token, 
+        user: { 
+          id: newUser.id, 
+          email: newUser.email, 
+          firstName: newUser.firstName, 
+          lastName: newUser.lastName 
+        }
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: "Registration failed", error: error?.message });
+    }
+  });
+
+  app.get('/api/auth/user', requireAuth, async (req: any, res) => {
+    try {
+      const user = req.user;
       
       // Also get admin user info if exists
       let adminUser = null;
@@ -57,8 +114,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post('/api/auth/logout', (req, res) => {
+    // For JWT, logout is handled client-side by removing the token
+    res.json({ message: "Logged out successfully" });
+  });
+
   // Admin management routes (super_admin only)
-  app.get("/api/admin/users", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.get("/api/admin/users", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const { role, status } = req.query;
       const admins = await storage.listAdminUsers({ 
@@ -71,7 +133,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/users/:id", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.get("/api/admin/users/:id", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
       const admin = await storage.getAdminUser(id);
@@ -84,7 +146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/users", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.post("/api/admin/users", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const validatedData = insertAdminUserSchema.parse(req.body);
       
@@ -119,7 +181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/admin/users/:id", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.put("/api/admin/users/:id", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
       const updates = req.body;
@@ -131,7 +193,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/admin/users/:id", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.delete("/api/admin/users/:id", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
       await storage.deleteAdminUser(id);
@@ -142,7 +204,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Approval workflow routes
-  app.get("/api/admin/approvals", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.get("/api/admin/approvals", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const { status } = req.query;
       const approvals = await storage.listApprovalRequests({ 
@@ -154,7 +216,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/approvals", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.post("/api/admin/approvals", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const validatedData = insertAdminUserApprovalSchema.parse({
         ...req.body,
@@ -168,7 +230,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/admin/approvals/:id", isAuthenticated, requireRole(['super_admin']), async (req: any, res) => {
+  app.put("/api/admin/approvals/:id", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
       const { status, notes } = req.body;
@@ -189,16 +251,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Dashboard stats route
+  app.get("/api/admin/stats", requireAuth, requireRole(['super_admin', 'admin_finance', 'admin_verifier', 'admin_support']), async (req: any, res) => {
+    try {
+      const totalAdmins = await storage.listAdminUsers({ status: 'active' });
+      const pendingApprovals = await storage.listApprovalRequests({ status: 'pending' });
+      
+      res.json({
+        totalAdmins: totalAdmins.length,
+        pendingApprovals: pendingApprovals.length,
+        activeSessions: 1, // Placeholder for JWT sessions
+        systemHealth: "Healthy"
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch stats" });
+    }
+  });
+
   // Role-specific management routes
-  app.get("/api/admin/finance", isAuthenticated, requireRole(['super_admin', 'admin_finance']), async (req: any, res) => {
+  app.get("/api/admin/finance", requireAuth, requireRole(['super_admin', 'admin_finance']), async (req: any, res) => {
     res.json({ message: "Finance Management" });
   });
 
-  app.get("/api/admin/verifier", isAuthenticated, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+  app.get("/api/admin/verifier", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     res.json({ message: "Verifier Management" });
   });
 
-  app.get("/api/admin/support", isAuthenticated, requireRole(['super_admin', 'admin_support']), async (req: any, res) => {
+  app.get("/api/admin/support", requireAuth, requireRole(['super_admin', 'admin_support']), async (req: any, res) => {
     res.json({ message: "Support Management" });
   });
 
