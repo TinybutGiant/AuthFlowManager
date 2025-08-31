@@ -28,17 +28,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { email, password } = loginSchema.parse(req.body);
       
+      console.log('Login attempt for email:', email);
+      
       const adminUser = await storage.getAdminUserByEmail(email);
       if (!adminUser) {
+        console.log('Admin user not found for email:', email);
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
+      console.log('Found admin user:', { id: adminUser.id, email: adminUser.email, status: adminUser.status });
+
       const isValid = await jwtUtils.comparePassword(password, adminUser.passwordHash);
+      console.log('Password validation result:', isValid);
+      
       if (!isValid) {
+        console.log('Password validation failed for email:', email);
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
       if (adminUser.status !== 'active') {
+        console.log('Account not active for email:', email, 'status:', adminUser.status);
         return res.status(401).json({ message: "Account is not active" });
       }
 
@@ -57,6 +66,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     } catch (error: any) {
+      console.error('Login error:', error);
       res.status(400).json({ message: "Login failed", error: error?.message });
     }
   });
