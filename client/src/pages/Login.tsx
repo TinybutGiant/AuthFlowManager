@@ -7,38 +7,32 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Settings, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, tokenManager } from "@/lib/queryClient";
 
-const authSchema = z.object({
+const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
   password: z.string().min(6, "Password must be at least 6 characters"),
-  firstName: z.string().optional(),
-  lastName: z.string().optional(),
 });
 
-type AuthForm = z.infer<typeof authSchema>;
+type LoginForm = z.infer<typeof loginSchema>;
 
 export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
-  const [activeTab, setActiveTab] = useState("login");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const form = useForm<AuthForm>({
-    resolver: zodResolver(authSchema),
+  const form = useForm<LoginForm>({
+    resolver: zodResolver(loginSchema),
     defaultValues: {
       email: "",
       password: "",
-      firstName: "",
-      lastName: "",
     },
   });
 
   const loginMutation = useMutation({
-    mutationFn: async (data: Pick<AuthForm, 'email' | 'password'>) => {
+    mutationFn: async (data: LoginForm) => {
       const response = await apiRequest("POST", "/api/auth/login", data);
       return response.json();
     },
@@ -46,52 +40,25 @@ export default function Login() {
       tokenManager.setToken(data.token);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       toast({
-        title: "Success",
-        description: "Logged in successfully",
+        title: "登录成功",
+        description: `欢迎回来，${data.user.name || data.user.email}`,
       });
       window.location.reload(); // Refresh to load authenticated state
     },
     onError: (error: any) => {
       toast({
-        title: "Login Failed",
-        description: error.message || "Invalid credentials",
+        title: "登录失败",
+        description: "邮箱或密码错误，请检查后重试",
         variant: "destructive",
       });
     },
   });
 
-  const registerMutation = useMutation({
-    mutationFn: async (data: AuthForm) => {
-      const response = await apiRequest("POST", "/api/auth/register", data);
-      return response.json();
-    },
-    onSuccess: (data) => {
-      tokenManager.setToken(data.token);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      toast({
-        title: "Success",
-        description: "Account created successfully",
-      });
-      window.location.reload(); // Refresh to load authenticated state
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Registration Failed",
-        description: error.message || "Failed to create account",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const onSubmit = (data: AuthForm) => {
-    if (activeTab === "login") {
-      loginMutation.mutate({ email: data.email, password: data.password });
-    } else {
-      registerMutation.mutate(data);
-    }
+  const onSubmit = (data: LoginForm) => {
+    loginMutation.mutate(data);
   };
 
-  const isLoading = loginMutation.isPending || registerMutation.isPending;
+  const isLoading = loginMutation.isPending;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 to-secondary/10">
@@ -105,151 +72,64 @@ export default function Login() {
         </CardHeader>
         
         <CardContent>
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="login">Sign In</TabsTrigger>
-              <TabsTrigger value="register">Sign Up</TabsTrigger>
-            </TabsList>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <div>
+              <Label htmlFor="email">邮箱地址</Label>
+              <Input
+                id="email"
+                type="email"
+                {...form.register("email")}
+                placeholder="请输入管理员邮箱"
+                data-testid="input-email"
+              />
+              {form.formState.errors.email && (
+                <p className="text-sm text-destructive mt-1">
+                  {form.formState.errors.email.message}
+                </p>
+              )}
+            </div>
             
-            <TabsContent value="login">
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                <div>
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    {...form.register("email")}
-                    placeholder="admin@example.com"
-                    data-testid="input-email"
-                  />
-                  {form.formState.errors.email && (
-                    <p className="text-sm text-destructive mt-1">
-                      {form.formState.errors.email.message}
-                    </p>
-                  )}
-                </div>
-                
-                <div>
-                  <Label htmlFor="password">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showPassword ? "text" : "password"}
-                      {...form.register("password")}
-                      placeholder="Enter your password"
-                      data-testid="input-password"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-0 top-0 h-full px-3"
-                      onClick={() => setShowPassword(!showPassword)}
-                      data-testid="button-toggle-password"
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                  {form.formState.errors.password && (
-                    <p className="text-sm text-destructive mt-1">
-                      {form.formState.errors.password.message}
-                    </p>
-                  )}
-                </div>
-
-                <Button 
-                  type="submit" 
-                  className="w-full" 
-                  disabled={isLoading}
-                  data-testid="button-login"
+            <div>
+              <Label htmlFor="password">密码</Label>
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  {...form.register("password")}
+                  placeholder="请输入密码"
+                  data-testid="input-password"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-full px-3"
+                  onClick={() => setShowPassword(!showPassword)}
+                  data-testid="button-toggle-password"
                 >
-                  {isLoading ? "Signing In..." : "Sign In"}
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
-              </form>
-            </TabsContent>
-            
-            <TabsContent value="register">
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="firstName">First Name</Label>
-                    <Input
-                      id="firstName"
-                      {...form.register("firstName")}
-                      placeholder="John"
-                      data-testid="input-first-name"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="lastName">Last Name</Label>
-                    <Input
-                      id="lastName"
-                      {...form.register("lastName")}
-                      placeholder="Doe"
-                      data-testid="input-last-name"
-                    />
-                  </div>
-                </div>
-                
-                <div>
-                  <Label htmlFor="register-email">Email</Label>
-                  <Input
-                    id="register-email"
-                    type="email"
-                    {...form.register("email")}
-                    placeholder="admin@example.com"
-                    data-testid="input-register-email"
-                  />
-                  {form.formState.errors.email && (
-                    <p className="text-sm text-destructive mt-1">
-                      {form.formState.errors.email.message}
-                    </p>
-                  )}
-                </div>
-                
-                <div>
-                  <Label htmlFor="register-password">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="register-password"
-                      type={showPassword ? "text" : "password"}
-                      {...form.register("password")}
-                      placeholder="Enter your password"
-                      data-testid="input-register-password"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-0 top-0 h-full px-3"
-                      onClick={() => setShowPassword(!showPassword)}
-                      data-testid="button-toggle-register-password"
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                  {form.formState.errors.password && (
-                    <p className="text-sm text-destructive mt-1">
-                      {form.formState.errors.password.message}
-                    </p>
-                  )}
-                </div>
+              </div>
+              {form.formState.errors.password && (
+                <p className="text-sm text-destructive mt-1">
+                  {form.formState.errors.password.message}
+                </p>
+              )}
+            </div>
 
-                <Button 
-                  type="submit" 
-                  className="w-full" 
-                  disabled={isLoading}
-                  data-testid="button-register"
-                >
-                  {isLoading ? "Creating Account..." : "Create Account"}
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
+            <Button 
+              type="submit" 
+              className="w-full" 
+              disabled={isLoading}
+              data-testid="button-login"
+            >
+              {isLoading ? "登录中..." : "登录"}
+            </Button>
+          </form>
 
           <div className="mt-6 text-center">
             <p className="text-xs text-muted-foreground">
-              Secure admin access only • Contact IT for account issues
+              仅限管理员访问 • 账户问题请联系超级管理员
             </p>
           </div>
         </CardContent>

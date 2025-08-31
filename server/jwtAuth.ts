@@ -56,13 +56,13 @@ export const requireAuth: RequestHandler = async (req: any, res, next) => {
       return res.status(401).json({ message: "Invalid token" });
     }
 
-    // Get user from database
-    const user = await storage.getUser(payload.userId);
-    if (!user || user.isActive !== 'true') {
-      return res.status(401).json({ message: "User not found or inactive" });
+    // Get admin user from database
+    const adminUser = await storage.getAdminUser(parseInt(payload.userId));
+    if (!adminUser || adminUser.status !== 'active') {
+      return res.status(401).json({ message: "Admin user not found or inactive" });
     }
 
-    req.user = { ...user, id: payload.userId };
+    req.user = { id: payload.userId, email: adminUser.email, name: adminUser.name, role: adminUser.role };
     next();
   } catch (error) {
     return res.status(401).json({ message: "Authentication failed" });
@@ -77,13 +77,13 @@ export function requireRole(allowedRoles: string[]) {
         return res.status(401).json({ message: "Authentication required" });
       }
 
-      // Get admin user by email
-      const admin = await storage.getAdminUserByEmail(req.user.email);
-      if (!admin || !allowedRoles.includes(admin.role)) {
+      if (!allowedRoles.includes(req.user.role)) {
         return res.status(403).json({ message: "Insufficient permissions" });
       }
 
-      req.adminUser = admin;
+      // Get full admin user info
+      const adminUser = await storage.getAdminUser(parseInt(req.user.id));
+      req.adminUser = adminUser;
       next();
     } catch (error) {
       res.status(500).json({ message: "Authorization error" });

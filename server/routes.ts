@@ -28,32 +28,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { email, password } = loginSchema.parse(req.body);
       
-      const user = await storage.getUserByEmail(email);
-      if (!user) {
+      const adminUser = await storage.getAdminUserByEmail(email);
+      if (!adminUser) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      const isValid = await jwtUtils.comparePassword(password, user.passwordHash);
+      const isValid = await jwtUtils.comparePassword(password, adminUser.passwordHash);
       if (!isValid) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      if (user.isActive !== 'true') {
+      if (adminUser.status !== 'active') {
         return res.status(401).json({ message: "Account is not active" });
       }
 
       // Update last login
-      await storage.updateUser(user.id, { lastLoginAt: new Date() });
+      await storage.updateAdminUser(adminUser.id, { lastLoginAt: new Date() });
 
-      const token = jwtUtils.generateToken({ userId: user.id, email: user.email });
+      const token = jwtUtils.generateToken({ userId: adminUser.id.toString(), email: adminUser.email });
       
       res.json({ 
         token, 
         user: { 
-          id: user.id, 
-          email: user.email, 
-          firstName: user.firstName, 
-          lastName: user.lastName 
+          id: adminUser.id, 
+          email: adminUser.email, 
+          name: adminUser.name,
+          role: adminUser.role
         }
       });
     } catch (error: any) {
@@ -61,53 +61,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/auth/register', async (req, res) => {
-    try {
-      const { email, password, firstName, lastName } = registerSchema.parse(req.body);
-      
-      // Check if user already exists
-      const existingUser = await storage.getUserByEmail(email);
-      if (existingUser) {
-        return res.status(400).json({ message: "User already exists" });
-      }
-
-      const passwordHash = await jwtUtils.hashPassword(password);
-      
-      const newUser = await storage.createUser({
-        email,
-        passwordHash,
-        firstName,
-        lastName,
-        isActive: 'true',
-      });
-
-      const token = jwtUtils.generateToken({ userId: newUser.id, email: newUser.email });
-      
-      res.status(201).json({ 
-        token, 
-        user: { 
-          id: newUser.id, 
-          email: newUser.email, 
-          firstName: newUser.firstName, 
-          lastName: newUser.lastName 
-        }
-      });
-    } catch (error: any) {
-      res.status(400).json({ message: "Registration failed", error: error?.message });
-    }
-  });
+  // 注册功能已移除 - 管理员账户只能由super_admin创建
 
   app.get('/api/auth/user', requireAuth, async (req: any, res) => {
     try {
-      const user = req.user;
-      
-      // Also get admin user info if exists
-      let adminUser = null;
-      if (user?.email) {
-        adminUser = await storage.getAdminUserByEmail(user.email);
+      const adminUser = await storage.getAdminUser(parseInt(req.user.id));
+      if (!adminUser) {
+        return res.status(404).json({ message: "Admin user not found" });
       }
       
-      res.json({ ...user, adminUser });
+      res.json({
+        id: adminUser.id,
+        email: adminUser.email,
+        name: adminUser.name,
+        role: adminUser.role,
+        status: adminUser.status,
+        adminUser: adminUser
+      });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
