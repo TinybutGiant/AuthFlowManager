@@ -4,11 +4,14 @@ import type { Express, RequestHandler } from "express";
 import { storage } from "./storage";
 
 if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be set in production environment');
+  }
   console.warn("JWT_SECRET not set, using default secret for development");
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-key-change-in-production';
-const JWT_EXPIRES_IN = '7d';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 export interface JWTPayload {
   userId: string;
@@ -20,7 +23,7 @@ export interface JWTPayload {
 // JWT utility functions
 export const jwtUtils = {
   generateToken: (payload: Omit<JWTPayload, 'iat' | 'exp'>): string => {
-    return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions);
   },
 
   verifyToken: (token: string): JWTPayload | null => {
