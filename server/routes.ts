@@ -3,6 +3,13 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireRole, jwtUtils } from "./jwtAuth";
 import { insertAdminUserSchema, insertAdminUserApprovalSchema, type AdminRole } from "@shared/schema";
+import {
+  insertGuideApplicationApprovalSchema,
+  updateGuideApplicationLiteSchema,
+  updateGuideApplicationApprovalSchema,
+  type ApplicationStatus,
+  type AdminActionType
+} from "../shared/main-schema";
 import { z } from "zod";
 import bcrypt from 'bcrypt';
 
@@ -259,6 +266,161 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/support", requireAuth, requireRole(['super_admin', 'admin_support']), async (req: any, res) => {
     res.json({ message: "Support Management" });
+  });
+
+  // Guide Application Management Routes
+  // Get all guide applications with filtering
+  app.get("/api/guide-applications", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const { status, flaggedForReview, userId } = req.query;
+      const filters: any = {};
+      
+      if (status) filters.status = status as ApplicationStatus;
+      if (flaggedForReview !== undefined) filters.flaggedForReview = flaggedForReview === 'true';
+      if (userId) filters.userId = parseInt(userId);
+      
+      const applications = await storage.listGuideApplications(filters);
+      res.json(applications);
+    } catch (error) {
+      console.error('Error fetching guide applications:', error);
+      res.status(500).json({ message: "Failed to fetch guide applications" });
+    }
+  });
+
+  // Get a specific guide application
+  app.get("/api/guide-applications/:id", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const application = await storage.getGuideApplication(id);
+      
+      if (!application) {
+        return res.status(404).json({ message: "Guide application not found" });
+      }
+      
+      res.json(application);
+    } catch (error) {
+      console.error('Error fetching guide application:', error);
+      res.status(500).json({ message: "Failed to fetch guide application" });
+    }
+  });
+
+  // Update guide application (status, internal tags, flagged for review)
+  app.put("/api/guide-applications/:id", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const updates = updateGuideApplicationLiteSchema.parse({
+        id,
+        ...req.body,
+        updatedAt: new Date()
+      });
+      
+      const updatedApplication = await storage.updateGuideApplication(id, updates);
+      res.json(updatedApplication);
+    } catch (error: any) {
+      console.error('Error updating guide application:', error);
+      res.status(400).json({ message: "Failed to update guide application", error: error?.message });
+    }
+  });
+
+  // Get approval history for a specific application
+  app.get("/api/guide-applications/:id/approvals", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const approvals = await storage.getApplicationApprovalHistory(id);
+      res.json(approvals);
+    } catch (error) {
+      console.error('Error fetching approval history:', error);
+      res.status(500).json({ message: "Failed to fetch approval history" });
+    }
+  });
+
+  // Guide Application Approval Routes
+  // Get all approvals (optionally filter by application)
+  app.get("/api/guide-approvals", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const { applicationId } = req.query;
+      const approvals = await storage.listGuideApplicationApprovals(applicationId);
+      res.json(approvals);
+    } catch (error) {
+      console.error('Error fetching guide approvals:', error);
+      res.status(500).json({ message: "Failed to fetch guide approvals" });
+    }
+  });
+
+  // Create a new approval/review action
+  app.post("/api/guide-approvals", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const validatedData = insertGuideApplicationApprovalSchema.parse({
+        ...req.body,
+        adminId: req.user.id
+      });
+      
+      const approval = await storage.createGuideApplicationApproval(validatedData);
+      
+      // Update the application status based on admin action
+      if (validatedData.adminAction) {
+        let newStatus: ApplicationStatus;
+        switch (validatedData.adminAction) {
+          case 'approve':
+            newStatus = 'approved';
+            break;
+          case 'reject':
+            newStatus = 'rejected';
+            break;
+          case 'require_more_info':
+            newStatus = 'needs_more_info';
+            break;
+          default:
+            newStatus = 'pending';
+        }
+        
+        await storage.updateGuideApplication(validatedData.applicationId, {
+          id: validatedData.applicationId,
+          applicationStatus: newStatus,
+          updatedAt: new Date()
+        });
+      }
+      
+      res.status(201).json(approval);
+    } catch (error: any) {
+      console.error('Error creating guide approval:', error);
+      res.status(400).json({ message: "Failed to create guide approval", error: error?.message });
+    }
+  });
+
+  // Update an existing approval
+  app.put("/api/guide-approvals/:id", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const updates = updateGuideApplicationApprovalSchema.parse({
+        id,
+        ...req.body,
+        updatedAt: new Date()
+      });
+      
+      const updatedApproval = await storage.updateGuideApplicationApproval(id, updates);
+      res.json(updatedApproval);
+    } catch (error: any) {
+      console.error('Error updating guide approval:', error);
+      res.status(400).json({ message: "Failed to update guide approval", error: error?.message });
+    }
+  });
+
+  // Get a specific approval
+  app.get("/api/guide-approvals/:id", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const approval = await storage.getGuideApplicationApproval(id);
+      
+      if (!approval) {
+        return res.status(404).json({ message: "Guide approval not found" });
+      }
+      
+      res.json(approval);
+    } catch (error) {
+      console.error('Error fetching guide approval:', error);
+      res.status(500).json({ message: "Failed to fetch guide approval" });
+    }
   });
 
   const httpServer = createServer(app);
