@@ -350,9 +350,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create a new approval/review action
   app.post("/api/guide-approvals", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     try {
+      // Get the application to fetch the userId if not provided
+      const application = await storage.getGuideApplication(req.body.applicationId);
+      if (!application) {
+        return res.status(404).json({ message: "Application not found" });
+      }
+      
       const validatedData = insertGuideApplicationApprovalSchema.parse({
         ...req.body,
-        adminId: req.user.id
+        userId: application.userId, // Use userId from application
+        adminId: parseInt(req.user.id) // Convert to number
       });
       
       const approval = await storage.createGuideApplicationApproval(validatedData);

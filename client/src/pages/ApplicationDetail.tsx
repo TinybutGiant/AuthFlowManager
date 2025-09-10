@@ -51,7 +51,6 @@ export default function ApplicationDetail() {
       
       await apiRequest("POST", "/api/guide-approvals", {
         applicationId,
-        userId: application?.userId || 0,
         adminAction: action,
         note: note.trim() || null
       });
