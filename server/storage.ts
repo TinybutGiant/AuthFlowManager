@@ -12,7 +12,20 @@ import {
   type AdminStatus,
   type ApprovalStatus,
 } from "@shared/schema";
+import {
+  guideApplicationsLite,
+  guideApplicationApprovals,
+  type GuideApplicationLite,
+  type InsertGuideApplicationLite,
+  type UpdateGuideApplicationLite,
+  type GuideApplicationApproval,
+  type InsertGuideApplicationApproval,
+  type UpdateGuideApplicationApproval,
+  type ApplicationStatus,
+  type AdminActionType,
+} from "../shared/main-schema";
 import { db } from "./db";
+import { mainDb } from "./main-db";
 import { eq, and, desc, inArray } from "drizzle-orm";
 
 // Interface for storage operations
@@ -39,6 +52,22 @@ export interface IStorage {
   
   // Admin authentication
   authenticateAdmin(email: string, password: string): Promise<AdminUser | null>;
+  
+  // Guide application operations
+  getGuideApplication(id: string): Promise<GuideApplicationLite | undefined>;
+  listGuideApplications(filters?: { 
+    status?: ApplicationStatus; 
+    flaggedForReview?: boolean;
+    userId?: number;
+  }): Promise<GuideApplicationLite[]>;
+  updateGuideApplication(id: string, updates: UpdateGuideApplicationLite): Promise<GuideApplicationLite>;
+  
+  // Guide application approval operations  
+  getGuideApplicationApproval(id: number): Promise<GuideApplicationApproval | undefined>;
+  listGuideApplicationApprovals(applicationId?: string): Promise<GuideApplicationApproval[]>;
+  createGuideApplicationApproval(approval: InsertGuideApplicationApproval): Promise<GuideApplicationApproval>;
+  updateGuideApplicationApproval(id: number, updates: UpdateGuideApplicationApproval): Promise<GuideApplicationApproval>;
+  getApplicationApprovalHistory(applicationId: string): Promise<GuideApplicationApproval[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -157,6 +186,93 @@ export class DatabaseStorage implements IStorage {
     // In real implementation, use bcrypt.compare(password, admin.passwordHash)
     // For now, this is a placeholder
     return admin.status === 'active' ? admin : null;
+  }
+
+  // Guide application operations
+  async getGuideApplication(id: string): Promise<GuideApplicationLite | undefined> {
+    const [application] = await mainDb.select().from(guideApplicationsLite).where(eq(guideApplicationsLite.id, id));
+    return application;
+  }
+
+  async listGuideApplications(filters?: { 
+    status?: ApplicationStatus; 
+    flaggedForReview?: boolean;
+    userId?: number;
+  }): Promise<GuideApplicationLite[]> {
+    const conditions = [];
+    
+    if (filters?.status) {
+      conditions.push(eq(guideApplicationsLite.applicationStatus, filters.status));
+    }
+    if (filters?.flaggedForReview !== undefined) {
+      conditions.push(eq(guideApplicationsLite.flaggedForReview, filters.flaggedForReview));
+    }
+    if (filters?.userId) {
+      conditions.push(eq(guideApplicationsLite.userId, filters.userId));
+    }
+
+    if (conditions.length > 0) {
+      return await mainDb.select()
+        .from(guideApplicationsLite)
+        .where(and(...conditions))
+        .orderBy(desc(guideApplicationsLite.updatedAt));
+    }
+
+    return await mainDb.select()
+      .from(guideApplicationsLite)
+      .orderBy(desc(guideApplicationsLite.updatedAt));
+  }
+
+  async updateGuideApplication(id: string, updates: UpdateGuideApplicationLite): Promise<GuideApplicationLite> {
+    const [updatedApplication] = await mainDb
+      .update(guideApplicationsLite)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(guideApplicationsLite.id, id))
+      .returning();
+    return updatedApplication;
+  }
+
+  // Guide application approval operations  
+  async getGuideApplicationApproval(id: number): Promise<GuideApplicationApproval | undefined> {
+    const [approval] = await mainDb.select().from(guideApplicationApprovals).where(eq(guideApplicationApprovals.id, id));
+    return approval;
+  }
+
+  async listGuideApplicationApprovals(applicationId?: string): Promise<GuideApplicationApproval[]> {
+    if (applicationId) {
+      return await mainDb.select()
+        .from(guideApplicationApprovals)
+        .where(eq(guideApplicationApprovals.applicationId, applicationId))
+        .orderBy(desc(guideApplicationApprovals.createdAt));
+    }
+
+    return await mainDb.select()
+      .from(guideApplicationApprovals)
+      .orderBy(desc(guideApplicationApprovals.createdAt));
+  }
+
+  async createGuideApplicationApproval(approval: InsertGuideApplicationApproval): Promise<GuideApplicationApproval> {
+    const [newApproval] = await mainDb
+      .insert(guideApplicationApprovals)
+      .values(approval)
+      .returning();
+    return newApproval;
+  }
+
+  async updateGuideApplicationApproval(id: number, updates: UpdateGuideApplicationApproval): Promise<GuideApplicationApproval> {
+    const [updatedApproval] = await mainDb
+      .update(guideApplicationApprovals)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(guideApplicationApprovals.id, id))
+      .returning();
+    return updatedApproval;
+  }
+
+  async getApplicationApprovalHistory(applicationId: string): Promise<GuideApplicationApproval[]> {
+    return await mainDb.select()
+      .from(guideApplicationApprovals)
+      .where(eq(guideApplicationApprovals.applicationId, applicationId))
+      .orderBy(desc(guideApplicationApprovals.createdAt));
   }
 }
 
