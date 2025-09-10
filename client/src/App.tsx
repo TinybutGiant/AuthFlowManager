@@ -18,6 +18,7 @@ import ChangeRole from "@/pages/ChangeRole";
 import DeleteAdmin from "@/pages/DeleteAdmin";
 import FinanceManagement from "@/pages/FinanceManagement";
 import VerifierManagement from "@/pages/VerifierManagement";
+import ApplicationDetail from "@/pages/ApplicationDetail";
 import SupportManagement from "@/pages/SupportManagement";
 import NotFound from "@/pages/not-found";
 
@@ -112,6 +113,14 @@ function Router() {
             <ProtectedRoute allowedRoles={['super_admin', 'admin_verifier']}>
               <AdminLayout>
                 <VerifierManagement />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
+          <Route path="/verifier-management/application/:id">
+            <ProtectedRoute allowedRoles={['super_admin', 'admin_verifier']}>
+              <AdminLayout>
+                <ApplicationDetail />
               </AdminLayout>
             </ProtectedRoute>
           </Route>

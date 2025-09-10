@@ -119,7 +119,7 @@ export default function VerifierManagement() {
                 {application.name}
               </h3>
               {application.flaggedForReview && (
-                <AlertTriangle className="h-4 w-4 text-yellow-500" title="Flagged for review" />
+                <AlertTriangle className="h-4 w-4 text-yellow-500" />
               )}
             </div>
             <p className="text-sm text-muted-foreground mb-2" data-testid={`text-application-id-${application.id}`}>
