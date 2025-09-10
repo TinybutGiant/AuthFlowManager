@@ -42,3 +42,38 @@ export const ROLE_DISPLAY_NAMES = {
   admin_verifier: 'Verifier Admin', 
   admin_support: 'Support Admin',
 } as const;
+
+// Guide Application types
+export type ApplicationStatus = 'drafted' | 'pending' | 'needs_more_info' | 'approved' | 'rejected';
+export type AdminActionType = 'review' | 'approve' | 'reject' | 'require_more_info';
+
+export interface GuideApplication {
+  id: string;
+  userId: number;
+  name: string;
+  applicationStatus: ApplicationStatus;
+  internalTags: string[] | null;
+  flaggedForReview: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GuideApplicationApproval {
+  id: number;
+  applicationId: string;
+  userId: number;
+  adminId: number | null;
+  adminAction: AdminActionType | null;
+  note: string | null;
+  userResponse: any | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserResponse {
+  description?: string;
+  certifications?: Record<string, {
+    proof: string;
+    description: string;
+  }>;
+}
