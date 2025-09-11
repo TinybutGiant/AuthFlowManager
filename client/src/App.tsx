@@ -44,7 +44,14 @@ function Router() {
         <>
           {/* Dashboard */}
           <Route path="/">
-            <ProtectedRoute allowedRoles={['super_admin', 'admin_finance', 'admin_verifier', 'admin_support']}>
+            <ProtectedRoute
+              allowedRoles={[
+                "super_admin",
+                "admin_finance",
+                "admin_verifier",
+                "admin_support",
+              ]}
+            >
               <AdminLayout>
                 <Dashboard />
               </AdminLayout>
@@ -53,7 +60,7 @@ function Router() {
 
           {/* Super Admin Only Routes */}
           <Route path="/pending-requests">
-            <ProtectedRoute allowedRoles={['super_admin']}>
+            <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <PendingRequests />
               </AdminLayout>
@@ -61,7 +68,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-management">
-            <ProtectedRoute allowedRoles={['super_admin']}>
+            <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <AdminManagement />
               </AdminLayout>
@@ -69,7 +76,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-management/create">
-            <ProtectedRoute allowedRoles={['super_admin']}>
+            <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <CreateAdmin />
               </AdminLayout>
@@ -77,7 +84,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-management/profile/:id">
-            <ProtectedRoute allowedRoles={['super_admin']}>
+            <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <AdminProfile />
               </AdminLayout>
@@ -85,7 +92,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-management/change-role/:id?">
-            <ProtectedRoute allowedRoles={['super_admin']}>
+            <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <ChangeRole />
               </AdminLayout>
@@ -93,7 +100,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-management/delete/:id?">
-            <ProtectedRoute allowedRoles={['super_admin']}>
+            <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <DeleteAdmin />
               </AdminLayout>
@@ -102,7 +109,7 @@ function Router() {
 
           {/* Role-Based Management Routes */}
           <Route path="/finance-management">
-            <ProtectedRoute allowedRoles={['super_admin', 'admin_finance']}>
+            <ProtectedRoute allowedRoles={["super_admin", "admin_finance"]}>
               <AdminLayout>
                 <FinanceManagement />
               </AdminLayout>
@@ -110,7 +117,7 @@ function Router() {
           </Route>
 
           <Route path="/verifier-management">
-            <ProtectedRoute allowedRoles={['super_admin', 'admin_verifier']}>
+            <ProtectedRoute allowedRoles={["super_admin", "admin_verifier"]}>
               <AdminLayout>
                 <VerifierManagement />
               </AdminLayout>
@@ -118,16 +125,7 @@ function Router() {
           </Route>
 
           <Route path="/verifier-management/application/:id">
-            <ProtectedRoute allowedRoles={['super_admin', 'admin_verifier']}>
-              <AdminLayout>
-                <ApplicationDetail />
-              </AdminLayout>
-            </ProtectedRoute>
-          </Route>
-
-          {/* Application Detail Route (simplified path) */}
-          <Route path="/application/:id">
-            <ProtectedRoute allowedRoles={['super_admin', 'admin_verifier']}>
+            <ProtectedRoute allowedRoles={["super_admin", "admin_verifier"]}>
               <AdminLayout>
                 <ApplicationDetail />
               </AdminLayout>
@@ -135,7 +133,7 @@ function Router() {
           </Route>
 
           <Route path="/support-management">
-            <ProtectedRoute allowedRoles={['super_admin', 'admin_support']}>
+            <ProtectedRoute allowedRoles={["super_admin", "admin_support"]}>
               <AdminLayout>
                 <SupportManagement />
               </AdminLayout>
@@ -143,7 +141,7 @@ function Router() {
           </Route>
         </>
       )}
-      
+
       {/* Fallback */}
       <Route component={NotFound} />
     </Switch>
