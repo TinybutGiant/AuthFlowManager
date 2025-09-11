@@ -125,6 +125,15 @@ function Router() {
             </ProtectedRoute>
           </Route>
 
+          {/* Application Detail Route (simplified path) */}
+          <Route path="/application/:id">
+            <ProtectedRoute allowedRoles={['super_admin', 'admin_verifier']}>
+              <AdminLayout>
+                <ApplicationDetail />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
           <Route path="/support-management">
             <ProtectedRoute allowedRoles={['super_admin', 'admin_support']}>
               <AdminLayout>
