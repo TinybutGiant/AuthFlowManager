@@ -538,15 +538,8 @@ export default function ApplicationDetail() {
                   new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
                 );
 
-                return sortedApprovals.map((approval, index) => {
-                  // Check if the immediately preceding approval had "require_more_info" action
-                  // AND current approval has userResponse
-                  let shouldShowUserResponse = false;
-                  
-                  if (approval.userResponse && index > 0) {
-                    const previousApproval = sortedApprovals[index - 1];
-                    shouldShowUserResponse = previousApproval.adminAction === "require_more_info";
-                  }
+                return sortedApprovals.map((approval) => {
+                  let shouldShowUserResponse = approval.adminAction === "require_more_info";
                   
                   return (
                     <div
