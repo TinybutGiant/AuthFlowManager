@@ -42,6 +42,10 @@ export const guideApplicationsLite = pgTable("guide_applications", {
     .default("drafted"),
   internalTags: text("internal_tags").array(),
   flaggedForReview: boolean("flagged_for_review").default(false),
+  // Exclusive lock fields
+  lockedBy: integer("locked_by"), // Admin ID who has the exclusive lock
+  lockedAt: timestamp("locked_at", { withTimezone: true }), // When the lock was acquired
+  lockExpiry: timestamp("lock_expiry", { withTimezone: true }), // When the lock expires (24 hours after lockedAt)
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 });

@@ -41,6 +41,8 @@ export default function ApplicationDetail() {
     "",
   );
   const [isReadOnly, setIsReadOnly] = useState(false);
+  const [lockAcquired, setLockAcquired] = useState(false);
+  const [lockError, setLockError] = useState<string>("");
 
   const applicationId = params?.id;
 
@@ -50,20 +52,77 @@ export default function ApplicationDetail() {
     setIsReadOnly(urlParams.get("readonly") === "true");
   }, []);
 
-  // Fetch application details
+  // Acquire lock mutation
+  const acquireLockMutation = useMutation({
+    mutationFn: async (applicationId: string) => {
+      const response = await apiRequest("POST", `/api/guide-applications/${applicationId}/acquire-lock`);
+      return response;
+    },
+    onSuccess: () => {
+      setLockAcquired(true);
+      setLockError("");
+    },
+    onError: (error: any) => {
+      if (error?.status === 423) {
+        setLockError("This application is currently being reviewed by another admin.");
+      } else if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      } else {
+        setLockError("Failed to acquire exclusive access to this application.");
+      }
+    },
+  });
+
+  // Release lock mutation
+  const releaseLockMutation = useMutation({
+    mutationFn: async (applicationId: string) => {
+      await apiRequest("POST", `/api/guide-applications/${applicationId}/release-lock`);
+    },
+    onError: (error) => {
+      console.error("Failed to release lock:", error);
+    },
+  });
+
+  // Acquire lock on component mount (only if not readonly)
+  useEffect(() => {
+    if (applicationId && !isReadOnly) {
+      acquireLockMutation.mutate(applicationId);
+    } else if (isReadOnly) {
+      setLockAcquired(true); // Skip lock for readonly mode
+    }
+  }, [applicationId, isReadOnly]);
+
+  // Release lock on component unmount
+  useEffect(() => {
+    return () => {
+      if (applicationId && !isReadOnly && lockAcquired) {
+        releaseLockMutation.mutate(applicationId);
+      }
+    };
+  }, [applicationId, lockAcquired, isReadOnly]);
+
+  // Fetch application details - only when lock is acquired or in readonly mode
   const { data: application, isLoading: applicationLoading } =
     useQuery<GuideApplication>({
       queryKey: ["/api/guide-applications", applicationId],
-      enabled: !!applicationId,
+      enabled: !!applicationId && (lockAcquired || isReadOnly),
       retry: false,
     });
 
-  // Fetch approval history
+  // Fetch approval history - only when lock is acquired or in readonly mode
   const { data: approvals = [], isLoading: approvalsLoading } = useQuery<
     GuideApplicationApproval[]
   >({
     queryKey: ["/api/guide-applications", applicationId, "approvals"],
-    enabled: !!applicationId,
+    enabled: !!applicationId && (lockAcquired || isReadOnly),
     retry: false,
   });
 
@@ -171,6 +230,63 @@ export default function ApplicationDetail() {
     );
   };
 
+  // Show lock acquisition status first
+  if (!isReadOnly && !lockAcquired && !lockError) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4 mb-8">
+          <Button
+            variant="ghost"
+            onClick={() => setLocation("/verifier-management")}
+            data-testid="button-back"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back
+          </Button>
+          <h1 className="text-3xl font-light text-foreground">
+            {acquireLockMutation.isPending ? "Acquiring exclusive access..." : "Preparing application..."}
+          </h1>
+        </div>
+      </div>
+    );
+  }
+
+  // Show lock error if failed to acquire lock
+  if (!isReadOnly && lockError) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4 mb-8">
+          <Button
+            variant="ghost"
+            onClick={() => setLocation("/verifier-management")}
+            data-testid="button-back"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back
+          </Button>
+          <h1 className="text-3xl font-light text-foreground">
+            Unable to Access Application
+          </h1>
+        </div>
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-center">
+              <AlertTriangle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
+              <p className="text-lg font-medium mb-2">Access Denied</p>
+              <p className="text-muted-foreground mb-4">{lockError}</p>
+              <Button
+                onClick={() => setLocation("/verifier-management")}
+                data-testid="button-back-to-list"
+              >
+                Back to Application List
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (applicationLoading || approvalsLoading) {
     return (
       <div className="space-y-6">
@@ -178,6 +294,7 @@ export default function ApplicationDetail() {
           <Button
             variant="ghost"
             onClick={() => setLocation("/verifier-management")}
+            data-testid="button-back"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back

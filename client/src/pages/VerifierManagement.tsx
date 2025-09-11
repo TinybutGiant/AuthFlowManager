@@ -36,39 +36,6 @@ export default function VerifierManagement() {
     enabled: selectedTab === "history"
   });
 
-  // Create review action mutation
-  const createReviewMutation = useMutation({
-    mutationFn: async (applicationId: string) => {
-      await apiRequest("POST", "/api/guide-approvals", {
-        applicationId,
-        userId: 0, // This will be set by backend from application data
-        adminAction: "review",
-        note: "Started review process"
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/guide-applications"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/guide-approvals"] });
-    },
-    onError: (error) => {
-      if (isUnauthorizedError(error)) {
-        toast({
-          title: "Unauthorized",
-          description: "You are logged out. Logging in again...",
-          variant: "destructive",
-        });
-        setTimeout(() => {
-          window.location.href = "/api/login";
-        }, 500);
-        return;
-      }
-      toast({
-        title: "Error",
-        description: "Failed to start review process",
-        variant: "destructive",
-      });
-    },
-  });
 
   // Filter applications based on status and search
   const filteredApplications = applications.filter(app => {
@@ -104,19 +71,10 @@ export default function VerifierManagement() {
     );
   };
 
-  const handleViewApplication = async (applicationId: string, isReadOnly = false) => {
-    if (!isReadOnly) {
-      // Create review record for pending applications
-      try {
-        await createReviewMutation.mutateAsync(applicationId);
-      } catch (error) {
-        // Error already handled by mutation
-        return;
-      }
-    }
-    
-    // Navigate to application detail page
-    setLocation(`/verifier-management/application/${applicationId}${isReadOnly ? '?readonly=true' : ''}`);
+  const handleViewApplication = (applicationId: string, isReadOnly = false) => {
+    // Navigate directly to application detail page
+    // The locking logic will be handled in the ApplicationDetail component
+    setLocation(`/application/${applicationId}${isReadOnly ? '?readonly=true' : ''}`);
   };
 
   const ApplicationCard = ({ application, isReadOnly = false }: { application: GuideApplication; isReadOnly?: boolean }) => (
@@ -154,7 +112,6 @@ export default function VerifierManagement() {
               onClick={() => handleViewApplication(application.id, isReadOnly)}
               size="sm"
               variant="outline"
-              disabled={createReviewMutation.isPending}
               data-testid={`button-view-${application.id}`}
             >
               <Eye className="h-4 w-4 mr-2" />

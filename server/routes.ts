@@ -269,15 +269,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Guide Application Management Routes
-  // Get all guide applications with filtering
+  // Get all guide applications with filtering (including exclusive lock filtering)
   app.get("/api/guide-applications", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     try {
       const { status, flaggedForReview, userId } = req.query;
-      const filters: any = {};
+      const filters: any = {
+        adminId: parseInt(req.user.id) // Filter to only show applications this admin can access
+      };
       
       if (status) filters.status = status as ApplicationStatus;
       if (flaggedForReview !== undefined) filters.flaggedForReview = flaggedForReview === 'true';
       if (userId) filters.userId = parseInt(userId);
+      
+      // Clean expired locks before fetching applications (temporarily disabled until schema is synced)
+      try {
+        await storage.cleanExpiredLocks();
+      } catch (error) {
+        console.warn('Lock cleanup failed, probably due to missing columns:', (error as any).message);
+      }
       
       const applications = await storage.listGuideApplications(filters);
       res.json(applications);
@@ -291,16 +300,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/guide-applications/:id", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     try {
       const { id } = req.params;
+      const { readonly } = req.query;
+      const adminId = parseInt(req.user.id);
+      
       const application = await storage.getGuideApplication(id);
       
       if (!application) {
         return res.status(404).json({ message: "Guide application not found" });
       }
       
+      // Security check: If not in readonly mode, check if application is locked by another admin
+      if (readonly !== 'true') {
+        const isLockedByOther = await storage.isApplicationLockedByOther(id, adminId);
+        if (isLockedByOther) {
+          return res.status(423).json({ 
+            message: "Application is currently being reviewed by another admin",
+            code: "LOCKED_BY_OTHER_ADMIN"
+          });
+        }
+      }
+      
       res.json(application);
     } catch (error) {
       console.error('Error fetching guide application:', error);
       res.status(500).json({ message: "Failed to fetch guide application" });
+    }
+  });
+
+  // Acquire exclusive lock on application
+  app.post("/api/guide-applications/:id/acquire-lock", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const adminId = parseInt(req.user.id);
+      
+      const lockedApplication = await storage.acquireApplicationLock(id, adminId);
+      
+      if (!lockedApplication) {
+        // Check if it's locked by another admin
+        const isLocked = await storage.isApplicationLockedByOther(id, adminId);
+        if (isLocked) {
+          return res.status(423).json({ message: "Application is currently being reviewed by another admin" });
+        } else {
+          return res.status(404).json({ message: "Application not found" });
+        }
+      }
+      
+      // Create a review record only if this is the first time this admin accesses this application
+      const existingReviews = await storage.listGuideApplicationApprovals(id);
+      const hasReviewedBefore = existingReviews.some(approval => 
+        approval.adminId === adminId && approval.adminAction === 'review'
+      );
+      
+      if (!hasReviewedBefore) {
+        await storage.createGuideApplicationApproval({
+          applicationId: id,
+          userId: lockedApplication.userId,
+          adminId: adminId,
+          adminAction: 'review',
+          note: `Started review process`
+        });
+      }
+      
+      res.json(lockedApplication);
+    } catch (error) {
+      console.error('Error acquiring application lock:', error);
+      res.status(500).json({ message: "Failed to acquire application lock" });
+    }
+  });
+
+  // Release exclusive lock on application
+  app.post("/api/guide-applications/:id/release-lock", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const adminId = parseInt(req.user.id);
+      
+      await storage.releaseApplicationLock(id, adminId);
+      res.json({ message: "Lock released successfully" });
+    } catch (error) {
+      console.error('Error releasing application lock:', error);
+      res.status(500).json({ message: "Failed to release application lock" });
     }
   });
 

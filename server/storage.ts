@@ -26,7 +26,7 @@ import {
 } from "../shared/main-schema";
 import { db } from "./db";
 import { mainDb } from "./main-db";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray, lt, or, isNull } from "drizzle-orm";
 
 // Interface for storage operations
 export interface IStorage {
@@ -59,8 +59,15 @@ export interface IStorage {
     status?: ApplicationStatus; 
     flaggedForReview?: boolean;
     userId?: number;
+    adminId?: number; // Filter to show only applications this admin can access
   }): Promise<GuideApplicationLite[]>;
   updateGuideApplication(id: string, updates: UpdateGuideApplicationLite): Promise<GuideApplicationLite>;
+  
+  // Exclusive lock operations
+  acquireApplicationLock(applicationId: string, adminId: number): Promise<GuideApplicationLite | null>;
+  releaseApplicationLock(applicationId: string, adminId: number): Promise<void>;
+  cleanExpiredLocks(): Promise<void>;
+  isApplicationLockedByOther(applicationId: string, adminId: number): Promise<boolean>;
   
   // Guide application approval operations  
   getGuideApplicationApproval(id: number): Promise<GuideApplicationApproval | undefined>;
@@ -198,6 +205,7 @@ export class DatabaseStorage implements IStorage {
     status?: ApplicationStatus; 
     flaggedForReview?: boolean;
     userId?: number;
+    adminId?: number; // Filter to show only applications this admin can access
   }): Promise<GuideApplicationLite[]> {
     const conditions = [];
     
@@ -209,6 +217,21 @@ export class DatabaseStorage implements IStorage {
     }
     if (filters?.userId) {
       conditions.push(eq(guideApplicationsLite.userId, filters.userId));
+    }
+
+    // Filter out applications locked by other admins
+    if (filters?.adminId) {
+      const now = new Date();
+      conditions.push(
+        or(
+          // No lock exists
+          isNull(guideApplicationsLite.lockedBy),
+          // Lock has expired
+          lt(guideApplicationsLite.lockExpiry, now),
+          // Lock is held by this admin
+          eq(guideApplicationsLite.lockedBy, filters.adminId)
+        )
+      );
     }
 
     if (conditions.length > 0) {
@@ -273,6 +296,88 @@ export class DatabaseStorage implements IStorage {
       .from(guideApplicationApprovals)
       .where(eq(guideApplicationApprovals.applicationId, applicationId))
       .orderBy(desc(guideApplicationApprovals.createdAt));
+  }
+
+  // Exclusive lock operations
+  async acquireApplicationLock(applicationId: string, adminId: number): Promise<GuideApplicationLite | null> {
+    const now = new Date();
+    const lockExpiry = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours from now
+
+    // First, clean expired locks
+    await this.cleanExpiredLocks();
+
+    // Atomic conditional update - acquire lock only if:
+    // 1. Application exists AND
+    // 2. (No current lock OR lock expired OR lock owned by this admin)
+    const [updatedApplication] = await mainDb
+      .update(guideApplicationsLite)
+      .set({
+        lockedBy: adminId,
+        lockedAt: now,
+        lockExpiry: lockExpiry,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(guideApplicationsLite.id, applicationId),
+          or(
+            // No current lock
+            isNull(guideApplicationsLite.lockedBy),
+            // Lock has expired
+            lt(guideApplicationsLite.lockExpiry, now),
+            // Lock is owned by this admin
+            eq(guideApplicationsLite.lockedBy, adminId)
+          )
+        )
+      )
+      .returning();
+
+    // Return null if no rows were updated (application doesn't exist or is locked by another admin)
+    return updatedApplication || null;
+  }
+
+  async releaseApplicationLock(applicationId: string, adminId: number): Promise<void> {
+    await mainDb
+      .update(guideApplicationsLite)
+      .set({
+        lockedBy: null,
+        lockedAt: null,
+        lockExpiry: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(guideApplicationsLite.id, applicationId),
+          eq(guideApplicationsLite.lockedBy, adminId)
+        )
+      );
+  }
+
+  async cleanExpiredLocks(): Promise<void> {
+    const now = new Date();
+    await mainDb
+      .update(guideApplicationsLite)
+      .set({
+        lockedBy: null,
+        lockedAt: null,
+        lockExpiry: null,
+        updatedAt: now,
+      })
+      .where(lt(guideApplicationsLite.lockExpiry, now));
+  }
+
+  async isApplicationLockedByOther(applicationId: string, adminId: number): Promise<boolean> {
+    const now = new Date();
+    const [application] = await mainDb.select()
+      .from(guideApplicationsLite)
+      .where(eq(guideApplicationsLite.id, applicationId));
+
+    if (!application) return false;
+
+    return !!(application.lockedBy && 
+             application.lockExpiry && 
+             application.lockExpiry > now &&
+             application.lockedBy !== adminId);
   }
 }
 
