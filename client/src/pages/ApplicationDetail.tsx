@@ -28,6 +28,7 @@ import {
   ApplicationStatus,
   AdminActionType,
 } from "@/types/admin";
+import { UserResponse } from "@shared/main-schema";
 import { isUnauthorizedError } from "@/lib/authUtils";
 
 export default function ApplicationDetail() {
@@ -227,6 +228,86 @@ export default function ApplicationDetail() {
       >
         {action.replace("_", " ")}
       </span>
+    );
+  };
+
+  const parseUserResponse = (userResponse: any): UserResponse | null => {
+    try {
+      // If it's already an object, return it
+      if (typeof userResponse === 'object' && userResponse !== null) {
+        return userResponse as UserResponse;
+      }
+      
+      // If it's a string, try to parse it as JSON
+      if (typeof userResponse === 'string') {
+        return JSON.parse(userResponse) as UserResponse;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Failed to parse user response:', error);
+      return null;
+    }
+  };
+
+  const renderUserResponse = (rawUserResponse: any) => {
+    const userResponse = parseUserResponse(rawUserResponse);
+    
+    if (!userResponse) {
+      return (
+        <div className="mt-2 p-3 bg-muted rounded-lg text-sm" data-testid="user-response">
+          <p className="font-medium text-foreground mb-2">User Response:</p>
+          <p className="text-sm text-muted-foreground">Unable to parse user response data</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="mt-2 p-3 bg-muted rounded-lg text-sm" data-testid="user-response">
+        <p className="font-medium text-foreground mb-2">User Response:</p>
+        
+        {userResponse.description && (
+          <div className="mb-3">
+            <p className="text-xs font-medium text-muted-foreground mb-1">Description:</p>
+            <p className="text-sm text-foreground" data-testid="user-response-description">
+              {userResponse.description}
+            </p>
+          </div>
+        )}
+        
+        {userResponse.certifications && Object.keys(userResponse.certifications).length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-2">Certifications:</p>
+            <div className="space-y-2">
+              {Object.entries(userResponse.certifications).map(([key, cert], index) => (
+                <div 
+                  key={key} 
+                  className="p-2 bg-background rounded border"
+                  data-testid={`certification-${index}`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Certification {index + 1}:
+                    </p>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      onClick={() => window.open(cert.proof, "_blank")}
+                      className="h-auto p-0 text-xs"
+                      data-testid={`button-view-proof-${index}`}
+                    >
+                      View Proof
+                    </Button>
+                  </div>
+                  <p className="text-sm text-foreground" data-testid={`certification-description-${index}`}>
+                    {cert.description}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     );
   };
 
@@ -451,31 +532,44 @@ export default function ApplicationDetail() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {approvals.map((approval) => (
-                <div
-                  key={approval.id}
-                  className="flex items-start gap-4 p-4 border rounded-lg"
-                >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      {approval.adminAction &&
-                        getActionBadge(approval.adminAction)}
-                      <span className="text-sm text-muted-foreground">
-                        {new Date(approval.createdAt).toLocaleString()}
-                      </span>
-                    </div>
-                    {approval.note && (
-                      <p className="text-sm">{approval.note}</p>
-                    )}
-                    {approval.userResponse && (
-                      <div className="mt-2 p-2 bg-muted rounded text-sm">
-                        <p className="font-medium">User Response:</p>
-                        <p>{JSON.stringify(approval.userResponse)}</p>
+              {(() => {
+                // Sort approvals chronologically once
+                const sortedApprovals = approvals.sort((a, b) => 
+                  new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                );
+
+                return sortedApprovals.map((approval, index) => {
+                  // Check if the immediately preceding approval had "require_more_info" action
+                  // AND current approval has userResponse
+                  let shouldShowUserResponse = false;
+                  
+                  if (approval.userResponse && index > 0) {
+                    const previousApproval = sortedApprovals[index - 1];
+                    shouldShowUserResponse = previousApproval.adminAction === "require_more_info";
+                  }
+                  
+                  return (
+                    <div
+                      key={approval.id}
+                      className="flex items-start gap-4 p-4 border rounded-lg"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          {approval.adminAction &&
+                            getActionBadge(approval.adminAction)}
+                          <span className="text-sm text-muted-foreground">
+                            {new Date(approval.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                        {approval.note && (
+                          <p className="text-sm">{approval.note}</p>
+                        )}
+                        {shouldShowUserResponse && renderUserResponse(approval.userResponse)}
                       </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </CardContent>
         </Card>

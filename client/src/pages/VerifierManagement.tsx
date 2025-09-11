@@ -332,7 +332,7 @@ export default function VerifierManagement() {
                     <SelectValue placeholder="Filter by action..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All actions</SelectItem>
+                    <SelectItem value="all">All actions</SelectItem>
                     <SelectItem value="review">Review</SelectItem>
                     <SelectItem value="approve">Approve</SelectItem>
                     <SelectItem value="reject">Reject</SelectItem>
@@ -377,7 +377,7 @@ export default function VerifierManagement() {
                           .toLowerCase()
                           .includes(historyFilter.toLowerCase());
                       const matchesAction =
-                        !actionFilter || approval.adminAction === actionFilter;
+                        !actionFilter || actionFilter === "all" || approval.adminAction === actionFilter;
                       return matchesApplication && matchesAction;
                     })
                     .sort((a, b) => {
