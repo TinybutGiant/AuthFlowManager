@@ -63,11 +63,7 @@ app.use((req, res, next) => {
   if (process.env.NODE_ENV === 'production' && !process.env.PORT) {
     console.warn('Warning: PORT not set in production environment');
   }
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
+  server.listen(port, process.env.HOST || "127.0.0.1", () => {
     log(`serving on port ${port}`);
   });
 })();

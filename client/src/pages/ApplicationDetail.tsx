@@ -510,7 +510,7 @@ export default function ApplicationDetail() {
                 </div>
 
                 {/* PDF Embed */}
-                <div className="w-full h-96 border rounded">
+                <div className="w-full h-[850px] border rounded">
                   <iframe
                     src={pdfUrl.substring(4)}
                     className="w-full h-full rounded"
