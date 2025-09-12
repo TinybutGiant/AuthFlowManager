@@ -56,7 +56,10 @@ export default function ApplicationDetail() {
   // Acquire lock mutation
   const acquireLockMutation = useMutation({
     mutationFn: async (applicationId: string) => {
-      const response = await apiRequest("POST", `/api/guide-applications/${applicationId}/acquire-lock`);
+      const response = await apiRequest(
+        "POST",
+        `/api/guide-applications/${applicationId}/acquire-lock`,
+      );
       return response;
     },
     onSuccess: () => {
@@ -65,7 +68,9 @@ export default function ApplicationDetail() {
     },
     onError: (error: any) => {
       if (error?.status === 423) {
-        setLockError("This application is currently being reviewed by another admin.");
+        setLockError(
+          "This application is currently being reviewed by another admin.",
+        );
       } else if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -85,7 +90,10 @@ export default function ApplicationDetail() {
   // Release lock mutation
   const releaseLockMutation = useMutation({
     mutationFn: async (applicationId: string) => {
-      await apiRequest("POST", `/api/guide-applications/${applicationId}/release-lock`);
+      await apiRequest(
+        "POST",
+        `/api/guide-applications/${applicationId}/release-lock`,
+      );
     },
     onError: (error) => {
       console.error("Failed to release lock:", error);
@@ -234,79 +242,100 @@ export default function ApplicationDetail() {
   const parseUserResponse = (userResponse: any): UserResponse | null => {
     try {
       // If it's already an object, return it
-      if (typeof userResponse === 'object' && userResponse !== null) {
+      if (typeof userResponse === "object" && userResponse !== null) {
         return userResponse as UserResponse;
       }
-      
+
       // If it's a string, try to parse it as JSON
-      if (typeof userResponse === 'string') {
+      if (typeof userResponse === "string") {
         return JSON.parse(userResponse) as UserResponse;
       }
-      
+
       return null;
     } catch (error) {
-      console.error('Failed to parse user response:', error);
+      console.error("Failed to parse user response:", error);
       return null;
     }
   };
 
   const renderUserResponse = (rawUserResponse: any) => {
     const userResponse = parseUserResponse(rawUserResponse);
-    
+
     if (!userResponse) {
       return (
-        <div className="mt-2 p-3 bg-muted rounded-lg text-sm" data-testid="user-response">
+        <div
+          className="mt-2 p-3 bg-muted rounded-lg text-sm"
+          data-testid="user-response"
+        >
           <p className="font-medium text-foreground mb-2">User Response:</p>
-          <p className="text-sm text-muted-foreground">Unable to parse user response data</p>
+          <p className="text-lg text-muted-foreground">
+            No user response data yet, wait for the user to upload.
+          </p>
         </div>
       );
     }
 
     return (
-      <div className="mt-2 p-3 bg-muted rounded-lg text-sm" data-testid="user-response">
+      <div
+        className="mt-2 p-3 bg-muted rounded-lg text-sm"
+        data-testid="user-response"
+      >
         <p className="font-medium text-foreground mb-2">User Response:</p>
-        
+
         {userResponse.description && (
           <div className="mb-3">
-            <p className="text-xs font-medium text-muted-foreground mb-1">Description:</p>
-            <p className="text-sm text-foreground" data-testid="user-response-description">
+            <p className="text-xs font-medium text-muted-foreground mb-1">
+              Description:
+            </p>
+            <p
+              className="text-sm text-foreground"
+              data-testid="user-response-description"
+            >
               {userResponse.description}
             </p>
           </div>
         )}
-        
-        {userResponse.certifications && Object.keys(userResponse.certifications).length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">Certifications:</p>
-            <div className="space-y-2">
-              {Object.entries(userResponse.certifications).map(([key, cert], index) => (
-                <div 
-                  key={key} 
-                  className="p-2 bg-background rounded border"
-                  data-testid={`certification-${index}`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-xs font-medium text-muted-foreground">
-                      Certification {index + 1}:
-                    </p>
-                    <Button
-                      variant="link"
-                      size="sm"
-                      onClick={() => window.open(cert.proof, "_blank")}
-                      className="h-auto p-0 text-xs"
-                      data-testid={`button-view-proof-${index}`}
+
+        {userResponse.certifications &&
+          Object.keys(userResponse.certifications).length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-2">
+                Certifications:
+              </p>
+              <div className="space-y-2">
+                {Object.entries(userResponse.certifications).map(
+                  ([key, cert], index) => (
+                    <div
+                      key={key}
+                      className="p-2 bg-background rounded border"
+                      data-testid={`certification-${index}`}
                     >
-                      View Proof
-                    </Button>
-                  </div>
-                  <p className="text-sm text-foreground" data-testid={`certification-description-${index}`}>
-                    {cert.description}
-                  </p>
-                </div>
-              ))}
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Certification {index + 1}:
+                        </p>
+                        <Button
+                          variant="link"
+                          size="sm"
+                          onClick={() => window.open(cert.proof, "_blank")}
+                          className="h-auto p-0 text-xs"
+                          data-testid={`button-view-proof-${index}`}
+                        >
+                          View Proof
+                        </Button>
+                      </div>
+                      <p
+                        className="text-sm text-foreground"
+                        data-testid={`certification-description-${index}`}
+                      >
+                        {cert.description}
+                      </p>
+                    </div>
+                  ),
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
       </div>
     );
   };
@@ -325,7 +354,9 @@ export default function ApplicationDetail() {
             Back
           </Button>
           <h1 className="text-3xl font-light text-foreground">
-            {acquireLockMutation.isPending ? "Acquiring exclusive access..." : "Preparing application..."}
+            {acquireLockMutation.isPending
+              ? "Acquiring exclusive access..."
+              : "Preparing application..."}
           </h1>
         </div>
       </div>
@@ -534,13 +565,16 @@ export default function ApplicationDetail() {
             <div className="space-y-4">
               {(() => {
                 // Sort approvals chronologically once
-                const sortedApprovals = approvals.sort((a, b) => 
-                  new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                const sortedApprovals = approvals.sort(
+                  (a, b) =>
+                    new Date(a.createdAt).getTime() -
+                    new Date(b.createdAt).getTime(),
                 );
 
                 return sortedApprovals.map((approval) => {
-                  let shouldShowUserResponse = approval.adminAction === "require_more_info";
-                  
+                  let shouldShowUserResponse =
+                    approval.adminAction === "require_more_info";
+
                   return (
                     <div
                       key={approval.id}
@@ -557,7 +591,8 @@ export default function ApplicationDetail() {
                         {approval.note && (
                           <p className="text-sm">{approval.note}</p>
                         )}
-                        {shouldShowUserResponse && renderUserResponse(approval.userResponse)}
+                        {shouldShowUserResponse &&
+                          renderUserResponse(approval.userResponse)}
                       </div>
                     </div>
                   );
@@ -569,68 +604,66 @@ export default function ApplicationDetail() {
       )}
 
       {/* Approval Actions - Only show for pending applications in non-readonly mode */}
-      {!isReadOnly &&
-        (application.applicationStatus === "pending" ||
-          application.applicationStatus === "needs_more_info") && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Review Actions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-muted-foreground">
-                  Review Note
-                </label>
-                <Textarea
-                  placeholder="Enter your review notes here..."
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  className="mt-2"
-                  rows={4}
-                  data-testid="textarea-review-note"
-                />
-              </div>
+      {!isReadOnly && application.applicationStatus === "pending" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Review Actions</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">
+                Review Note
+              </label>
+              <Textarea
+                placeholder="Enter your review notes here..."
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                className="mt-2"
+                rows={4}
+                data-testid="textarea-review-note"
+              />
+            </div>
 
-              <div>
-                <label className="text-sm font-medium text-muted-foreground">
-                  Action
-                </label>
-                <Select
-                  value={selectedAction}
-                  onValueChange={(value) =>
-                    setSelectedAction(value as AdminActionType)
-                  }
-                >
-                  <SelectTrigger
-                    className="mt-2"
-                    data-testid="select-admin-action"
-                  >
-                    <SelectValue placeholder="Select an action..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="approve">Approve Application</SelectItem>
-                    <SelectItem value="reject">Reject Application</SelectItem>
-                    <SelectItem value="require_more_info">
-                      Require More Information
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <Button
-                onClick={handleSubmitApproval}
-                disabled={!selectedAction || submitApprovalMutation.isPending}
-                className="w-full"
-                data-testid="button-submit-approval"
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">
+                Action
+              </label>
+              <Select
+                value={selectedAction}
+                onValueChange={(value) =>
+                  setSelectedAction(value as AdminActionType)
+                }
               >
-                <Send className="h-4 w-4 mr-2" />
-                {submitApprovalMutation.isPending
-                  ? "Submitting..."
-                  : "Submit Review"}
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+                <SelectTrigger
+                  className="mt-2"
+                  data-testid="select-admin-action"
+                >
+                  <SelectValue placeholder="Select an action..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="approve">Approve Application</SelectItem>
+                  <SelectItem value="reject">Reject Application</SelectItem>
+                  <SelectItem value="require_more_info">
+                    Require More Information
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <Button
+              onClick={handleSubmitApproval}
+              disabled={!selectedAction || submitApprovalMutation.isPending}
+              className="w-full"
+              data-testid="button-submit-approval"
+            >
+              <Send className="h-4 w-4 mr-2" />
+              {submitApprovalMutation.isPending
+                ? "Submitting..."
+                : "Submit Review"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
