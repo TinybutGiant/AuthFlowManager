@@ -555,6 +555,56 @@ export default function ApplicationDetail() {
         </Card>
       )}
 
+      {/* Qualifications Documents */}
+      {application.qualifications && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Qualifications Documents
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {application.qualifications.certifications && Object.keys(application.qualifications.certifications).length > 0 ? (
+              Object.entries(application.qualifications.certifications).map(([key, cert], index) => (
+                <div key={key} className="border rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-medium">{cert.description}</h4>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => window.open(cert.proof, "_blank")}
+                      data-testid={`button-open-qualification-${index}`}
+                    >
+                      <FileText className="h-4 w-4 mr-2" />
+                      View File
+                    </Button>
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    <a 
+                      href={cert.proof} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 underline"
+                      data-testid={`link-qualification-${index}`}
+                    >
+                      {cert.proof}
+                    </a>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Visible: {cert.visible ? "Yes" : "No"}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No qualifications data available
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Approval History */}
       {approvals.length > 0 && (
         <Card>

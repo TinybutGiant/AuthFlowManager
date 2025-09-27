@@ -41,6 +41,7 @@ export const guideApplicationsLite = pgTable("guide_applications", {
     .notNull()
     .default("drafted"),
   internalTags: text("internal_tags").array(),
+  qualifications: jsonb("qualifications"), // 资质证明文件
   flaggedForReview: boolean("flagged_for_review").default(false),
   // Exclusive lock fields
   lockedBy: integer("locked_by"), // Admin ID who has the exclusive lock
@@ -127,6 +128,17 @@ export const userResponseSchema = z.object({
 });
 
 export type UserResponse = z.infer<typeof userResponseSchema>;
+
+// Qualifications schema for guide applications
+export const qualificationsSchema = z.object({
+  certifications: z.record(z.object({
+    proof: z.string(), // 文件 URL
+    visible: z.boolean(), // 是否可见
+    description: z.string(), // 文件描述
+  })).optional(),
+});
+
+export type Qualifications = z.infer<typeof qualificationsSchema>;
 
 // Timeline entry type for displaying approval history
 export interface ApprovalTimelineEntry {

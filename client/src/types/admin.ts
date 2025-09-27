@@ -47,12 +47,22 @@ export const ROLE_DISPLAY_NAMES = {
 export type ApplicationStatus = 'drafted' | 'pending' | 'needs_more_info' | 'approved' | 'rejected';
 export type AdminActionType = 'review' | 'approve' | 'reject' | 'require_more_info';
 
+// Qualifications type for guide applications
+export interface Qualifications {
+  certifications?: Record<string, {
+    proof: string; // 文件 URL
+    visible: boolean; // 是否可见
+    description: string; // 文件描述
+  }>;
+}
+
 export interface GuideApplication {
   id: string;
   userId: number;
   name: string;
   applicationStatus: ApplicationStatus;
   internalTags: string[] | null;
+  qualifications: Qualifications | null;
   flaggedForReview: boolean;
   createdAt: string;
   updatedAt: string;
