@@ -24,6 +24,12 @@ export const applicationStatusTypeEnum = pgEnum("application_status_type", [
   "rejected",
 ]);
 
+// Users table for main database
+export const mainUsers = pgTable("main_users", {
+  id: serial("id").primaryKey(),
+  is_guide: boolean("is_guide").notNull().default(false),
+});
+
 // Admin action type enum  
 export const adminActionTypeEnum = pgEnum("admin_action_type", [
   "review",
@@ -117,6 +123,11 @@ export type UpdateGuideApplicationLite = z.infer<typeof updateGuideApplicationLi
 export type GuideApplicationApproval = typeof guideApplicationApprovals.$inferSelect;
 export type InsertGuideApplicationApproval = z.infer<typeof insertGuideApplicationApprovalSchema>;
 export type UpdateGuideApplicationApproval = z.infer<typeof updateGuideApplicationApprovalSchema>;
+
+// User types
+export type MainUser = typeof mainUsers.$inferSelect;
+export type InsertMainUser = typeof mainUsers.$inferInsert;
+export type UpdateMainUser = Partial<InsertMainUser>;
 
 // User response schema for require_more_info cases
 export const userResponseSchema = z.object({

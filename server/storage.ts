@@ -15,6 +15,7 @@ import {
 import {
   guideApplicationsLite,
   guideApplicationApprovals,
+  mainUsers,
   type GuideApplicationLite,
   type InsertGuideApplicationLite,
   type UpdateGuideApplicationLite,
@@ -23,6 +24,9 @@ import {
   type UpdateGuideApplicationApproval,
   type ApplicationStatus,
   type AdminActionType,
+  type MainUser,
+  type InsertMainUser,
+  type UpdateMainUser,
 } from "../shared/main-schema";
 import { db } from "./db";
 import { mainDb } from "./main-db";
@@ -75,6 +79,12 @@ export interface IStorage {
   createGuideApplicationApproval(approval: InsertGuideApplicationApproval): Promise<GuideApplicationApproval>;
   updateGuideApplicationApproval(id: number, updates: UpdateGuideApplicationApproval): Promise<GuideApplicationApproval>;
   getApplicationApprovalHistory(applicationId: string): Promise<GuideApplicationApproval[]>;
+  
+  // User operations for main database
+  getMainUser(id: number): Promise<MainUser | undefined>;
+  createMainUser(user: InsertMainUser): Promise<MainUser>;
+  updateMainUser(id: number, updates: UpdateMainUser): Promise<MainUser>;
+  updateUserGuideStatus(userId: number, isGuide: boolean): Promise<MainUser>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -378,6 +388,35 @@ export class DatabaseStorage implements IStorage {
              application.lockExpiry && 
              application.lockExpiry > now &&
              application.lockedBy !== adminId);
+  }
+
+  // User operations for main database
+  async getMainUser(id: number): Promise<MainUser | undefined> {
+    const [user] = await mainDb.select().from(mainUsers).where(eq(mainUsers.id, id));
+    return user;
+  }
+
+  async createMainUser(user: InsertMainUser): Promise<MainUser> {
+    const [newUser] = await mainDb.insert(mainUsers).values(user).returning();
+    return newUser;
+  }
+
+  async updateMainUser(id: number, updates: UpdateMainUser): Promise<MainUser> {
+    const [updatedUser] = await mainDb
+      .update(mainUsers)
+      .set(updates)
+      .where(eq(mainUsers.id, id))
+      .returning();
+    return updatedUser;
+  }
+
+  async updateUserGuideStatus(userId: number, isGuide: boolean): Promise<MainUser> {
+    const [updatedUser] = await mainDb
+      .update(mainUsers)
+      .set({ is_guide: isGuide })
+      .where(eq(mainUsers.id, userId))
+      .returning();
+    return updatedUser;
   }
 }
 

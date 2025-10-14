@@ -448,9 +448,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         switch (validatedData.adminAction) {
           case 'approve':
             newStatus = 'approved';
+            // When approving, also update the user's guide status in main database
+            try {
+              await storage.updateUserGuideStatus(application.userId, true);
+              console.log(`Updated user ${application.userId} guide status to true`);
+            } catch (error) {
+              console.error(`Failed to update user ${application.userId} guide status:`, error);
+              // Continue with the approval process even if user update fails
+            }
             break;
           case 'reject':
             newStatus = 'rejected';
+            // When rejecting, ensure user guide status is false
+            try {
+              await storage.updateUserGuideStatus(application.userId, false);
+              console.log(`Updated user ${application.userId} guide status to false`);
+            } catch (error) {
+              console.error(`Failed to update user ${application.userId} guide status:`, error);
+            }
             break;
           case 'require_more_info':
             newStatus = 'needs_more_info';
