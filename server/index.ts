@@ -56,9 +56,9 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  // Use PORT from environment (Render assigns dynamically) or default to 5000 for development
+  // Use PORT from environment (Render assigns dynamically) or default to 5001 for development
   // In production, PORT is provided by Render and should not be hardcoded
-  const port = parseInt(process.env.PORT || '5000', 10);
+  const port = parseInt(process.env.PORT || '5001', 10);
   
   if (process.env.NODE_ENV === 'production' && !process.env.PORT) {
     console.warn('Warning: PORT not set in production environment');
