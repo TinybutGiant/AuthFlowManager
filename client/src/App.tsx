@@ -1,9 +1,11 @@
-import { Switch, Route } from "wouter";
+import * as React from "react";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AdminLayout from "@/components/AdminLayout";
 
@@ -20,6 +22,8 @@ import FinanceManagement from "@/pages/FinanceManagement";
 import VerifierManagement from "@/pages/VerifierManagement";
 import ApplicationDetail from "@/pages/ApplicationDetail";
 import SupportManagement from "@/pages/SupportManagement";
+import CancellationReview from "@/pages/CancellationReview";
+import CancellationReviewDetail from "@/pages/CancellationReviewDetail";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -116,6 +120,22 @@ function Router() {
             </ProtectedRoute>
           </Route>
 
+          <Route path="/cancellation-review/:id">
+            <ProtectedRoute allowedRoles={["super_admin", "admin_finance"]}>
+              <AdminLayout>
+                <CancellationReviewDetail />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
+          <Route path="/cancellation-review">
+            <ProtectedRoute allowedRoles={["super_admin", "admin_finance"]}>
+              <AdminLayout>
+                <CancellationReview />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
           <Route path="/verifier-management">
             <ProtectedRoute allowedRoles={["super_admin", "admin_verifier"]}>
               <AdminLayout>
@@ -149,6 +169,19 @@ function Router() {
 }
 
 function App() {
+  const [location] = useLocation();
+  const { dismiss } = useToast();
+
+  // Route changes shouldn't carry over toasts from previous pages.
+  const didMountRef = React.useRef(false);
+  React.useEffect(() => {
+    if (didMountRef.current) {
+      dismiss();
+      return;
+    }
+    didMountRef.current = true;
+  }, [location, dismiss]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>

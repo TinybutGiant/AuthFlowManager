@@ -523,6 +523,130 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ----- LocalGuide BFF: cancellation manual review (server-side only; no Stripe/DB in dashboard) -----
+  const localGuideBase = process.env.LOCALGUIDE_API_BASE_URL?.replace(/\/$/, "");
+  const localGuideJwt = process.env.LOCALGUIDE_PROXY_JWT;
+  const localGuideAdminId = process.env.LOCALGUIDE_PROXY_X_ADMIN_ID;
+
+  function localGuideProxyHeaders(includeJsonContentType: boolean): HeadersInit {
+    const h: Record<string, string> = {
+      Authorization: `Bearer ${localGuideJwt}`,
+      "x-admin-id": String(localGuideAdminId),
+    };
+    if (includeJsonContentType) {
+      h["Content-Type"] = "application/json";
+    }
+    return h;
+  }
+
+  function localGuideProxyUnavailable(res: any) {
+    return res.status(503).json({
+      message:
+        "LocalGuide proxy is not configured. Set LOCALGUIDE_API_BASE_URL, LOCALGUIDE_PROXY_JWT (LocalGuide user JWT), and LOCALGUIDE_PROXY_X_ADMIN_ID (matching admin_users.id).",
+    });
+  }
+
+  app.get(
+    "/api/localguide/admin/cancellation-requests",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
+          return localGuideProxyUnavailable(res);
+        }
+        const qs = new URLSearchParams(req.query as Record<string, string>).toString();
+        const path = `/api/v2/admin/cancellation-requests${qs ? `?${qs}` : ""}`;
+        const r = await fetch(`${localGuideBase}${path}`, { headers: localGuideProxyHeaders(false) });
+        const text = await r.text();
+        res.status(r.status);
+        res.type("application/json").send(text || "{}");
+      } catch (error) {
+        console.error("[LocalGuide proxy] list cancellation-requests", error);
+        res.status(502).json({ message: "LocalGuide proxy request failed" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/localguide/admin/cancellation-requests/:id",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
+          return localGuideProxyUnavailable(res);
+        }
+        const id = encodeURIComponent(req.params.id);
+        const r = await fetch(`${localGuideBase}/api/v2/admin/cancellation-requests/${id}`, {
+          headers: localGuideProxyHeaders(false),
+        });
+        const text = await r.text();
+        res.status(r.status);
+        res.type("application/json").send(text || "{}");
+      } catch (error) {
+        console.error("[LocalGuide proxy] get cancellation-request", error);
+        res.status(502).json({ message: "LocalGuide proxy request failed" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/localguide/admin/cancellation-requests/:id/approve-refund",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
+          return localGuideProxyUnavailable(res);
+        }
+        const id = encodeURIComponent(req.params.id);
+        const r = await fetch(
+          `${localGuideBase}/api/v2/admin/cancellation-requests/${id}/approve-refund`,
+          {
+            method: "POST",
+            headers: localGuideProxyHeaders(true),
+            body: JSON.stringify(req.body ?? {}),
+          }
+        );
+        const text = await r.text();
+        res.status(r.status);
+        res.type("application/json").send(text || "{}");
+      } catch (error) {
+        console.error("[LocalGuide proxy] approve-refund", error);
+        res.status(502).json({ message: "LocalGuide proxy request failed" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/localguide/admin/cancellation-requests/:id/reject-refund",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
+          return localGuideProxyUnavailable(res);
+        }
+        const id = encodeURIComponent(req.params.id);
+        const r = await fetch(
+          `${localGuideBase}/api/v2/admin/cancellation-requests/${id}/reject-refund`,
+          {
+            method: "POST",
+            headers: localGuideProxyHeaders(true),
+            body: JSON.stringify(req.body ?? {}),
+          }
+        );
+        const text = await r.text();
+        res.status(r.status);
+        res.type("application/json").send(text || "{}");
+      } catch (error) {
+        console.error("[LocalGuide proxy] reject-refund", error);
+        res.status(502).json({ message: "LocalGuide proxy request failed" });
+      }
+    }
+  );
+
   const httpServer = createServer(app);
   return httpServer;
 }

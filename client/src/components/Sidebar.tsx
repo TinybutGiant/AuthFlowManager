@@ -16,6 +16,7 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
 } from "lucide-react";
 import { AdminRole } from "@/types/admin";
 
@@ -82,6 +83,12 @@ const menuItems: MenuItem[] = [
     title: "Finance Management",
     href: "/finance-management",
     icon: Wallet,
+    roles: ['super_admin', 'admin_finance'],
+  },
+  {
+    title: "Cancellation review",
+    href: "/cancellation-review",
+    icon: ClipboardList,
     roles: ['super_admin', 'admin_finance'],
   },
   {

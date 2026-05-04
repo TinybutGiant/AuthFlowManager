@@ -6,7 +6,12 @@ import type {
 } from "@/components/ui/toast"
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1000000
+// How long Radix keeps the toast in the DOM after it has been dismissed.
+// Keep this small so "old toast" doesn't appear to persist across pages.
+const TOAST_REMOVE_DELAY = 1000
+
+// Default auto-dismiss duration (ms) when caller doesn't set `duration`.
+const TOAST_AUTO_DISMISS_DEFAULT = 4000
 
 type ToasterToast = ToastProps & {
   id: string
@@ -53,22 +58,48 @@ interface State {
   toasts: ToasterToast[]
 }
 
-const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+const toastDismissTimeouts = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>()
+const toastRemoveTimeouts = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>()
+
+function clearDismissTimeout(toastId: string) {
+  const timeout = toastDismissTimeouts.get(toastId)
+  if (timeout) clearTimeout(timeout)
+  toastDismissTimeouts.delete(toastId)
+}
+
+function clearRemoveTimeout(toastId: string) {
+  const timeout = toastRemoveTimeouts.get(toastId)
+  if (timeout) clearTimeout(timeout)
+  toastRemoveTimeouts.delete(toastId)
+}
+
+function clearAllTimeouts() {
+  toastDismissTimeouts.forEach((t) => clearTimeout(t))
+  toastDismissTimeouts.clear()
+  toastRemoveTimeouts.forEach((t) => clearTimeout(t))
+  toastRemoveTimeouts.clear()
+}
 
 const addToRemoveQueue = (toastId: string) => {
-  if (toastTimeouts.has(toastId)) {
+  if (toastRemoveTimeouts.has(toastId)) {
     return
   }
 
   const timeout = setTimeout(() => {
-    toastTimeouts.delete(toastId)
+    toastRemoveTimeouts.delete(toastId)
     dispatch({
       type: "REMOVE_TOAST",
       toastId: toastId,
     })
   }, TOAST_REMOVE_DELAY)
 
-  toastTimeouts.set(toastId, timeout)
+  toastRemoveTimeouts.set(toastId, timeout)
 }
 
 export const reducer = (state: State, action: Action): State => {
@@ -93,32 +124,38 @@ export const reducer = (state: State, action: Action): State => {
       // ! Side effects ! - This could be extracted into a dismissToast() action,
       // but I'll keep it here for simplicity
       if (toastId) {
+        clearDismissTimeout(toastId)
         addToRemoveQueue(toastId)
-      } else {
-        state.toasts.forEach((toast) => {
-          addToRemoveQueue(toast.id)
-        })
+
+        return {
+          ...state,
+          toasts: state.toasts.map((t) =>
+            t.id === toastId
+              ? {
+                  ...t,
+                  open: false,
+                }
+              : t
+          ),
+        }
       }
 
-      return {
-        ...state,
-        toasts: state.toasts.map((t) =>
-          t.id === toastId || toastId === undefined
-            ? {
-                ...t,
-                open: false,
-              }
-            : t
-        ),
-      }
+      // Full clear: this avoids lingering "closed but still rendered" toasts.
+      clearAllTimeouts()
+      return { ...state, toasts: [] }
     }
     case "REMOVE_TOAST":
       if (action.toastId === undefined) {
+        clearAllTimeouts()
         return {
           ...state,
           toasts: [],
         }
       }
+
+      clearDismissTimeout(action.toastId)
+      clearRemoveTimeout(action.toastId)
+
       return {
         ...state,
         toasts: state.toasts.filter((t) => t.id !== action.toastId),
@@ -141,6 +178,10 @@ type Toast = Omit<ToasterToast, "id">
 
 function toast({ ...props }: Toast) {
   const id = genId()
+  const duration =
+    typeof props.duration === "number"
+      ? props.duration
+      : TOAST_AUTO_DISMISS_DEFAULT
 
   const update = (props: ToasterToast) =>
     dispatch({
@@ -148,6 +189,13 @@ function toast({ ...props }: Toast) {
       toast: { ...props, id },
     })
   const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
+
+  // Auto-dismiss after `duration` (default: 3~5s).
+  // This is the missing piece that prevents "old toast" from lingering.
+  const autoDismissTimeout = setTimeout(() => {
+    dismiss()
+  }, duration)
+  toastDismissTimeouts.set(id, autoDismissTimeout)
 
   dispatch({
     type: "ADD_TOAST",
@@ -179,12 +227,18 @@ function useToast() {
         listeners.splice(index, 1)
       }
     }
-  }, [state])
+  }, [])
 
   return {
     ...state,
     toast,
-    dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
+    dismiss: (toastId?: string) => {
+      if (toastId === undefined) {
+        dispatch({ type: "REMOVE_TOAST" })
+        return
+      }
+      dispatch({ type: "DISMISS_TOAST", toastId })
+    },
   }
 }
 
