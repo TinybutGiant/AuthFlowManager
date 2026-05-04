@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "eqlx48ZDqKUW8vfBygazK"
+uri = "file://db_dump.tar.gz"
+type = "unspecified"
+title = "authflomanager 数据库 dump (db_dump.tar.gz)"
