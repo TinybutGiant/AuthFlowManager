@@ -12,6 +12,7 @@ import {
 } from "../shared/main-schema";
 import { z } from "zod";
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 
 // Login/Register schemas
 const loginSchema = z.object({
@@ -525,13 +526,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ----- LocalGuide BFF: cancellation manual review (server-side only; no Stripe/DB in dashboard) -----
   const localGuideBase = process.env.LOCALGUIDE_API_BASE_URL?.replace(/\/$/, "");
-  const localGuideJwt = process.env.LOCALGUIDE_PROXY_JWT;
-  const localGuideAdminId = process.env.LOCALGUIDE_PROXY_X_ADMIN_ID;
+  const localGuideAdminProxySecret = process.env.LOCALGUIDE_ADMIN_PROXY_SECRET;
+  const localGuideAdminProxyIssuer = process.env.LOCALGUIDE_ADMIN_PROXY_ISSUER || "authflowmanager";
+  const localGuideAdminProxyAudience = process.env.LOCALGUIDE_ADMIN_PROXY_AUDIENCE || "localguide-admin-proxy";
+  const localGuideAdminProxyExpiresIn = process.env.LOCALGUIDE_ADMIN_PROXY_EXPIRES_IN || "5m";
 
-  function localGuideProxyHeaders(includeJsonContentType: boolean): HeadersInit {
+  class LocalGuideProxyError extends Error {
+    constructor(
+      public statusCode: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+
+  async function localGuideProxyHeaders(req: any, includeJsonContentType: boolean): Promise<HeadersInit> {
+    if (!localGuideBase || !localGuideAdminProxySecret) {
+      throw new LocalGuideProxyError(
+        503,
+        "LocalGuide proxy is not configured. Set LOCALGUIDE_API_BASE_URL and LOCALGUIDE_ADMIN_PROXY_SECRET.",
+      );
+    }
+
+    const adminUser = req.adminUser;
+    if (!adminUser?.id || !adminUser?.email) {
+      throw new LocalGuideProxyError(403, "Current admin identity is incomplete.");
+    }
+
+    const localGuideAdminProxyToken = jwt.sign(
+      {
+        adminId: adminUser.id,
+        email: adminUser.email,
+        role: adminUser.role,
+      },
+      localGuideAdminProxySecret,
+      {
+        expiresIn: localGuideAdminProxyExpiresIn,
+        issuer: localGuideAdminProxyIssuer,
+        audience: localGuideAdminProxyAudience,
+        subject: String(adminUser.id),
+      } as jwt.SignOptions,
+    );
+
     const h: Record<string, string> = {
-      Authorization: `Bearer ${localGuideJwt}`,
-      "x-admin-id": String(localGuideAdminId),
+      Authorization: `Bearer ${localGuideAdminProxyToken}`,
+      "x-admin-id": String(adminUser.id),
     };
     if (includeJsonContentType) {
       h["Content-Type"] = "application/json";
@@ -539,10 +578,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return h;
   }
 
-  function localGuideProxyUnavailable(res: any) {
-    return res.status(503).json({
-      message:
-        "LocalGuide proxy is not configured. Set LOCALGUIDE_API_BASE_URL, LOCALGUIDE_PROXY_JWT (LocalGuide user JWT), and LOCALGUIDE_PROXY_X_ADMIN_ID (matching admin_users.id).",
+  function handleLocalGuideProxyError(res: any, error: unknown) {
+    if (error instanceof LocalGuideProxyError) {
+      return res.status(error.statusCode).json({
+        message: error.message,
+      });
+    }
+
+    console.error("[LocalGuide proxy]", error);
+    return res.status(502).json({
+      message: "LocalGuide proxy request failed",
     });
   }
 
@@ -552,18 +597,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireRole(["super_admin", "admin_finance"]),
     async (req: any, res) => {
       try {
-        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
-          return localGuideProxyUnavailable(res);
-        }
         const qs = new URLSearchParams(req.query as Record<string, string>).toString();
         const path = `/api/v2/admin/cancellation-requests${qs ? `?${qs}` : ""}`;
-        const r = await fetch(`${localGuideBase}${path}`, { headers: localGuideProxyHeaders(false) });
+        const headers = await localGuideProxyHeaders(req, false);
+        const r = await fetch(`${localGuideBase}${path}`, { headers });
         const text = await r.text();
         res.status(r.status);
         res.type("application/json").send(text || "{}");
       } catch (error) {
-        console.error("[LocalGuide proxy] list cancellation-requests", error);
-        res.status(502).json({ message: "LocalGuide proxy request failed" });
+        handleLocalGuideProxyError(res, error);
       }
     }
   );
@@ -574,19 +616,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireRole(["super_admin", "admin_finance"]),
     async (req: any, res) => {
       try {
-        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
-          return localGuideProxyUnavailable(res);
-        }
         const id = encodeURIComponent(req.params.id);
+        const headers = await localGuideProxyHeaders(req, false);
         const r = await fetch(`${localGuideBase}/api/v2/admin/cancellation-requests/${id}`, {
-          headers: localGuideProxyHeaders(false),
+          headers,
         });
         const text = await r.text();
         res.status(r.status);
         res.type("application/json").send(text || "{}");
       } catch (error) {
-        console.error("[LocalGuide proxy] get cancellation-request", error);
-        res.status(502).json({ message: "LocalGuide proxy request failed" });
+        handleLocalGuideProxyError(res, error);
       }
     }
   );
@@ -597,15 +636,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireRole(["super_admin", "admin_finance"]),
     async (req: any, res) => {
       try {
-        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
-          return localGuideProxyUnavailable(res);
-        }
         const id = encodeURIComponent(req.params.id);
+        const headers = await localGuideProxyHeaders(req, true);
         const r = await fetch(
           `${localGuideBase}/api/v2/admin/cancellation-requests/${id}/approve-refund`,
           {
             method: "POST",
-            headers: localGuideProxyHeaders(true),
+            headers,
             body: JSON.stringify(req.body ?? {}),
           }
         );
@@ -613,8 +650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(r.status);
         res.type("application/json").send(text || "{}");
       } catch (error) {
-        console.error("[LocalGuide proxy] approve-refund", error);
-        res.status(502).json({ message: "LocalGuide proxy request failed" });
+        handleLocalGuideProxyError(res, error);
       }
     }
   );
@@ -625,15 +661,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireRole(["super_admin", "admin_finance"]),
     async (req: any, res) => {
       try {
-        if (!localGuideBase || !localGuideJwt || !localGuideAdminId) {
-          return localGuideProxyUnavailable(res);
-        }
         const id = encodeURIComponent(req.params.id);
+        const headers = await localGuideProxyHeaders(req, true);
         const r = await fetch(
           `${localGuideBase}/api/v2/admin/cancellation-requests/${id}/reject-refund`,
           {
             method: "POST",
-            headers: localGuideProxyHeaders(true),
+            headers,
             body: JSON.stringify(req.body ?? {}),
           }
         );
@@ -641,8 +675,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(r.status);
         res.type("application/json").send(text || "{}");
       } catch (error) {
-        console.error("[LocalGuide proxy] reject-refund", error);
-        res.status(502).json({ message: "LocalGuide proxy request failed" });
+        handleLocalGuideProxyError(res, error);
       }
     }
   );
