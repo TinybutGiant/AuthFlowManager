@@ -25,7 +25,7 @@ export const applicationStatusTypeEnum = pgEnum("application_status_type", [
 ]);
 
 // Users table for main database
-export const mainUsers = pgTable("main_users", {
+export const mainUsers = pgTable("users", {
   id: serial("id").primaryKey(),
   is_guide: boolean("is_guide").notNull().default(false),
 });
