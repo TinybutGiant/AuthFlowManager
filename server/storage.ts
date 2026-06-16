@@ -63,7 +63,6 @@ export interface IStorage {
     status?: ApplicationStatus; 
     flaggedForReview?: boolean;
     userId?: number;
-    adminId?: number; // Filter to show only applications this admin can access
   }): Promise<GuideApplicationLite[]>;
   updateGuideApplication(id: string, updates: UpdateGuideApplicationLite): Promise<GuideApplicationLite>;
   
@@ -215,7 +214,6 @@ export class DatabaseStorage implements IStorage {
     status?: ApplicationStatus; 
     flaggedForReview?: boolean;
     userId?: number;
-    adminId?: number; // Filter to show only applications this admin can access
   }): Promise<GuideApplicationLite[]> {
     const conditions = [];
     
@@ -227,21 +225,6 @@ export class DatabaseStorage implements IStorage {
     }
     if (filters?.userId) {
       conditions.push(eq(guideApplicationsLite.userId, filters.userId));
-    }
-
-    // Filter out applications locked by other admins
-    if (filters?.adminId) {
-      const now = new Date();
-      conditions.push(
-        or(
-          // No lock exists
-          isNull(guideApplicationsLite.lockedBy),
-          // Lock has expired
-          lt(guideApplicationsLite.lockExpiry, now),
-          // Lock is held by this admin
-          eq(guideApplicationsLite.lockedBy, filters.adminId)
-        )
-      );
     }
 
     if (conditions.length > 0) {

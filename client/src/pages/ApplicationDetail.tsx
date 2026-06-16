@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRoute, useLocation } from "wouter";
+import { useLocation, useParams, useSearch } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -15,8 +14,6 @@ import {
 import {
   ArrowLeft,
   FileText,
-  Calendar,
-  User,
   AlertTriangle,
   Send,
 } from "lucide-react";
@@ -32,8 +29,9 @@ import { UserResponse } from "@shared/main-schema";
 import { isUnauthorizedError } from "@/lib/authUtils";
 
 export default function ApplicationDetail() {
-  const [, params] = useRoute("/verifier-management/application/:id");
+  const params = useParams<{ id?: string }>();
   const [, setLocation] = useLocation();
+  const search = useSearch();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -41,17 +39,14 @@ export default function ApplicationDetail() {
   const [selectedAction, setSelectedAction] = useState<AdminActionType | "">(
     "",
   );
-  const [isReadOnly, setIsReadOnly] = useState(false);
   const [lockAcquired, setLockAcquired] = useState(false);
   const [lockError, setLockError] = useState<string>("");
 
   const applicationId = params?.id;
+  const isReadOnly = new URLSearchParams(search).get("readonly") === "true";
 
-  // Check if readonly mode from URL params
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    setIsReadOnly(urlParams.get("readonly") === "true");
-  }, []);
+  const isHttpStatusError = (error: unknown, status: number) =>
+    error instanceof Error && error.message.startsWith(`${status}:`);
 
   // Acquire lock mutation
   const acquireLockMutation = useMutation({
@@ -67,10 +62,12 @@ export default function ApplicationDetail() {
       setLockError("");
     },
     onError: (error: any) => {
-      if (error?.status === 423) {
+      if (isHttpStatusError(error, 423)) {
         setLockError(
           "This application is currently being reviewed by another admin.",
         );
+      } else if (isHttpStatusError(error, 404)) {
+        setLockError("This application could not be found.");
       } else if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -102,11 +99,17 @@ export default function ApplicationDetail() {
 
   // Acquire lock on component mount (only if not readonly)
   useEffect(() => {
-    if (applicationId && !isReadOnly) {
-      acquireLockMutation.mutate(applicationId);
-    } else if (isReadOnly) {
-      setLockAcquired(true); // Skip lock for readonly mode
+    if (!applicationId) return;
+
+    setLockError("");
+
+    if (isReadOnly) {
+      setLockAcquired(false);
+      return;
     }
+
+    setLockAcquired(false);
+    acquireLockMutation.mutate(applicationId);
   }, [applicationId, isReadOnly]);
 
   // Release lock on component unmount
@@ -119,11 +122,29 @@ export default function ApplicationDetail() {
   }, [applicationId, lockAcquired, isReadOnly]);
 
   // Fetch application details - only when lock is acquired or in readonly mode
-  const { data: application, isLoading: applicationLoading } =
+  const {
+    data: application,
+    isLoading: applicationLoading,
+    error: applicationError,
+  } =
     useQuery<GuideApplication>({
-      queryKey: ["/api/guide-applications", applicationId],
+      queryKey: [
+        "/api/guide-applications",
+        applicationId,
+        { readonly: isReadOnly },
+      ],
       enabled: !!applicationId && (lockAcquired || isReadOnly),
       retry: false,
+      queryFn: async () => {
+        if (!applicationId) throw new Error("Application ID is required");
+
+        const response = await apiRequest(
+          "GET",
+          `/api/guide-applications/${applicationId}${isReadOnly ? "?readonly=true" : ""}`,
+        );
+
+        return await response.json();
+      },
     });
 
   // Fetch approval history - only when lock is acquired or in readonly mode
@@ -415,6 +436,49 @@ export default function ApplicationDetail() {
             Loading Application...
           </h1>
         </div>
+      </div>
+    );
+  }
+
+  if (applicationError) {
+    const errorMessage = isHttpStatusError(applicationError, 423)
+      ? "This application is currently being reviewed by another admin."
+      : isHttpStatusError(applicationError, 404)
+        ? "This application could not be found."
+        : "Failed to load application details.";
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4 mb-8">
+          <Button
+            variant="ghost"
+            onClick={() => setLocation("/verifier-management")}
+            data-testid="button-back"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back
+          </Button>
+          <h1 className="text-3xl font-light text-foreground">
+            Unable to Load Application
+          </h1>
+        </div>
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-center">
+              <AlertTriangle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
+              <p className="text-lg font-medium mb-2">
+                Application Details Unavailable
+              </p>
+              <p className="text-muted-foreground mb-4">{errorMessage}</p>
+              <Button
+                onClick={() => setLocation("/verifier-management")}
+                data-testid="button-back-to-list"
+              >
+                Back to Application List
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }

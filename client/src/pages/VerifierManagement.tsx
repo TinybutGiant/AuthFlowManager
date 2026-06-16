@@ -1,9 +1,7 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,19 +12,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Eye, Search, AlertTriangle, FileText, Calendar } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/useAuth";
 import {
   GuideApplication,
   GuideApplicationApproval,
   ApplicationStatus,
 } from "@/types/admin";
-import { isUnauthorizedError } from "@/lib/authUtils";
 
 export default function VerifierManagement() {
-  const [, setLocation] = useLocation();
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTab, setSelectedTab] = useState("pending");
   const [historyFilter, setHistoryFilter] = useState("");
@@ -87,12 +81,25 @@ export default function VerifierManagement() {
     );
   };
 
-  const handleViewApplication = (applicationId: string, isReadOnly = false) => {
-    // Navigate directly to application detail page
-    // The locking logic will be handled in the ApplicationDetail component
-    setLocation(
-      `/verifier-management/application/${applicationId}${isReadOnly ? "?readonly=true" : ""}`,
-    );
+  const getApplicationPath = (applicationId: string, isReadOnly = false) =>
+    `/verifier-management/application/${applicationId}${isReadOnly ? "?readonly=true" : ""}`;
+
+  const currentAdminId = Number(
+    (user as any)?.adminUser?.id ?? (user as any)?.id,
+  );
+
+  const getApplicationLockState = (application: GuideApplication) => {
+    const expiryTime = application.lockExpiry
+      ? new Date(application.lockExpiry).getTime()
+      : 0;
+    const hasActiveLock =
+      !!application.lockedBy &&
+      Number.isFinite(expiryTime) &&
+      expiryTime > Date.now();
+
+    if (!hasActiveLock) return "available";
+
+    return application.lockedBy === currentAdminId ? "mine" : "other";
   };
 
   const ApplicationCard = ({
@@ -101,58 +108,95 @@ export default function VerifierManagement() {
   }: {
     application: GuideApplication;
     isReadOnly?: boolean;
-  }) => (
-    <Card key={application.id} className="hover:shadow-md transition-shadow">
-      <CardContent className="p-6">
-        <div className="flex justify-between items-start mb-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-2">
-              <h3
-                className="font-semibold text-lg"
-                data-testid={`text-application-name-${application.id}`}
+  }) => {
+    const lockState = getApplicationLockState(application);
+    const isClaimedByOther = !isReadOnly && lockState === "other";
+    const isClaimedByCurrentAdmin = !isReadOnly && lockState === "mine";
+
+    return (
+      <Card key={application.id} className="hover:shadow-md transition-shadow">
+        <CardContent className="p-6">
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex-1">
+              <div className="flex items-center gap-3 mb-2">
+                <h3
+                  className="font-semibold text-lg"
+                  data-testid={`text-application-name-${application.id}`}
+                >
+                  {application.name}
+                </h3>
+                {application.flaggedForReview && (
+                  <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                )}
+              </div>
+              <p
+                className="text-sm text-muted-foreground mb-2"
+                data-testid={`text-application-id-${application.id}`}
               >
-                {application.name}
-              </h3>
-              {application.flaggedForReview && (
-                <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                Application ID: {application.id}
+              </p>
+              <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  <Calendar className="h-4 w-4" />
+                  {new Date(application.updatedAt).toLocaleDateString()}
+                </div>
+                {application.internalTags &&
+                  application.internalTags.length > 0 && (
+                    <div className="flex items-center gap-1">
+                      <FileText className="h-4 w-4" />
+                      {application.internalTags.length} document(s)
+                    </div>
+                  )}
+              </div>
+              {isClaimedByOther && (
+                <p
+                  className="mt-3 text-sm font-medium text-yellow-700"
+                  data-testid={`text-application-claimed-other-${application.id}`}
+                >
+                  This application has been claimed by another admin.
+                </p>
+              )}
+              {isClaimedByCurrentAdmin && (
+                <p
+                  className="mt-3 text-sm font-medium text-blue-700"
+                  data-testid={`text-application-claimed-mine-${application.id}`}
+                >
+                  You have this application open. Please review it soon.
+                </p>
               )}
             </div>
-            <p
-              className="text-sm text-muted-foreground mb-2"
-              data-testid={`text-application-id-${application.id}`}
-            >
-              Application ID: {application.id}
-            </p>
-            <div className="flex items-center gap-4 text-sm text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <Calendar className="h-4 w-4" />
-                {new Date(application.updatedAt).toLocaleDateString()}
-              </div>
-              {application.internalTags &&
-                application.internalTags.length > 0 && (
-                  <div className="flex items-center gap-1">
-                    <FileText className="h-4 w-4" />
-                    {application.internalTags.length} document(s)
-                  </div>
-                )}
+            <div className="ml-4 flex shrink-0 items-center gap-3">
+              {getStatusBadge(application.applicationStatus)}
+              {isClaimedByOther ? (
+                <Button
+                  disabled
+                  size="sm"
+                  variant="outline"
+                  title="This application has been claimed by another admin."
+                  data-testid={`button-view-${application.id}`}
+                >
+                  <Eye className="h-4 w-4 mr-2" />
+                  View
+                </Button>
+              ) : (
+                <Button
+                  asChild
+                  size="sm"
+                  variant="outline"
+                  data-testid={`button-view-${application.id}`}
+                >
+                  <a href={getApplicationPath(application.id, isReadOnly)}>
+                    <Eye className="h-4 w-4 mr-2" />
+                    View
+                  </a>
+                </Button>
+              )}
             </div>
           </div>
-          <div className="flex flex-col items-end gap-3">
-            {getStatusBadge(application.applicationStatus)}
-            <Button
-              onClick={() => handleViewApplication(application.id, isReadOnly)}
-              size="sm"
-              variant="outline"
-              data-testid={`button-view-${application.id}`}
-            >
-              <Eye className="h-4 w-4 mr-2" />
-              View
-            </Button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
+        </CardContent>
+      </Card>
+    );
+  };
 
   if (isLoading) {
     return (

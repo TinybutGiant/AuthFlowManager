@@ -270,13 +270,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Guide Application Management Routes
-  // Get all guide applications with filtering (including exclusive lock filtering)
+  // Get all guide applications with filtering
   app.get("/api/guide-applications", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     try {
       const { status, flaggedForReview, userId } = req.query;
-      const filters: any = {
-        adminId: parseInt(req.user.id) // Filter to only show applications this admin can access
-      };
+      const filters: any = {};
       
       if (status) filters.status = status as ApplicationStatus;
       if (flaggedForReview !== undefined) filters.flaggedForReview = flaggedForReview === 'true';

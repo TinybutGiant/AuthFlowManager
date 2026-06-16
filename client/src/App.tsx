@@ -26,6 +26,16 @@ import CancellationReview from "@/pages/CancellationReview";
 import CancellationReviewDetail from "@/pages/CancellationReviewDetail";
 import NotFound from "@/pages/not-found";
 
+function VerifierApplicationDetailRoute() {
+  return (
+    <ProtectedRoute allowedRoles={["super_admin", "admin_verifier"]}>
+      <AdminLayout>
+        <ApplicationDetail />
+      </AdminLayout>
+    </ProtectedRoute>
+  );
+}
+
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
 
@@ -112,6 +122,14 @@ function Router() {
           </Route>
 
           {/* Role-Based Management Routes */}
+          <Route path="/verifier-management/application/:id">
+            <VerifierApplicationDetailRoute />
+          </Route>
+
+          <Route path="/application/:id">
+            <VerifierApplicationDetailRoute />
+          </Route>
+
           <Route path="/finance-management">
             <ProtectedRoute allowedRoles={["super_admin", "admin_finance"]}>
               <AdminLayout>
@@ -140,14 +158,6 @@ function Router() {
             <ProtectedRoute allowedRoles={["super_admin", "admin_verifier"]}>
               <AdminLayout>
                 <VerifierManagement />
-              </AdminLayout>
-            </ProtectedRoute>
-          </Route>
-
-          <Route path="/verifier-management/application/:id">
-            <ProtectedRoute allowedRoles={["super_admin", "admin_verifier"]}>
-              <AdminLayout>
-                <ApplicationDetail />
               </AdminLayout>
             </ProtectedRoute>
           </Route>

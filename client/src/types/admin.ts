@@ -64,6 +64,9 @@ export interface GuideApplication {
   internalTags: string[] | null;
   qualifications: Qualifications | null;
   flaggedForReview: boolean;
+  lockedBy: number | null;
+  lockedAt: string | null;
+  lockExpiry: string | null;
   createdAt: string;
   updatedAt: string;
 }
