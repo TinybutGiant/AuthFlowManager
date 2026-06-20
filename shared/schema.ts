@@ -10,6 +10,7 @@ import {
   pgEnum,
   serial,
   integer,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -65,6 +66,9 @@ export const adminUsers = pgTable("admin_users", {
   name: text("name").notNull(),
   email: varchar("email", { length: 255 }).unique().notNull(),
   passwordHash: text("password_hash").notNull(),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
+  passwordSetupTokenHash: text("password_setup_token_hash"),
+  passwordSetupExpiresAt: timestamp("password_setup_expires_at"),
   role: adminRoleEnum("role").notNull(),
   status: adminStatusEnum("status").notNull().default('pending'),
   createdBy: integer("created_by"),

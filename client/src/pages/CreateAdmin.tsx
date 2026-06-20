@@ -20,7 +20,6 @@ const createAdminSchema = z.object({
   role: z.enum(['admin_finance', 'admin_verifier', 'admin_support'], {
     required_error: "Please select a role",
   }),
-  passwordHash: z.string().min(8, "Password must be at least 8 characters"),
   permissions: z.array(z.string()).optional(),
 });
 
@@ -37,7 +36,6 @@ export default function CreateAdmin() {
       name: "",
       email: "",
       role: undefined,
-      passwordHash: "",
       permissions: [],
     },
   });
@@ -76,11 +74,6 @@ export default function CreateAdmin() {
 
   const onSubmit = (data: CreateAdminForm) => {
     createAdminMutation.mutate(data);
-  };
-
-  const generatePassword = () => {
-    const password = Math.random().toString(36).slice(-12);
-    form.setValue("passwordHash", password);
   };
 
   return (
@@ -154,33 +147,8 @@ export default function CreateAdmin() {
                 )}
               </div>
 
-              <div>
-                <Label htmlFor="password">Initial Password</Label>
-                <div className="flex space-x-2">
-                  <Input
-                    id="password"
-                    type="password"
-                    {...form.register("passwordHash")}
-                    placeholder="Generate or enter password"
-                    data-testid="input-admin-password"
-                  />
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    onClick={generatePassword}
-                    data-testid="button-generate-password"
-                  >
-                    Generate
-                  </Button>
-                </div>
-                {form.formState.errors.passwordHash && (
-                  <p className="text-sm text-destructive mt-1">
-                    {form.formState.errors.passwordHash.message}
-                  </p>
-                )}
-                <p className="text-xs text-muted-foreground mt-1">
-                  User will be required to change password on first login.
-                </p>
+              <div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+                After this request is approved, the admin account will be activated and a one-time password setup link will be sent to the email address above. The link expires in 24 hours.
               </div>
 
               <div>

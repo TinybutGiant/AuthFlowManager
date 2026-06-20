@@ -11,6 +11,7 @@ import AdminLayout from "@/components/AdminLayout";
 
 // Pages
 import Login from "@/pages/Login";
+import SetPassword from "@/pages/SetPassword";
 import Dashboard from "@/pages/Dashboard";
 import PendingRequests from "@/pages/PendingRequests";
 import AdminManagement from "@/pages/AdminManagement";
@@ -52,6 +53,8 @@ function Router() {
 
   return (
     <Switch>
+      <Route path="/set-password" component={SetPassword} />
+
       {!isAuthenticated ? (
         <Route path="/" component={Login} />
       ) : (

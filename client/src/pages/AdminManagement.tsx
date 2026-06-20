@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,17 +7,41 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Send } from "lucide-react";
 import { AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function AdminManagement() {
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: admins = [], isLoading } = useQuery<AdminUser[]>({
     queryKey: ["/api/admin/users"],
     retry: false,
+  });
+
+  const resendSetupMutation = useMutation({
+    mutationFn: async (adminId: number) => {
+      await apiRequest("POST", `/api/admin/users/${adminId}/resend-setup-link`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({
+        title: "Setup email sent",
+        description: "A fresh password setup link has been sent.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Resend failed",
+        description: error?.message || "Could not send password setup email.",
+        variant: "destructive",
+      });
+    },
   });
 
   const filteredAdmins = admins.filter(admin => {
@@ -188,7 +212,12 @@ export default function AdminManagement() {
                         {getRoleBadge(admin.role)}
                       </td>
                       <td className="p-4">
-                        {getStatusBadge(admin.status)}
+                        <div className="flex items-center gap-2">
+                          {getStatusBadge(admin.status)}
+                          {admin.status === "active" && admin.mustChangePassword && (
+                            <Badge variant="secondary">Password setup pending</Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="p-4" data-testid={`text-last-login-${admin.id}`}>
                         {admin.lastLoginAt 
@@ -200,11 +229,25 @@ export default function AdminManagement() {
                         {new Date(admin.createdAt).toLocaleDateString()}
                       </td>
                       <td className="p-4">
-                        <Link href={`/admin-management/profile/${admin.id}`}>
-                          <Button variant="ghost" size="sm" data-testid={`button-view-admin-${admin.id}`}>
-                            View
-                          </Button>
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link href={`/admin-management/profile/${admin.id}`}>
+                            <Button variant="ghost" size="sm" data-testid={`button-view-admin-${admin.id}`}>
+                              View
+                            </Button>
+                          </Link>
+                          {admin.status === "active" && admin.mustChangePassword && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => resendSetupMutation.mutate(admin.id)}
+                              disabled={resendSetupMutation.isPending}
+                              data-testid={`button-resend-setup-${admin.id}`}
+                            >
+                              <Send className="h-4 w-4 mr-1" />
+                              Resend setup
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))

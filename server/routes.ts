@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireRole, jwtUtils } from "./jwtAuth";
-import { insertAdminUserSchema, insertAdminUserApprovalSchema, type AdminRole } from "@shared/schema";
+import { insertAdminUserApprovalSchema, type AdminRole } from "@shared/schema";
 import {
   insertGuideApplicationApprovalSchema,
   updateGuideApplicationLiteSchema,
@@ -13,6 +13,19 @@ import {
 import { z } from "zod";
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import { hashPasswordSetupToken } from './passwordSetup';
+import { sendAdminPasswordSetupEmail } from './email';
+import {
+  AdminOnboardingError,
+  approveCreateAdminRequest,
+  assertCanLogin,
+  completePasswordSetup,
+  createPendingAdminAccount,
+  rejectCreateAdminRequest,
+  resendPasswordSetupLink,
+  sanitizeAdminUser,
+} from './adminOnboardingService';
 
 // Login/Register schemas
 const loginSchema = z.object({
@@ -25,6 +38,21 @@ const registerSchema = z.object({
   password: z.string().min(6),
   firstName: z.string().optional(),
   lastName: z.string().optional(),
+});
+
+const createAdminUserSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  role: z.enum(['admin_finance', 'admin_verifier', 'admin_support']),
+  permissions: z.array(z.string()).optional(),
+});
+
+const passwordSetupTokenSchema = z.object({
+  token: z.string().min(20),
+});
+
+const completePasswordSetupSchema = passwordSetupTokenSchema.extend({
+  password: z.string().min(8),
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -54,9 +82,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      if (adminUser.status !== 'active') {
-        console.log('Account not active for email:', email, 'status:', adminUser.status);
-        return res.status(401).json({ message: "Account is not active" });
+      try {
+        assertCanLogin(adminUser);
+      } catch (error) {
+        if (error instanceof AdminOnboardingError) {
+          console.log('Login blocked for email:', email, 'status:', adminUser.status, 'mustChangePassword:', adminUser.mustChangePassword);
+          return res.status(error.statusCode).json({ message: error.message });
+        }
+        throw error;
       }
 
       // Update last login
@@ -81,6 +114,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // 注册功能已移除 - 管理员账户只能由super_admin创建
 
+  app.post('/api/auth/password-setup/validate', async (req, res) => {
+    try {
+      const { token } = passwordSetupTokenSchema.parse(req.body);
+      const adminUser = await storage.getAdminUserByPasswordSetupTokenHash(hashPasswordSetupToken(token));
+
+      if (!adminUser || adminUser.status !== 'active' || !adminUser.mustChangePassword) {
+        return res.status(400).json({ message: "Invalid or expired password setup link" });
+      }
+
+      res.json({
+        valid: true,
+        email: adminUser.email,
+        name: adminUser.name,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: "Invalid password setup token", error: error?.message });
+    }
+  });
+
+  app.post('/api/auth/password-setup/complete', async (req, res) => {
+    try {
+      const { token, password } = completePasswordSetupSchema.parse(req.body);
+      const passwordHash = await bcrypt.hash(password, 12);
+      await completePasswordSetup({ storage, token, passwordHash });
+
+      res.json({ message: "Password has been set. You can now log in." });
+    } catch (error: any) {
+      if (error instanceof AdminOnboardingError) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      res.status(400).json({ message: "Failed to set password", error: error?.message });
+    }
+  });
+
   app.get('/api/auth/user', requireAuth, async (req: any, res) => {
     try {
       const adminUser = await storage.getAdminUser(parseInt(req.user.id));
@@ -94,7 +161,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: adminUser.name,
         role: adminUser.role,
         status: adminUser.status,
-        adminUser: adminUser
+        mustChangePassword: adminUser.mustChangePassword,
+        adminUser: sanitizeAdminUser(adminUser)
       });
     } catch (error) {
       console.error("Error fetching user:", error);
@@ -115,7 +183,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         role: role as any, 
         status: status as any 
       });
-      res.json(admins);
+      res.json(admins.map(sanitizeAdminUser));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch admin users" });
     }
@@ -128,7 +196,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!admin) {
         return res.status(404).json({ message: "Admin user not found" });
       }
-      res.json(admin);
+      res.json(sanitizeAdminUser(admin));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch admin user" });
     }
@@ -136,34 +204,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/users", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
-      const validatedData = insertAdminUserSchema.parse(req.body);
+      const validatedData = createAdminUserSchema.parse(req.body);
+      const placeholderPassword = crypto.randomBytes(32).toString('base64url');
+      const passwordHash = await bcrypt.hash(placeholderPassword, 12);
       
-      // Hash password
-      const saltRounds = 12;
-      const passwordHash = await bcrypt.hash(validatedData.passwordHash, saltRounds);
-      
-      // Create admin user
-      const newAdmin = await storage.createAdminUser({
-        ...validatedData,
-        passwordHash,
-        createdBy: req.adminUser.id,
-      });
-      
-      // Create approval request for the new admin
-      await storage.createApprovalRequest({
-        targetAdminId: newAdmin.id,
-        action: 'create',
+      const newAdmin = await createPendingAdminAccount({
+        storage,
+        adminUser: {
+          ...validatedData,
+          passwordHash,
+          mustChangePassword: true,
+          passwordSetupTokenHash: null,
+          passwordSetupExpiresAt: null,
+          createdBy: req.adminUser.id,
+        },
         requestedBy: req.adminUser.id,
         requestData: {
           adminData: {
-            name: newAdmin.name,
-            email: newAdmin.email,
-            role: newAdmin.role
+            name: validatedData.name,
+            email: validatedData.email,
+            role: validatedData.role
           }
         }
       });
       
-      res.status(201).json(newAdmin);
+      res.status(201).json(sanitizeAdminUser(newAdmin));
     } catch (error: any) {
       res.status(400).json({ message: "Failed to create admin user", error: error?.message || 'Unknown error' });
     }
@@ -175,7 +240,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updates = req.body;
       
       const updatedAdmin = await storage.updateAdminUser(id, updates);
-      res.json(updatedAdmin);
+      res.json(sanitizeAdminUser(updatedAdmin));
     } catch (error) {
       res.status(400).json({ message: "Failed to update admin user" });
     }
@@ -222,20 +287,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const id = parseInt(req.params.id);
       const { status, notes } = req.body;
-      
-      const updates: any = { status };
-      if (status !== 'pending') {
-        updates.approvedBy = req.adminUser.id;
-        updates.approvedAt = new Date();
+      if (status === 'approved') {
+        const result = await approveCreateAdminRequest({
+          storage,
+          approvalId: id,
+          approvedBy: req.adminUser.id,
+          notes,
+        });
+
+        const emailSent = await sendAdminPasswordSetupEmail({
+          to: result.delivery.admin.email,
+          name: result.delivery.admin.name,
+          setupUrl: result.delivery.setupUrl,
+        });
+
+        if (!emailSent) {
+          return res.status(502).json({
+            message: "Admin was activated, but password setup email failed. Use resend setup link after fixing email delivery.",
+            approval: result.approval,
+          });
+        }
+
+        return res.json(result.approval);
       }
-      if (notes) {
-        updates.notes = notes;
+
+      if (status === 'rejected') {
+        const approval = await rejectCreateAdminRequest({
+          storage,
+          approvalId: id,
+          approvedBy: req.adminUser.id,
+          notes,
+        });
+        return res.json(approval);
       }
-      
-      const updatedApproval = await storage.updateApprovalRequest(id, updates);
-      res.json(updatedApproval);
+
+      res.status(400).json({ message: "Unsupported approval status" });
     } catch (error) {
+      if (error instanceof AdminOnboardingError) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
       res.status(400).json({ message: "Failed to update approval request" });
+    }
+  });
+
+  app.post("/api/admin/users/:id/resend-setup-link", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const delivery = await resendPasswordSetupLink({
+        storage,
+        adminId: parseInt(req.params.id),
+      });
+
+      const emailSent = await sendAdminPasswordSetupEmail({
+        to: delivery.admin.email,
+        name: delivery.admin.name,
+        setupUrl: delivery.setupUrl,
+      });
+
+      if (!emailSent) {
+        return res.status(502).json({
+          message: "Fresh setup token was generated, but password setup email failed. You can retry resend after fixing email delivery.",
+        });
+      }
+
+      res.json({ message: "Password setup email resent" });
+    } catch (error) {
+      if (error instanceof AdminOnboardingError) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      res.status(400).json({ message: "Failed to resend password setup email" });
     }
   });
 

@@ -30,7 +30,7 @@ import {
 } from "../shared/main-schema";
 import { db } from "./db";
 import { mainDb } from "./main-db";
-import { eq, and, desc, inArray, lt, or, isNull } from "drizzle-orm";
+import { eq, and, desc, inArray, lt, or, isNull, gt } from "drizzle-orm";
 
 // Interface for storage operations
 export interface IStorage {
@@ -43,10 +43,28 @@ export interface IStorage {
   // Admin user operations
   getAdminUser(id: number): Promise<AdminUser | undefined>;
   getAdminUserByEmail(email: string): Promise<AdminUser | undefined>;
+  getAdminUserByPasswordSetupTokenHash(tokenHash: string, now?: Date): Promise<AdminUser | undefined>;
   createAdminUser(adminUser: InsertAdminUser): Promise<AdminUser>;
+  createAdminUserWithApproval(adminUser: InsertAdminUser, approval: InsertAdminUserApproval): Promise<AdminUser>;
   updateAdminUser(id: number, updates: Partial<AdminUser>): Promise<AdminUser>;
   deleteAdminUser(id: number): Promise<void>;
   listAdminUsers(filters?: { role?: AdminRole; status?: AdminStatus }): Promise<AdminUser[]>;
+  activateCreateApprovalForPasswordSetup(
+    approvalId: number,
+    targetAdminId: number,
+    approvedBy: number,
+    tokenHash: string,
+    expiresAt: Date,
+    notes?: string
+  ): Promise<{ admin: AdminUser; approval: AdminUserApproval }>;
+  rejectCreateApproval(
+    approvalId: number,
+    targetAdminId: number,
+    approvedBy: number,
+    notes?: string
+  ): Promise<{ admin: AdminUser; approval: AdminUserApproval }>;
+  refreshPasswordSetupTokenForAdmin(id: number, tokenHash: string, expiresAt: Date): Promise<AdminUser | undefined>;
+  completePasswordSetup(tokenHash: string, passwordHash: string, now?: Date): Promise<AdminUser | undefined>;
   
   // Admin approval operations
   createApprovalRequest(approval: InsertAdminUserApproval): Promise<AdminUserApproval>;
@@ -126,12 +144,47 @@ export class DatabaseStorage implements IStorage {
     return admin;
   }
 
+  async getAdminUserByPasswordSetupTokenHash(
+    tokenHash: string,
+    now = new Date()
+  ): Promise<AdminUser | undefined> {
+    const [admin] = await db
+      .select()
+      .from(adminUsers)
+      .where(
+        and(
+          eq(adminUsers.passwordSetupTokenHash, tokenHash),
+          gt(adminUsers.passwordSetupExpiresAt, now)
+        )
+      );
+    return admin;
+  }
+
   async createAdminUser(adminUser: InsertAdminUser): Promise<AdminUser> {
     const [newAdmin] = await db
       .insert(adminUsers)
       .values(adminUser)
       .returning();
     return newAdmin;
+  }
+
+  async createAdminUserWithApproval(
+    adminUser: InsertAdminUser,
+    approval: InsertAdminUserApproval
+  ): Promise<AdminUser> {
+    return await db.transaction(async (tx) => {
+      const [newAdmin] = await tx
+        .insert(adminUsers)
+        .values(adminUser)
+        .returning();
+
+      await tx.insert(adminUserApprovals).values({
+        ...approval,
+        targetAdminId: newAdmin.id,
+      });
+
+      return newAdmin;
+    });
   }
 
   async updateAdminUser(id: number, updates: Partial<AdminUser>): Promise<AdminUser> {
@@ -161,6 +214,152 @@ export class DatabaseStorage implements IStorage {
     }
 
     return await db.select().from(adminUsers).orderBy(desc(adminUsers.createdAt));
+  }
+
+  async activateCreateApprovalForPasswordSetup(
+    approvalId: number,
+    targetAdminId: number,
+    approvedBy: number,
+    tokenHash: string,
+    expiresAt: Date,
+    notes?: string
+  ): Promise<{ admin: AdminUser; approval: AdminUserApproval }> {
+    return await db.transaction(async (tx) => {
+      const [admin] = await tx
+        .update(adminUsers)
+        .set({
+          status: 'active',
+          mustChangePassword: true,
+          passwordSetupTokenHash: tokenHash,
+          passwordSetupExpiresAt: expiresAt,
+          updatedAt: new Date(),
+        })
+        .where(eq(adminUsers.id, targetAdminId))
+        .returning();
+
+      if (!admin) {
+        throw new Error('Target admin user not found');
+      }
+
+      const [approval] = await tx
+        .update(adminUserApprovals)
+        .set({
+          status: 'approved',
+          approvedBy,
+          approvedAt: new Date(),
+          ...(notes ? { notes } : {}),
+        })
+        .where(
+          and(
+            eq(adminUserApprovals.id, approvalId),
+            eq(adminUserApprovals.status, 'pending'),
+            eq(adminUserApprovals.action, 'create')
+          )
+        )
+        .returning();
+
+      if (!approval) {
+        throw new Error('Approval request not found');
+      }
+
+      return { admin, approval };
+    });
+  }
+
+  async rejectCreateApproval(
+    approvalId: number,
+    targetAdminId: number,
+    approvedBy: number,
+    notes?: string
+  ): Promise<{ admin: AdminUser; approval: AdminUserApproval }> {
+    return await db.transaction(async (tx) => {
+      const [admin] = await tx
+        .update(adminUsers)
+        .set({
+          status: 'rejected',
+          passwordSetupTokenHash: null,
+          passwordSetupExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(adminUsers.id, targetAdminId))
+        .returning();
+
+      if (!admin) {
+        throw new Error('Target admin user not found');
+      }
+
+      const [approval] = await tx
+        .update(adminUserApprovals)
+        .set({
+          status: 'rejected',
+          approvedBy,
+          approvedAt: new Date(),
+          ...(notes ? { notes } : {}),
+        })
+        .where(
+          and(
+            eq(adminUserApprovals.id, approvalId),
+            eq(adminUserApprovals.status, 'pending'),
+            eq(adminUserApprovals.action, 'create')
+          )
+        )
+        .returning();
+
+      if (!approval) {
+        throw new Error('Approval request not found');
+      }
+
+      return { admin, approval };
+    });
+  }
+
+  async refreshPasswordSetupTokenForAdmin(
+    id: number,
+    tokenHash: string,
+    expiresAt: Date
+  ): Promise<AdminUser | undefined> {
+    const [admin] = await db
+      .update(adminUsers)
+      .set({
+        passwordSetupTokenHash: tokenHash,
+        passwordSetupExpiresAt: expiresAt,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(adminUsers.id, id),
+          eq(adminUsers.status, 'active'),
+          eq(adminUsers.mustChangePassword, true)
+        )
+      )
+      .returning();
+    return admin;
+  }
+
+  async completePasswordSetup(
+    tokenHash: string,
+    passwordHash: string,
+    now = new Date()
+  ): Promise<AdminUser | undefined> {
+    const [admin] = await db
+      .update(adminUsers)
+      .set({
+        passwordHash,
+        mustChangePassword: false,
+        passwordSetupTokenHash: null,
+        passwordSetupExpiresAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(adminUsers.passwordSetupTokenHash, tokenHash),
+          eq(adminUsers.mustChangePassword, true),
+          eq(adminUsers.status, 'active'),
+          gt(adminUsers.passwordSetupExpiresAt, now)
+        )
+      )
+      .returning();
+    return admin;
   }
 
   // Admin approval operations

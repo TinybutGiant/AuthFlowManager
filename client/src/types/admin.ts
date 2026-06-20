@@ -9,6 +9,7 @@ export interface AdminUser {
   email: string;
   role: AdminRole;
   status: AdminStatus;
+  mustChangePassword?: boolean;
   createdBy?: number;
   createdAt: string;
   updatedAt: string;
