@@ -17,8 +17,11 @@ import type { AdminUser, AdminUserApproval, InsertAdminUser, InsertAdminUserAppr
 class MemoryOnboardingStorage implements AdminOnboardingStorage {
   admins = new Map<number, any>();
   approvals = new Map<number, any>();
+  engagements = new Map<number, any>();
+  lifecycleEvents: any[] = [];
   nextAdminId = 1;
   nextApprovalId = 1;
+  nextEngagementId = 1;
   failApprovalInsert = false;
 
   async createAdminUserWithApproval(adminUser: InsertAdminUser, approval: InsertAdminUserApproval): Promise<AdminUser> {
@@ -120,6 +123,22 @@ class MemoryOnboardingStorage implements AdminOnboardingStorage {
       passwordSetupTokenHash: null,
       passwordSetupExpiresAt: null,
     } as any);
+    if (admin.role === "trainee_access") {
+      for (const [id, engagement] of this.engagements.entries()) {
+        if (engagement.adminUserId === targetAdminId) {
+          const updatedEngagement = { ...engagement, status: "cancelled", updatedAt: new Date() };
+          this.engagements.set(id, updatedEngagement);
+          this.lifecycleEvents.push({
+            adminUserId: targetAdminId,
+            engagementId: id,
+            eventType: "engagement_updated",
+            actorAdminId: approvedBy,
+            metadata: { status: "cancelled", reason: "approval_rejected" },
+            notes: notes ?? null,
+          });
+        }
+      }
+    }
     const approval = await this.updateApprovalRequest(approvalId, {
       status: "rejected",
       approvedBy,
@@ -127,6 +146,20 @@ class MemoryOnboardingStorage implements AdminOnboardingStorage {
       ...(notes ? { notes } : {}),
     } as any);
     return { admin, approval };
+  }
+
+  seedEngagement(adminUserId: number, overrides: Record<string, any> = {}) {
+    const engagement = {
+      id: this.nextEngagementId++,
+      adminUserId,
+      engagementType: "intern",
+      status: "draft",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...overrides,
+    };
+    this.engagements.set(engagement.id, engagement);
+    return engagement;
   }
 
   async refreshPasswordSetupTokenForAdmin(id: number, tokenHash: string, expiresAt: Date): Promise<AdminUser | undefined> {
@@ -315,6 +348,36 @@ test("reject create marks target admin and approval rejected", async () => {
 
   assert.equal(rejectedApproval.status, "rejected");
   assert.equal(store.admins.get(admin.id).status, "rejected");
+});
+
+test("reject trainee create cancels engagement and appends lifecycle event", async () => {
+  const store = new MemoryOnboardingStorage();
+  const admin = await createPendingAdminAccount({
+    storage: store,
+    adminUser: pendingAdmin({ role: "trainee_access" }),
+    requestedBy: 1,
+    requestData: { adminData: { email: "trainee@example.com", role: "trainee_access" } },
+  });
+  const approval = [...store.approvals.values()][0];
+  const engagement = store.seedEngagement(admin.id);
+
+  await rejectCreateAdminRequest({ storage: store, approvalId: approval.id, approvedBy: 1 });
+
+  assert.equal(store.engagements.get(engagement.id).status, "cancelled");
+  assert.equal(store.lifecycleEvents.length, 1);
+  assert.equal(store.lifecycleEvents[0].eventType, "engagement_updated");
+  assert.deepEqual(store.lifecycleEvents[0].metadata, { status: "cancelled", reason: "approval_rejected" });
+});
+
+test("reject normal admin create does not cancel unrelated engagement data", async () => {
+  const store = new MemoryOnboardingStorage();
+  const { admin, approval } = await seedPendingCreate(store);
+  const engagement = store.seedEngagement(admin.id, { status: "draft" });
+
+  await rejectCreateAdminRequest({ storage: store, approvalId: approval.id, approvedBy: 1 });
+
+  assert.equal(store.engagements.get(engagement.id).status, "draft");
+  assert.equal(store.lifecycleEvents.length, 0);
 });
 
 test("login blocking covers pending, rejected, and mustChangePassword admins", () => {
