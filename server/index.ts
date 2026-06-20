@@ -1,10 +1,43 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { spawn } from "child_process";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+function shouldOpenBrowser() {
+  return (
+    process.env.NODE_ENV === "development" &&
+    process.env.NO_BROWSER !== "1" &&
+    process.env.BROWSER !== "none"
+  );
+}
+
+function openBrowser(url: string) {
+  const command =
+    process.platform === "win32"
+      ? "cmd"
+      : process.platform === "darwin"
+        ? "open"
+        : "xdg-open";
+  const args =
+    process.platform === "win32"
+      ? ["/c", "start", "", url]
+      : [url];
+
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+
+  child.on("error", (error) => {
+    log(`could not open browser automatically: ${error.message}`);
+  });
+  child.unref();
+}
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -67,5 +100,9 @@ app.use((req, res, next) => {
   const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : (process.env.HOST || "0.0.0.0");
   server.listen(port, host, () => {
     log(`serving on port ${port} and host ${host}`);
+    if (shouldOpenBrowser()) {
+      const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+      openBrowser(`http://${browserHost}:${port}`);
+    }
   });
 })();
