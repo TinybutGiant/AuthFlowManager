@@ -2,12 +2,18 @@ import {
   users,
   adminUsers,
   adminUserApprovals,
+  adminEngagements,
+  adminLifecycleEvents,
   type User,
   type InsertUser,
   type AdminUser,
   type InsertAdminUser,
   type AdminUserApproval,
   type InsertAdminUserApproval,
+  type AdminEngagement,
+  type InsertAdminEngagement,
+  type AdminLifecycleEvent,
+  type InsertAdminLifecycleEvent,
   type AdminRole,
   type AdminStatus,
   type ApprovalStatus,
@@ -46,6 +52,12 @@ export interface IStorage {
   getAdminUserByPasswordSetupTokenHash(tokenHash: string, now?: Date): Promise<AdminUser | undefined>;
   createAdminUser(adminUser: InsertAdminUser): Promise<AdminUser>;
   createAdminUserWithApproval(adminUser: InsertAdminUser, approval: InsertAdminUserApproval): Promise<AdminUser>;
+  createAdminUserWithApprovalAndEngagement(
+    adminUser: InsertAdminUser,
+    approval: InsertAdminUserApproval,
+    engagement: Omit<InsertAdminEngagement, "adminUserId">,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminUser>;
   updateAdminUser(id: number, updates: Partial<AdminUser>): Promise<AdminUser>;
   deleteAdminUser(id: number): Promise<void>;
   listAdminUsers(filters?: { role?: AdminRole; status?: AdminStatus }): Promise<AdminUser[]>;
@@ -71,6 +83,21 @@ export interface IStorage {
   getApprovalRequest(id: number): Promise<AdminUserApproval | undefined>;
   listApprovalRequests(filters?: { status?: ApprovalStatus }): Promise<AdminUserApproval[]>;
   updateApprovalRequest(id: number, updates: Partial<AdminUserApproval>): Promise<AdminUserApproval>;
+
+  // Admin engagement and lifecycle operations
+  listAdminEngagements(adminUserId: number): Promise<AdminEngagement[]>;
+  getAdminEngagement(id: number): Promise<AdminEngagement | undefined>;
+  createAdminEngagementWithEvent(
+    engagement: InsertAdminEngagement,
+    event: InsertAdminLifecycleEvent
+  ): Promise<AdminEngagement>;
+  updateAdminEngagementWithEvent(
+    id: number,
+    updates: Partial<AdminEngagement>,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminEngagement | undefined>;
+  listAdminLifecycleEvents(adminUserId: number): Promise<AdminLifecycleEvent[]>;
+  createAdminLifecycleEvent(event: InsertAdminLifecycleEvent): Promise<AdminLifecycleEvent>;
   
   // Admin authentication
   authenticateAdmin(email: string, password: string): Promise<AdminUser | null>;
@@ -187,6 +214,41 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async createAdminUserWithApprovalAndEngagement(
+    adminUser: InsertAdminUser,
+    approval: InsertAdminUserApproval,
+    engagement: Omit<InsertAdminEngagement, "adminUserId">,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminUser> {
+    return await db.transaction(async (tx) => {
+      const [newAdmin] = await tx
+        .insert(adminUsers)
+        .values(adminUser)
+        .returning();
+
+      await tx.insert(adminUserApprovals).values({
+        ...approval,
+        targetAdminId: newAdmin.id,
+      });
+
+      const [newEngagement] = await tx
+        .insert(adminEngagements)
+        .values({
+          ...engagement,
+          adminUserId: newAdmin.id,
+        })
+        .returning();
+
+      await tx.insert(adminLifecycleEvents).values({
+        ...event,
+        adminUserId: newAdmin.id,
+        engagementId: newEngagement.id,
+      });
+
+      return newAdmin;
+    });
+  }
+
   async updateAdminUser(id: number, updates: Partial<AdminUser>): Promise<AdminUser> {
     const [updatedAdmin] = await db
       .update(adminUsers)
@@ -239,6 +301,30 @@ export class DatabaseStorage implements IStorage {
 
       if (!admin) {
         throw new Error('Target admin user not found');
+      }
+
+      if (admin.role === 'trainee_access') {
+        const cancelledEngagements = await tx
+          .update(adminEngagements)
+          .set({
+            status: 'cancelled',
+            updatedAt: new Date(),
+          })
+          .where(eq(adminEngagements.adminUserId, targetAdminId))
+          .returning();
+
+        if (cancelledEngagements.length > 0) {
+          await tx.insert(adminLifecycleEvents).values(
+            cancelledEngagements.map((engagement) => ({
+              adminUserId: targetAdminId,
+              engagementId: engagement.id,
+              eventType: 'engagement_updated',
+              actorAdminId: approvedBy,
+              metadata: { status: 'cancelled', reason: 'approval_rejected' },
+              notes: notes ?? null,
+            }))
+          );
+        }
       }
 
       const [approval] = await tx
@@ -391,6 +477,84 @@ export class DatabaseStorage implements IStorage {
       .where(eq(adminUserApprovals.id, id))
       .returning();
     return updatedApproval;
+  }
+
+  async listAdminEngagements(adminUserId: number): Promise<AdminEngagement[]> {
+    return await db
+      .select()
+      .from(adminEngagements)
+      .where(eq(adminEngagements.adminUserId, adminUserId))
+      .orderBy(desc(adminEngagements.createdAt));
+  }
+
+  async getAdminEngagement(id: number): Promise<AdminEngagement | undefined> {
+    const [engagement] = await db
+      .select()
+      .from(adminEngagements)
+      .where(eq(adminEngagements.id, id));
+    return engagement;
+  }
+
+  async createAdminEngagementWithEvent(
+    engagement: InsertAdminEngagement,
+    event: InsertAdminLifecycleEvent
+  ): Promise<AdminEngagement> {
+    return await db.transaction(async (tx) => {
+      const [newEngagement] = await tx
+        .insert(adminEngagements)
+        .values(engagement)
+        .returning();
+
+      await tx.insert(adminLifecycleEvents).values({
+        ...event,
+        adminUserId: newEngagement.adminUserId,
+        engagementId: newEngagement.id,
+      });
+
+      return newEngagement;
+    });
+  }
+
+  async updateAdminEngagementWithEvent(
+    id: number,
+    updates: Partial<AdminEngagement>,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminEngagement | undefined> {
+    return await db.transaction(async (tx) => {
+      const [updatedEngagement] = await tx
+        .update(adminEngagements)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(adminEngagements.id, id))
+        .returning();
+
+      if (!updatedEngagement) {
+        return undefined;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        ...event,
+        adminUserId: updatedEngagement.adminUserId,
+        engagementId: updatedEngagement.id,
+      });
+
+      return updatedEngagement;
+    });
+  }
+
+  async listAdminLifecycleEvents(adminUserId: number): Promise<AdminLifecycleEvent[]> {
+    return await db
+      .select()
+      .from(adminLifecycleEvents)
+      .where(eq(adminLifecycleEvents.adminUserId, adminUserId))
+      .orderBy(desc(adminLifecycleEvents.occurredAt));
+  }
+
+  async createAdminLifecycleEvent(event: InsertAdminLifecycleEvent): Promise<AdminLifecycleEvent> {
+    const [newEvent] = await db
+      .insert(adminLifecycleEvents)
+      .values(event)
+      .returning();
+    return newEvent;
   }
 
   // Admin authentication (placeholder - would use bcrypt in real implementation)

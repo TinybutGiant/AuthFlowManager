@@ -26,6 +26,16 @@ import {
   resendPasswordSetupLink,
   sanitizeAdminUser,
 } from './adminOnboardingService';
+import {
+  accessRoleSchema,
+  adminUserUpdateSchema,
+  engagementPayloadSchema,
+  engagementTypeSchema,
+  lifecycleEventPayloadSchema,
+  updateEngagementPayloadSchema,
+  validateTraineeEngagement,
+  validateEngagementDates,
+} from './adminEngagementValidation';
 
 // Login/Register schemas
 const loginSchema = z.object({
@@ -43,8 +53,9 @@ const registerSchema = z.object({
 const createAdminUserSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  role: z.enum(['admin_finance', 'admin_verifier', 'admin_support']),
+  role: accessRoleSchema.exclude(['super_admin']),
   permissions: z.array(z.string()).optional(),
+  engagement: z.unknown().optional(),
 });
 
 const passwordSetupTokenSchema = z.object({
@@ -54,6 +65,7 @@ const passwordSetupTokenSchema = z.object({
 const completePasswordSetupSchema = passwordSetupTokenSchema.extend({
   password: z.string().min(8),
 });
+
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
@@ -205,44 +217,229 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/users", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const validatedData = createAdminUserSchema.parse(req.body);
+      const { engagement, ...adminData } = validatedData;
+      const engagementData = engagement !== undefined && engagement !== null
+        ? engagementPayloadSchema.parse(engagement)
+        : undefined;
+      z.object({
+        role: accessRoleSchema,
+        engagement: engagementPayloadSchema.optional(),
+      }).superRefine(validateTraineeEngagement).parse({
+        role: adminData.role,
+        engagement: engagementData,
+      });
       const placeholderPassword = crypto.randomBytes(32).toString('base64url');
       const passwordHash = await bcrypt.hash(placeholderPassword, 12);
-      
-      const newAdmin = await createPendingAdminAccount({
-        storage,
-        adminUser: {
-          ...validatedData,
+
+      const pendingAdminUser = {
+          ...adminData,
           passwordHash,
           mustChangePassword: true,
           passwordSetupTokenHash: null,
           passwordSetupExpiresAt: null,
           createdBy: req.adminUser.id,
-        },
+      };
+      const engagementSnapshot = engagementData
+        ? {
+            engagement_type: engagementData.engagementType,
+            schedule_type: engagementData.scheduleType ?? null,
+            work_authorization_type: engagementData.workAuthorizationType,
+            start_date: engagementData.startDate ?? null,
+            end_date: engagementData.endDate ?? null,
+            supervisor_admin_id: engagementData.supervisorAdminId ?? null,
+            expected_hours_per_week: engagementData.expectedHoursPerWeek ?? null,
+            work_scope: engagementData.workScope ?? null,
+            status: engagementData.status,
+          }
+        : undefined;
+      const approvalRequest = {
+        targetAdminId: 0,
+        action: 'create',
         requestedBy: req.adminUser.id,
         requestData: {
           adminData: {
-            name: validatedData.name,
-            email: validatedData.email,
-            role: validatedData.role
+            name: adminData.name,
+            email: adminData.email,
+            role: adminData.role
           }
+          ,
+          ...(engagementSnapshot ? { engagementData: engagementSnapshot } : {})
         }
-      });
-      
+      };
+
+      let newAdmin;
+      if (engagementData) {
+        newAdmin = await storage.createAdminUserWithApprovalAndEngagement(
+          pendingAdminUser,
+          approvalRequest,
+          {
+            ...engagementData,
+            createdBy: req.adminUser.id,
+          },
+          {
+            eventType: 'engagement_created',
+            actorAdminId: req.adminUser.id,
+            metadata: {},
+            notes: null,
+          }
+        );
+      } else {
+        newAdmin = await createPendingAdminAccount({
+          storage,
+          adminUser: pendingAdminUser,
+          requestedBy: req.adminUser.id,
+          requestData: approvalRequest.requestData
+        });
+      }
+
+      // TODO: If setup invitation is later sent during this same create step,
+      // write an invitation_sent lifecycle event at the email service boundary.
       res.status(201).json(sanitizeAdminUser(newAdmin));
     } catch (error: any) {
       res.status(400).json({ message: "Failed to create admin user", error: error?.message || 'Unknown error' });
     }
   });
 
+  app.get("/api/admin/users/:id/engagements", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const adminId = parseInt(req.params.id);
+      const engagements = await storage.listAdminEngagements(adminId);
+      res.json(engagements);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch admin engagements" });
+    }
+  });
+
+  app.post("/api/admin/users/:id/engagements", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const adminId = parseInt(req.params.id);
+      const admin = await storage.getAdminUser(adminId);
+      if (!admin) {
+        return res.status(404).json({ message: "Admin user not found" });
+      }
+
+      const engagementData = engagementPayloadSchema.parse(req.body);
+      const engagement = await storage.createAdminEngagementWithEvent(
+        {
+          ...engagementData,
+          adminUserId: adminId,
+          createdBy: req.adminUser.id,
+        },
+        {
+          adminUserId: adminId,
+          eventType: 'engagement_created',
+          actorAdminId: req.adminUser.id,
+          metadata: {},
+          notes: null,
+        }
+      );
+      res.status(201).json(engagement);
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to create admin engagement", error: error?.message });
+    }
+  });
+
+  app.patch("/api/admin/engagements/:engagementId", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const engagementId = parseInt(req.params.engagementId);
+      const existing = await storage.getAdminEngagement(engagementId);
+      if (!existing) {
+        return res.status(404).json({ message: "Admin engagement not found" });
+      }
+
+      const updates = updateEngagementPayloadSchema.parse(req.body);
+      const merged = {
+        engagementType: updates.engagementType ?? existing.engagementType,
+        startDate: updates.startDate !== undefined ? updates.startDate : existing.startDate,
+        endDate: updates.endDate !== undefined ? updates.endDate : existing.endDate,
+      };
+      const validation = z
+        .object({
+          engagementType: engagementTypeSchema,
+          startDate: z.string().nullable().optional(),
+          endDate: z.string().nullable().optional(),
+        })
+        .superRefine(validateEngagementDates)
+        .safeParse(merged);
+
+      if (!validation.success) {
+        return res.status(400).json({ message: "Invalid engagement update", error: validation.error.message });
+      }
+
+      const updated = await storage.updateAdminEngagementWithEvent(
+        engagementId,
+        updates,
+        {
+          eventType: 'engagement_updated',
+          actorAdminId: req.adminUser.id,
+          metadata: { changedFields: Object.keys(updates) },
+          notes: null,
+        }
+      );
+
+      if (!updated) {
+        return res.status(404).json({ message: "Admin engagement not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to update admin engagement", error: error?.message });
+    }
+  });
+
+  app.get("/api/admin/users/:id/lifecycle-events", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const adminId = parseInt(req.params.id);
+      const events = await storage.listAdminLifecycleEvents(adminId);
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch lifecycle events" });
+    }
+  });
+
+  app.post("/api/admin/engagements/:engagementId/events", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const engagementId = parseInt(req.params.engagementId);
+      const engagement = await storage.getAdminEngagement(engagementId);
+      if (!engagement) {
+        return res.status(404).json({ message: "Admin engagement not found" });
+      }
+
+      const eventData = lifecycleEventPayloadSchema.parse(req.body);
+      const event = await storage.createAdminLifecycleEvent({
+        adminUserId: engagement.adminUserId,
+        engagementId: engagement.id,
+        eventType: eventData.eventType,
+        occurredAt: eventData.occurredAt,
+        actorAdminId: req.adminUser.id,
+        metadata: eventData.metadata ?? {},
+        notes: eventData.notes ?? null,
+      });
+
+      res.status(201).json(event);
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to create lifecycle event", error: error?.message });
+    }
+  });
+
   app.put("/api/admin/users/:id", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const updates = req.body;
+      const updates = adminUserUpdateSchema.parse(req.body);
+      if (updates.role === 'trainee_access') {
+        const engagements = await storage.listAdminEngagements(id);
+        if (engagements.length === 0) {
+          return res.status(400).json({
+            message: "Failed to update admin user",
+            error: "Engagement is required for Trainee Access",
+          });
+        }
+      }
       
       const updatedAdmin = await storage.updateAdminUser(id, updates);
       res.json(sanitizeAdminUser(updatedAdmin));
-    } catch (error) {
-      res.status(400).json({ message: "Failed to update admin user" });
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to update admin user", error: error?.message });
     }
   });
 
@@ -295,6 +492,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           notes,
         });
 
+        try {
+          const [engagement] = await storage.listAdminEngagements(result.delivery.admin.id);
+          if (engagement) {
+            await storage.createAdminLifecycleEvent({
+              adminUserId: result.delivery.admin.id,
+              engagementId: engagement.id,
+              eventType: 'account_activated',
+              actorAdminId: req.adminUser.id,
+              metadata: {},
+              notes: null,
+            });
+          }
+        } catch (eventError) {
+          console.warn("Failed to record account_activated lifecycle event:", eventError);
+        }
+
         const emailSent = await sendAdminPasswordSetupEmail({
           to: result.delivery.admin.email,
           name: result.delivery.admin.name,
@@ -306,6 +519,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
             message: "Admin was activated, but password setup email failed. Use resend setup link after fixing email delivery.",
             approval: result.approval,
           });
+        }
+
+        try {
+          const [engagement] = await storage.listAdminEngagements(result.delivery.admin.id);
+          if (engagement) {
+            await storage.createAdminLifecycleEvent({
+              adminUserId: result.delivery.admin.id,
+              engagementId: engagement.id,
+              eventType: 'invitation_sent',
+              actorAdminId: req.adminUser.id,
+              metadata: { channel: 'email', purpose: 'password_setup' },
+              notes: null,
+            });
+          }
+        } catch (eventError) {
+          console.warn("Failed to record invitation_sent lifecycle event:", eventError);
         }
 
         return res.json(result.approval);
@@ -347,6 +576,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(502).json({
           message: "Fresh setup token was generated, but password setup email failed. You can retry resend after fixing email delivery.",
         });
+      }
+
+      try {
+        const [engagement] = await storage.listAdminEngagements(delivery.admin.id);
+        if (engagement) {
+          await storage.createAdminLifecycleEvent({
+            adminUserId: delivery.admin.id,
+            engagementId: engagement.id,
+            eventType: 'invitation_sent',
+            actorAdminId: req.adminUser.id,
+            metadata: { channel: 'email', purpose: 'password_setup_resend' },
+            notes: null,
+          });
+        }
+      } catch (eventError) {
+        console.warn("Failed to record invitation_sent lifecycle event:", eventError);
       }
 
       res.json({ message: "Password setup email resent" });

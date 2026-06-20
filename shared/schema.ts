@@ -11,6 +11,7 @@ import {
   serial,
   integer,
   boolean,
+  date,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -49,7 +50,8 @@ export const adminRoleEnum = pgEnum('admin_role', [
   'super_admin',
   'admin_finance', 
   'admin_verifier',
-  'admin_support'
+  'admin_support',
+  'trainee_access'
 ]);
 
 // Admin status enum
@@ -92,6 +94,35 @@ export const adminUserApprovals = pgTable("admin_user_approvals", {
   notes: text("notes"),
 });
 
+export const adminEngagements = pgTable("admin_engagements", {
+  id: serial("id").primaryKey(),
+  adminUserId: integer("admin_user_id").notNull().references(() => adminUsers.id),
+  engagementType: text("engagement_type").notNull(),
+  scheduleType: text("schedule_type"),
+  workAuthorizationType: text("work_authorization_type").notNull().default("none"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  supervisorAdminId: integer("supervisor_admin_id").references(() => adminUsers.id),
+  workScope: text("work_scope"),
+  expectedHoursPerWeek: integer("expected_hours_per_week"),
+  status: text("status").notNull().default("draft"),
+  createdBy: integer("created_by").references(() => adminUsers.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const adminLifecycleEvents = pgTable("admin_lifecycle_events", {
+  id: serial("id").primaryKey(),
+  adminUserId: integer("admin_user_id").notNull().references(() => adminUsers.id),
+  engagementId: integer("engagement_id").references(() => adminEngagements.id),
+  eventType: text("event_type").notNull(),
+  occurredAt: timestamp("occurred_at").notNull().defaultNow(),
+  actorAdminId: integer("actor_admin_id").references(() => adminUsers.id),
+  metadata: jsonb("metadata").notNull().default({}),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Relations
 export const adminUsersRelations = relations(adminUsers, ({ one, many }) => ({
   createdByUser: one(adminUsers, {
@@ -103,6 +134,8 @@ export const adminUsersRelations = relations(adminUsers, ({ one, many }) => ({
   requestsCreated: many(adminUserApprovals, { relationName: "requestedBy" }),
   requestsApproved: many(adminUserApprovals, { relationName: "approvedBy" }),
   targetRequests: many(adminUserApprovals, { relationName: "targetAdmin" }),
+  engagements: many(adminEngagements, { relationName: "engagementAdmin" }),
+  lifecycleEvents: many(adminLifecycleEvents, { relationName: "eventAdmin" }),
 }));
 
 export const adminUserApprovalsRelations = relations(adminUserApprovals, ({ one }) => ({
@@ -123,6 +156,43 @@ export const adminUserApprovalsRelations = relations(adminUserApprovals, ({ one 
   }),
 }));
 
+export const adminEngagementsRelations = relations(adminEngagements, ({ one, many }) => ({
+  adminUser: one(adminUsers, {
+    fields: [adminEngagements.adminUserId],
+    references: [adminUsers.id],
+    relationName: "engagementAdmin",
+  }),
+  supervisor: one(adminUsers, {
+    fields: [adminEngagements.supervisorAdminId],
+    references: [adminUsers.id],
+    relationName: "engagementSupervisor",
+  }),
+  createdByUser: one(adminUsers, {
+    fields: [adminEngagements.createdBy],
+    references: [adminUsers.id],
+    relationName: "engagementCreatedBy",
+  }),
+  lifecycleEvents: many(adminLifecycleEvents, { relationName: "engagementEvents" }),
+}));
+
+export const adminLifecycleEventsRelations = relations(adminLifecycleEvents, ({ one }) => ({
+  adminUser: one(adminUsers, {
+    fields: [adminLifecycleEvents.adminUserId],
+    references: [adminUsers.id],
+    relationName: "eventAdmin",
+  }),
+  engagement: one(adminEngagements, {
+    fields: [adminLifecycleEvents.engagementId],
+    references: [adminEngagements.id],
+    relationName: "engagementEvents",
+  }),
+  actor: one(adminUsers, {
+    fields: [adminLifecycleEvents.actorAdminId],
+    references: [adminUsers.id],
+    relationName: "eventActor",
+  }),
+}));
+
 // Insert schemas
 export const insertAdminUserSchema = createInsertSchema(adminUsers).omit({
   id: true,
@@ -137,13 +207,45 @@ export const insertAdminUserApprovalSchema = createInsertSchema(adminUserApprova
   approvedAt: true,
 });
 
+export const insertAdminEngagementSchema = createInsertSchema(adminEngagements).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAdminLifecycleEventSchema = createInsertSchema(adminLifecycleEvents).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type AdminUser = typeof adminUsers.$inferSelect;
 export type InsertAdminUser = z.infer<typeof insertAdminUserSchema>;
 export type AdminUserApproval = typeof adminUserApprovals.$inferSelect;
 export type InsertAdminUserApproval = z.infer<typeof insertAdminUserApprovalSchema>;
+export type AdminEngagement = typeof adminEngagements.$inferSelect;
+export type InsertAdminEngagement = z.infer<typeof insertAdminEngagementSchema>;
+export type AdminLifecycleEvent = typeof adminLifecycleEvents.$inferSelect;
+export type InsertAdminLifecycleEvent = z.infer<typeof insertAdminLifecycleEventSchema>;
 
-export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support';
+export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support' | 'trainee_access';
 export type AdminStatus = 'pending' | 'active' | 'inactive' | 'rejected';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 export type ApprovalAction = 'create' | 'change_role' | 'delete';
+export type EngagementType = 'employee' | 'intern' | 'contractor' | 'advisor' | 'other';
+export type EngagementScheduleType = 'full_time' | 'part_time';
+export type WorkAuthorizationType = 'none' | 'cpt' | 'opt' | 'stem_opt' | 'other';
+export type EngagementStatus = 'draft' | 'invited' | 'active' | 'offboarding' | 'ended' | 'cancelled';
+export type AdminLifecycleEventType =
+  | 'engagement_created'
+  | 'engagement_updated'
+  | 'invitation_sent'
+  | 'account_activated'
+  | 'permission_granted'
+  | 'permission_revoked'
+  | 'office_hour_attended'
+  | 'training_completed'
+  | 'offboarding_started'
+  | 'access_disabled'
+  | 'offboarding_email_sent'
+  | 'engagement_ended';
