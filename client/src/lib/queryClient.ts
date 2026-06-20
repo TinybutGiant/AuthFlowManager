@@ -41,6 +41,10 @@ function getServerMessage(body: unknown, text: string, fallback: string) {
   if (body && typeof body === "object" && "message" in body) {
     const message = (body as { message?: unknown }).message;
     if (typeof message === "string" && message.trim()) {
+      const detail = (body as { error?: unknown }).error;
+      if (typeof detail === "string" && detail.trim() && detail !== message) {
+        return `${message}: ${detail}`;
+      }
       return message;
     }
   }
