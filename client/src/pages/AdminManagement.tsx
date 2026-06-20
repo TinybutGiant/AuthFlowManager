@@ -74,6 +74,7 @@ export default function AdminManagement() {
       admin_finance: "bg-blue-500/10 text-blue-700",
       admin_verifier: "bg-green-500/10 text-green-700",
       admin_support: "bg-orange-500/10 text-orange-700",
+      trainee_access: "bg-slate-500/10 text-slate-700",
     } as const;
 
     return (
@@ -133,14 +134,15 @@ export default function AdminManagement() {
             
             <Select value={roleFilter} onValueChange={setRoleFilter}>
               <SelectTrigger className="w-40" data-testid="select-role-filter">
-                <SelectValue placeholder="All Roles" />
+                <SelectValue placeholder="All Access Roles" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Roles</SelectItem>
+                <SelectItem value="all">All Access Roles</SelectItem>
                 <SelectItem value="super_admin">Super Admin</SelectItem>
                 <SelectItem value="admin_finance">Finance Admin</SelectItem>
                 <SelectItem value="admin_verifier">Verifier Admin</SelectItem>
                 <SelectItem value="admin_support">Support Admin</SelectItem>
+                <SelectItem value="trainee_access">Trainee Access</SelectItem>
               </SelectContent>
             </Select>
 
@@ -167,7 +169,7 @@ export default function AdminManagement() {
               <thead className="bg-muted">
                 <tr>
                   <th className="text-left p-4 font-medium text-foreground">Admin</th>
-                  <th className="text-left p-4 font-medium text-foreground">Role</th>
+                  <th className="text-left p-4 font-medium text-foreground">Access Role</th>
                   <th className="text-left p-4 font-medium text-foreground">Status</th>
                   <th className="text-left p-4 font-medium text-foreground">Last Login</th>
                   <th className="text-left p-4 font-medium text-foreground">Created</th>

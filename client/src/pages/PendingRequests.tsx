@@ -98,6 +98,13 @@ export default function PendingRequests() {
     );
   };
 
+  const formatEngagementValue = (value: unknown) => {
+    if (value === null || value === undefined || value === "") {
+      return "Not set";
+    }
+    return String(value).replace(/_/g, " ");
+  };
+
   const handleApprove = (id: number) => {
     approvalMutation.mutate({ id, status: 'approved' });
   };
@@ -124,7 +131,7 @@ export default function PendingRequests() {
           Pending Admin Requests
         </h1>
         <p className="text-muted-foreground">
-          Review and approve admin account requests and role changes.
+          Review and approve admin account requests and access role changes.
         </p>
       </div>
 
@@ -139,7 +146,7 @@ export default function PendingRequests() {
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
                 <SelectItem value="create">Create Admin</SelectItem>
-                <SelectItem value="change_role">Change Role</SelectItem>
+                <SelectItem value="change_role">Change Access Role</SelectItem>
                 <SelectItem value="delete">Delete Admin</SelectItem>
               </SelectContent>
             </Select>
@@ -196,6 +203,19 @@ export default function PendingRequests() {
                         <div data-testid={`text-target-admin-${approval.id}`}>
                           Admin ID: {approval.targetAdminId}
                         </div>
+                        {approval.requestData?.engagementData && (
+                          <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                            <div className="font-medium text-foreground mb-2">Engagement snapshot</div>
+                            <div>Type: {formatEngagementValue(approval.requestData.engagementData.engagement_type)}</div>
+                            <div>Schedule: {formatEngagementValue(approval.requestData.engagementData.schedule_type)}</div>
+                            <div>Work Authorization: {formatEngagementValue(approval.requestData.engagementData.work_authorization_type)}</div>
+                            <div>Start: {formatEngagementValue(approval.requestData.engagementData.start_date)}</div>
+                            <div>End: {formatEngagementValue(approval.requestData.engagementData.end_date)}</div>
+                            <div>Supervisor: {formatEngagementValue(approval.requestData.engagementData.supervisor_admin_id)}</div>
+                            <div>Expected Hours: {formatEngagementValue(approval.requestData.engagementData.expected_hours_per_week)}</div>
+                            <div>Scope: {formatEngagementValue(approval.requestData.engagementData.work_scope)}</div>
+                          </div>
+                        )}
                       </td>
                       <td className="p-4" data-testid={`text-requested-by-${approval.id}`}>
                         User ID: {approval.requestedBy}

@@ -1,4 +1,4 @@
-export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support';
+export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support' | 'trainee_access';
 export type AdminStatus = 'pending' | 'active' | 'inactive' | 'rejected';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 export type ApprovalAction = 'create' | 'change_role' | 'delete';
@@ -30,11 +30,59 @@ export interface AdminUserApproval {
   notes?: string;
 }
 
+export type EngagementType = 'employee' | 'intern' | 'contractor' | 'advisor' | 'other';
+export type EngagementScheduleType = 'full_time' | 'part_time';
+export type WorkAuthorizationType = 'none' | 'cpt' | 'opt' | 'stem_opt' | 'other';
+export type EngagementStatus = 'draft' | 'invited' | 'active' | 'offboarding' | 'ended' | 'cancelled';
+export type AdminLifecycleEventType =
+  | 'engagement_created'
+  | 'engagement_updated'
+  | 'invitation_sent'
+  | 'account_activated'
+  | 'permission_granted'
+  | 'permission_revoked'
+  | 'office_hour_attended'
+  | 'training_completed'
+  | 'offboarding_started'
+  | 'access_disabled'
+  | 'offboarding_email_sent'
+  | 'engagement_ended';
+
+export interface AdminEngagement {
+  id: number;
+  adminUserId: number;
+  engagementType: EngagementType;
+  scheduleType?: EngagementScheduleType | null;
+  workAuthorizationType: WorkAuthorizationType;
+  startDate?: string | null;
+  endDate?: string | null;
+  supervisorAdminId?: number | null;
+  workScope?: string | null;
+  expectedHoursPerWeek?: number | null;
+  status: EngagementStatus;
+  createdBy?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminLifecycleEvent {
+  id: number;
+  adminUserId: number;
+  engagementId?: number | null;
+  eventType: AdminLifecycleEventType;
+  occurredAt: string;
+  actorAdminId?: number | null;
+  metadata: Record<string, unknown>;
+  notes?: string | null;
+  createdAt: string;
+}
+
 export const ROLE_PERMISSIONS = {
   super_admin: ['*'],
   admin_finance: ['finance.*'],
   admin_verifier: ['verifier.*'],
   admin_support: ['support.*'],
+  trainee_access: [],
 } as const;
 
 export const ROLE_DISPLAY_NAMES = {
@@ -42,6 +90,7 @@ export const ROLE_DISPLAY_NAMES = {
   admin_finance: 'Finance Admin',
   admin_verifier: 'Verifier Admin', 
   admin_support: 'Support Admin',
+  trainee_access: 'Trainee Access',
 } as const;
 
 // Guide Application types

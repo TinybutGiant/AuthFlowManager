@@ -43,7 +43,7 @@ export default function Login() {
         title: "登录成功",
         description: `欢迎回来，${data.user.name || data.user.email}`,
       });
-      window.location.reload(); // Refresh to load authenticated state
+      window.location.href = data.user.role === "trainee_access" ? "/trainee" : "/";
     },
     onError: (error: any) => {
       toast({

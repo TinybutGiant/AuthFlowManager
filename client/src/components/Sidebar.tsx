@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  GraduationCap,
 } from "lucide-react";
 import { AdminRole } from "@/types/admin";
 
@@ -40,6 +41,12 @@ const menuItems: MenuItem[] = [
     href: "/",
     icon: LayoutDashboard,
     roles: ['super_admin', 'admin_finance', 'admin_verifier', 'admin_support'],
+  },
+  {
+    title: "Trainee Workspace",
+    href: "/trainee",
+    icon: GraduationCap,
+    roles: ['trainee_access'],
   },
   {
     title: "Pending Requests",
@@ -66,7 +73,7 @@ const menuItems: MenuItem[] = [
         roles: ['super_admin'],
       },
       {
-        title: "Change Role",
+        title: "Change Access Role",
         href: "/admin-management/change-role",
         icon: ArrowLeftRight,
         roles: ['super_admin'],

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ArrowLeftRight, Delete, CheckCircle, Send } from "lucide-react";
-import { AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
+import { AdminEngagement, AdminLifecycleEvent, AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
 import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -17,6 +17,18 @@ export default function AdminProfile() {
 
   const { data: admin, isLoading } = useQuery<AdminUser>({
     queryKey: ["/api/admin/users", adminId],
+    enabled: !!adminId,
+    retry: false,
+  });
+
+  const { data: engagements = [] } = useQuery<AdminEngagement[]>({
+    queryKey: ["/api/admin/users", adminId, "engagements"],
+    enabled: !!adminId,
+    retry: false,
+  });
+
+  const { data: lifecycleEvents = [] } = useQuery<AdminLifecycleEvent[]>({
+    queryKey: ["/api/admin/users", adminId, "lifecycle-events"],
     enabled: !!adminId,
     retry: false,
   });
@@ -85,6 +97,7 @@ export default function AdminProfile() {
       admin_finance: "bg-blue-500/10 text-blue-700",
       admin_verifier: "bg-green-500/10 text-green-700",
       admin_support: "bg-orange-500/10 text-orange-700",
+      trainee_access: "bg-slate-500/10 text-slate-700",
     } as const;
 
     return (
@@ -120,7 +133,7 @@ export default function AdminProfile() {
           <Link href={`/admin-management/change-role/${admin.id}`}>
             <Button variant="outline" data-testid="button-change-role">
               <ArrowLeftRight className="h-4 w-4 mr-2" />
-              Change Role
+              Change Access Role
             </Button>
           </Link>
           <Link href={`/admin-management/delete/${admin.id}`}>
@@ -153,7 +166,7 @@ export default function AdminProfile() {
 
               <div className="space-y-4">
                 <div>
-                  <Label className="text-sm font-medium text-muted-foreground">Role</Label>
+                  <Label className="text-sm font-medium text-muted-foreground">Access Role</Label>
                   <div className="mt-1" data-testid="text-admin-role">
                     {getRoleBadge(admin.role)}
                   </div>
@@ -217,15 +230,89 @@ export default function AdminProfile() {
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader>
+              <CardTitle data-testid="text-engagement-title">Engagement</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {engagements.length > 0 ? (
+                <div className="space-y-4">
+                  {engagements.map((engagement) => (
+                    <div key={engagement.id} className="border-b border-border pb-4 last:border-0 last:pb-0">
+                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <Badge variant="secondary">{engagement.engagementType.replace('_', ' ')}</Badge>
+                        <Badge>{engagement.status}</Badge>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <span className="text-muted-foreground">Schedule: </span>
+                          <span>{engagement.scheduleType?.replace('_', '-') || 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Work Authorization: </span>
+                          <span>{engagement.workAuthorizationType.replace('_', ' ').toUpperCase()}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Start: </span>
+                          <span>{engagement.startDate || 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">End: </span>
+                          <span>{engagement.endDate || 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Supervisor: </span>
+                          <span>{engagement.supervisorAdminId ? `Admin ID ${engagement.supervisorAdminId}` : 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Expected Hours: </span>
+                          <span>{engagement.expectedHoursPerWeek ?? 'Not set'}</span>
+                        </div>
+                      </div>
+                      {engagement.workScope && (
+                        <p className="text-sm text-muted-foreground mt-3">{engagement.workScope}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground" data-testid="text-no-engagements">
+                  No engagement records yet.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Work Activity */}
           <Card>
             <CardHeader>
-              <CardTitle data-testid="text-work-activity-title">Work Activity</CardTitle>
+              <CardTitle data-testid="text-lifecycle-events-title">Lifecycle Events</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-muted-foreground" data-testid="text-work-activity-placeholder">
-                Activity tracking will be displayed here once implemented.
-              </p>
+              {lifecycleEvents.length > 0 ? (
+                <div className="space-y-4">
+                  {lifecycleEvents.map((event) => (
+                    <div key={event.id} className="border-b border-border pb-3 last:border-0 last:pb-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary">{event.eventType.replace(/_/g, ' ')}</Badge>
+                        <span className="text-sm text-muted-foreground">
+                          {new Date(event.occurredAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="text-sm text-muted-foreground mt-1">
+                        Actor: {event.actorAdminId ? `Admin ID ${event.actorAdminId}` : 'System'}
+                      </div>
+                      {event.notes && (
+                        <p className="text-sm text-foreground mt-2">{event.notes}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground" data-testid="text-no-lifecycle-events">
+                  No lifecycle events yet.
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>

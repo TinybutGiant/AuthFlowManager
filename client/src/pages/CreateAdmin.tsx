@@ -8,19 +8,67 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
-import { ROLE_DISPLAY_NAMES } from "@/types/admin";
 
 const createAdminSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   email: z.string().email("Invalid email address"),
-  role: z.enum(['admin_finance', 'admin_verifier', 'admin_support'], {
-    required_error: "Please select a role",
+  role: z.enum(['admin_finance', 'admin_verifier', 'admin_support', 'trainee_access'], {
+    required_error: "Please select an access role",
   }),
-  permissions: z.array(z.string()).optional(),
+  engagementType: z.enum(['employee', 'intern', 'contractor', 'advisor', 'other']).optional(),
+  scheduleType: z.enum(['full_time', 'part_time']).optional(),
+  workAuthorizationType: z.enum(['none', 'cpt', 'opt', 'stem_opt', 'other']).default('none'),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  supervisorAdminId: z.string().optional(),
+  expectedHoursPerWeek: z.string().optional(),
+  workScope: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.role === 'trainee_access' && !data.engagementType) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['engagementType'],
+      message: 'Engagement is required for Trainee Access',
+    });
+  }
+  if (data.role === 'trainee_access' && !data.endDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['endDate'],
+      message: 'End date is required for Trainee Access',
+    });
+  }
+  if (data.role === 'trainee_access' && !data.supervisorAdminId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['supervisorAdminId'],
+      message: 'Supervisor is required for Trainee Access',
+    });
+  }
+  if (data.role === 'trainee_access' && !data.workScope?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workScope'],
+      message: 'Work scope is required for Trainee Access',
+    });
+  }
+  if (data.engagementType === 'intern' && !data.endDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['endDate'],
+      message: 'End date is required for intern engagements',
+    });
+  }
+  if (data.startDate && data.endDate && data.endDate < data.startDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['endDate'],
+      message: 'End date cannot be before start date',
+    });
+  }
 });
 
 type CreateAdminForm = z.infer<typeof createAdminSchema>;
@@ -36,16 +84,46 @@ export default function CreateAdmin() {
       name: "",
       email: "",
       role: undefined,
-      permissions: [],
+      engagementType: undefined,
+      scheduleType: undefined,
+      workAuthorizationType: 'none',
+      startDate: "",
+      endDate: "",
+      supervisorAdminId: "",
+      expectedHoursPerWeek: "",
+      workScope: "",
     },
   });
+  const selectedRole = form.watch("role");
+  const isTraineeAccess = selectedRole === 'trainee_access';
 
   const createAdminMutation = useMutation({
     mutationFn: async (data: CreateAdminForm) => {
-      await apiRequest("POST", "/api/admin/users", data);
+      const payload: any = {
+        name: data.name,
+        email: data.email,
+        role: data.role,
+      };
+
+      if (data.role === 'trainee_access') {
+        payload.engagement = {
+          engagementType: data.engagementType || 'intern',
+          scheduleType: data.scheduleType || null,
+          workAuthorizationType: data.workAuthorizationType || 'none',
+          startDate: data.startDate || null,
+          endDate: data.endDate || null,
+          supervisorAdminId: data.supervisorAdminId ? Number(data.supervisorAdminId) : null,
+          expectedHoursPerWeek: data.expectedHoursPerWeek ? Number(data.expectedHoursPerWeek) : null,
+          workScope: data.workScope || null,
+          status: 'draft',
+        };
+      }
+
+      await apiRequest("POST", "/api/admin/users", payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/approvals"] });
       toast({
         title: "Success",
         description: "Admin user created successfully",
@@ -126,18 +204,33 @@ export default function CreateAdmin() {
               </div>
 
               <div>
-                <Label htmlFor="role">Role</Label>
+                <Label htmlFor="role">Access Role</Label>
                 <Select 
                   value={form.watch("role")} 
-                  onValueChange={(value) => form.setValue("role", value as any)}
+                  onValueChange={(value) => {
+                    form.setValue("role", value as any, { shouldValidate: true });
+                    if (value === 'trainee_access') {
+                      form.setValue("engagementType", "intern", { shouldValidate: true });
+                    } else {
+                      form.setValue("engagementType", undefined);
+                      form.setValue("scheduleType", undefined);
+                      form.setValue("workAuthorizationType", "none");
+                      form.setValue("startDate", "");
+                      form.setValue("endDate", "");
+                      form.setValue("supervisorAdminId", "");
+                      form.setValue("expectedHoursPerWeek", "");
+                      form.setValue("workScope", "");
+                    }
+                  }}
                 >
                   <SelectTrigger data-testid="select-admin-role">
-                    <SelectValue placeholder="Select a role" />
+                    <SelectValue placeholder="Select an access role" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin_finance">Finance Admin</SelectItem>
                     <SelectItem value="admin_verifier">Verifier Admin</SelectItem>
                     <SelectItem value="admin_support">Support Admin</SelectItem>
+                    <SelectItem value="trainee_access">Trainee Access</SelectItem>
                   </SelectContent>
                 </Select>
                 {form.formState.errors.role && (
@@ -151,20 +244,151 @@ export default function CreateAdmin() {
                 After this request is approved, the admin account will be activated and a one-time password setup link will be sent to the email address above. The link expires in 24 hours.
               </div>
 
-              <div>
-                <Label>Permissions</Label>
-                <div className="space-y-2 mt-2">
-                  {['View Reports', 'Manage Users', 'Access Logs'].map((permission) => (
-                    <div key={permission} className="flex items-center space-x-2">
-                      <Checkbox 
-                        id={permission} 
-                        data-testid={`checkbox-permission-${permission.toLowerCase().replace(' ', '-')}`}
-                      />
-                      <Label htmlFor={permission} className="text-sm">{permission}</Label>
+              {isTraineeAccess && (
+              <section className="rounded-md border border-border p-5 space-y-5">
+                  <div>
+                    <h2 className="text-lg font-medium text-foreground">Engagement</h2>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Trainee Access is for temporary interns or trainees. It does not grant access to core admin operations.
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Engagement tracks start/end dates, supervisor, work scope, and onboarding/offboarding events.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <Label htmlFor="engagement-type">Engagement Type</Label>
+                      <Select
+                        value={form.watch("engagementType")}
+                        onValueChange={(value) => form.setValue("engagementType", value as any, { shouldValidate: true })}
+                      >
+                        <SelectTrigger id="engagement-type" data-testid="select-engagement-type">
+                          <SelectValue placeholder="Select engagement type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="employee">Employee</SelectItem>
+                          <SelectItem value="intern">Intern</SelectItem>
+                          <SelectItem value="contractor">Contractor</SelectItem>
+                          <SelectItem value="advisor">Advisor</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {form.formState.errors.engagementType && (
+                        <p className="text-sm text-destructive mt-1">
+                          {form.formState.errors.engagementType.message}
+                        </p>
+                      )}
                     </div>
-                  ))}
-                </div>
-              </div>
+
+                    <div>
+                      <Label htmlFor="schedule-type">Schedule Type</Label>
+                      <Select
+                        value={form.watch("scheduleType")}
+                        onValueChange={(value) => form.setValue("scheduleType", value as any)}
+                      >
+                        <SelectTrigger id="schedule-type" data-testid="select-schedule-type">
+                          <SelectValue placeholder="Select schedule type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="full_time">Full-time</SelectItem>
+                          <SelectItem value="part_time">Part-time</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="work-authorization-type">Work Authorization Type</Label>
+                      <Select
+                        value={form.watch("workAuthorizationType")}
+                        onValueChange={(value) => form.setValue("workAuthorizationType", value as any)}
+                      >
+                        <SelectTrigger id="work-authorization-type" data-testid="select-work-authorization-type">
+                          <SelectValue placeholder="Select work authorization" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          <SelectItem value="cpt">CPT</SelectItem>
+                          <SelectItem value="opt">OPT</SelectItem>
+                          <SelectItem value="stem_opt">STEM OPT</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="supervisor-admin-id">Supervisor</Label>
+                      <Input
+                        id="supervisor-admin-id"
+                        type="number"
+                        min="1"
+                        {...form.register("supervisorAdminId")}
+                        placeholder="Supervisor admin ID"
+                        data-testid="input-supervisor-admin-id"
+                      />
+                      {form.formState.errors.supervisorAdminId && (
+                        <p className="text-sm text-destructive mt-1">
+                          {form.formState.errors.supervisorAdminId.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <Label htmlFor="start-date">Start Date</Label>
+                      <Input
+                        id="start-date"
+                        type="date"
+                        {...form.register("startDate")}
+                        data-testid="input-engagement-start-date"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="end-date">End Date</Label>
+                      <Input
+                        id="end-date"
+                        type="date"
+                        {...form.register("endDate")}
+                        data-testid="input-engagement-end-date"
+                      />
+                      {form.formState.errors.endDate && (
+                        <p className="text-sm text-destructive mt-1">
+                          {form.formState.errors.endDate.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <Label htmlFor="expected-hours">Expected Hours Per Week</Label>
+                      <Input
+                        id="expected-hours"
+                        type="number"
+                        min="0"
+                        max="168"
+                        {...form.register("expectedHoursPerWeek")}
+                        placeholder="e.g. 20"
+                        data-testid="input-expected-hours"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="work-scope">Work Scope</Label>
+                    <Input
+                      id="work-scope"
+                      {...form.register("workScope")}
+                      placeholder="Briefly describe scope"
+                      data-testid="input-work-scope"
+                    />
+                    {form.formState.errors.workScope && (
+                      <p className="text-sm text-destructive mt-1">
+                        {form.formState.errors.workScope.message}
+                      </p>
+                    )}
+                  </div>
+                  {/* TODO: Add permission override UI only after a clear override model exists. Permissions remain role-derived for now. */}
+              </section>
+              )}
 
               <div className="flex justify-end space-x-3 pt-4">
                 <Button 

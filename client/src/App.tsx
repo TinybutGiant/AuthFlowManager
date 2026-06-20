@@ -25,6 +25,7 @@ import ApplicationDetail from "@/pages/ApplicationDetail";
 import SupportManagement from "@/pages/SupportManagement";
 import CancellationReview from "@/pages/CancellationReview";
 import CancellationReviewDetail from "@/pages/CancellationReviewDetail";
+import TraineeWorkspace from "@/pages/TraineeWorkspace";
 import NotFound from "@/pages/not-found";
 
 function VerifierApplicationDetailRoute() {
@@ -60,6 +61,14 @@ function Router() {
       ) : (
         <>
           {/* Dashboard */}
+          <Route path="/trainee">
+            <ProtectedRoute allowedRoles={["trainee_access"]}>
+              <AdminLayout>
+                <TraineeWorkspace />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
           <Route path="/">
             <ProtectedRoute
               allowedRoles={[
