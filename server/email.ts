@@ -1,52 +1,82 @@
+import type { AdminRole } from "@shared/schema";
+
 interface PasswordSetupEmailInput {
   to: string;
   name: string;
   setupUrl: string;
+  role: AdminRole;
 }
 
-const mailgunApiKey = process.env.MAILGUN_API_KEY?.trim();
-const mailgunDomain = process.env.MAILGUN_DOMAIN?.trim();
-const mailgunFrom =
-  process.env.MAILGUN_FROM?.trim() ||
-  process.env.MAIL_FROM?.trim() ||
-  (mailgunDomain ? `YaoTu Admin <noreply@${mailgunDomain}>` : "");
+const ROLE_DISPLAY_NAMES: Record<AdminRole, string> = {
+  super_admin: "Super Admin",
+  admin_finance: "Finance Admin",
+  admin_verifier: "Verifier Admin",
+  admin_support: "Support Admin",
+  trainee_access: "Trainee Access",
+};
 
-function isMailConfigured(): boolean {
-  return Boolean(mailgunApiKey && mailgunDomain && mailgunFrom);
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getMailgunConfig() {
+  const apiKey = process.env.MAILGUN_API_KEY?.trim();
+  const domain = process.env.MAILGUN_DOMAIN?.trim();
+  const from =
+    process.env.MAILGUN_FROM?.trim() ||
+    process.env.MAIL_FROM?.trim() ||
+    (domain ? `YaoTu Admin <noreply@${domain}>` : "");
+
+  return {
+    apiKey,
+    domain,
+    from,
+    configured: Boolean(apiKey && domain && from),
+  };
 }
 
 export async function sendAdminPasswordSetupEmail(input: PasswordSetupEmailInput): Promise<boolean> {
-  const text = `Your admin account has been created. Please set your password here: ${input.setupUrl}`;
+  const mailgun = getMailgunConfig();
+  const roleLabel = ROLE_DISPLAY_NAMES[input.role] ?? "YaoTu";
+  const escapedName = escapeHtml(input.name);
+  const escapedSetupUrl = escapeHtml(input.setupUrl);
+  const subject = `Set up your YaoTu ${roleLabel} password`;
+  const text = `Your ${roleLabel} account has been created. Please set your password here: ${input.setupUrl}`;
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <p>Hello ${input.name},</p>
-      <p>Your admin account has been created.</p>
+      <p>Hello ${escapedName},</p>
+      <p>Your ${roleLabel} account has been created.</p>
       <p>Please set your password here:</p>
-      <p><a href="${input.setupUrl}">${input.setupUrl}</a></p>
+      <p><a href="${escapedSetupUrl}">${escapedSetupUrl}</a></p>
       <p>This one-time link expires in 24 hours.</p>
     </div>
   `;
 
-  if (!isMailConfigured()) {
+  if (!mailgun.configured) {
     console.warn("[email] Mailgun is not configured. Password setup email was not sent.");
     if (process.env.NODE_ENV !== "production") {
       console.warn("[email] Password setup link:", input.setupUrl);
     }
-    return process.env.NODE_ENV !== "production";
+    return false;
   }
 
   const body = new URLSearchParams({
-    from: mailgunFrom,
+    from: mailgun.from!,
     to: input.to,
-    subject: "Set up your YaoTu admin password",
+    subject,
     text,
     html,
   });
 
-  const response = await fetch(`https://api.mailgun.net/v3/${mailgunDomain}/messages`, {
+  const response = await fetch(`https://api.mailgun.net/v3/${mailgun.domain}/messages`, {
     method: "POST",
     headers: {
-      Authorization: `Basic ${Buffer.from(`api:${mailgunApiKey}`).toString("base64")}`,
+      Authorization: `Basic ${Buffer.from(`api:${mailgun.apiKey}`).toString("base64")}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body,

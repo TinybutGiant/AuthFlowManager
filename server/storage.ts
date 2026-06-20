@@ -51,6 +51,11 @@ export interface IStorage {
   getAdminUserByEmail(email: string): Promise<AdminUser | undefined>;
   getAdminUserByPasswordSetupTokenHash(tokenHash: string, now?: Date): Promise<AdminUser | undefined>;
   createAdminUser(adminUser: InsertAdminUser): Promise<AdminUser>;
+  createAdminUserForPasswordSetup(
+    adminUser: InsertAdminUser,
+    engagement?: Omit<InsertAdminEngagement, "adminUserId">,
+    event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<{ admin: AdminUser; engagement?: AdminEngagement }>;
   createAdminUserWithApproval(adminUser: InsertAdminUser, approval: InsertAdminUserApproval): Promise<AdminUser>;
   createAdminUserWithApprovalAndEngagement(
     adminUser: InsertAdminUser,
@@ -195,6 +200,41 @@ export class DatabaseStorage implements IStorage {
     return newAdmin;
   }
 
+  async createAdminUserForPasswordSetup(
+    adminUser: InsertAdminUser,
+    engagement?: Omit<InsertAdminEngagement, "adminUserId">,
+    event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<{ admin: AdminUser; engagement?: AdminEngagement }> {
+    return await db.transaction(async (tx) => {
+      const [newAdmin] = await tx
+        .insert(adminUsers)
+        .values(adminUser)
+        .returning();
+
+      if (!engagement) {
+        return { admin: newAdmin };
+      }
+
+      const [newEngagement] = await tx
+        .insert(adminEngagements)
+        .values({
+          ...engagement,
+          adminUserId: newAdmin.id,
+        })
+        .returning();
+
+      if (event) {
+        await tx.insert(adminLifecycleEvents).values({
+          ...event,
+          adminUserId: newAdmin.id,
+          engagementId: newEngagement.id,
+        });
+      }
+
+      return { admin: newAdmin, engagement: newEngagement };
+    });
+  }
+
   async createAdminUserWithApproval(
     adminUser: InsertAdminUser,
     approval: InsertAdminUserApproval
@@ -303,30 +343,6 @@ export class DatabaseStorage implements IStorage {
         throw new Error('Target admin user not found');
       }
 
-      if (admin.role === 'trainee_access') {
-        const cancelledEngagements = await tx
-          .update(adminEngagements)
-          .set({
-            status: 'cancelled',
-            updatedAt: new Date(),
-          })
-          .where(eq(adminEngagements.adminUserId, targetAdminId))
-          .returning();
-
-        if (cancelledEngagements.length > 0) {
-          await tx.insert(adminLifecycleEvents).values(
-            cancelledEngagements.map((engagement) => ({
-              adminUserId: targetAdminId,
-              engagementId: engagement.id,
-              eventType: 'engagement_updated',
-              actorAdminId: approvedBy,
-              metadata: { status: 'cancelled', reason: 'approval_rejected' },
-              notes: notes ?? null,
-            }))
-          );
-        }
-      }
-
       const [approval] = await tx
         .update(adminUserApprovals)
         .set({
@@ -393,6 +409,30 @@ export class DatabaseStorage implements IStorage {
 
       if (!approval) {
         throw new Error('Approval request not found');
+      }
+
+      if (admin.role === 'trainee_access') {
+        const cancelledEngagements = await tx
+          .update(adminEngagements)
+          .set({
+            status: 'cancelled',
+            updatedAt: new Date(),
+          })
+          .where(eq(adminEngagements.adminUserId, targetAdminId))
+          .returning();
+
+        if (cancelledEngagements.length > 0) {
+          await tx.insert(adminLifecycleEvents).values(
+            cancelledEngagements.map((engagement) => ({
+              adminUserId: targetAdminId,
+              engagementId: engagement.id,
+              eventType: 'engagement_updated',
+              actorAdminId: approvedBy,
+              metadata: { status: 'cancelled', reason: 'approval_rejected' },
+              notes: notes ?? null,
+            }))
+          );
+        }
       }
 
       return { admin, approval };

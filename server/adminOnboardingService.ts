@@ -1,4 +1,12 @@
-import type { AdminUser, AdminUserApproval, InsertAdminUser, InsertAdminUserApproval } from "@shared/schema";
+import type {
+  AdminEngagement,
+  AdminUser,
+  AdminUserApproval,
+  InsertAdminEngagement,
+  InsertAdminLifecycleEvent,
+  InsertAdminUser,
+  InsertAdminUserApproval,
+} from "@shared/schema";
 import { buildPasswordSetupUrl, createPasswordSetupToken, hashPasswordSetupToken } from "./passwordSetup";
 
 export class AdminOnboardingError extends Error {
@@ -16,6 +24,11 @@ export interface SetupDelivery {
 }
 
 export interface AdminOnboardingStorage {
+  createAdminUserForPasswordSetup(
+    adminUser: InsertAdminUser,
+    engagement?: Omit<InsertAdminEngagement, "adminUserId">,
+    event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<{ admin: AdminUser; engagement?: AdminEngagement }>;
   createAdminUserWithApproval(adminUser: InsertAdminUser, approval: InsertAdminUserApproval): Promise<AdminUser>;
   getApprovalRequest(id: number): Promise<AdminUserApproval | undefined>;
   getAdminUser(id: number): Promise<AdminUser | undefined>;
@@ -71,6 +84,32 @@ export async function createPendingAdminAccount(input: {
     requestedBy: input.requestedBy,
     requestData: input.requestData,
   });
+}
+
+export async function createAdminAccountForPasswordSetup(input: {
+  storage: AdminOnboardingStorage;
+  adminUser: InsertAdminUser;
+  engagement?: Omit<InsertAdminEngagement, "adminUserId">;
+  event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">;
+}): Promise<SetupDelivery & { engagement?: AdminEngagement }> {
+  const setupToken = createPasswordSetupToken();
+  const result = await input.storage.createAdminUserForPasswordSetup(
+    {
+      ...input.adminUser,
+      status: "active",
+      mustChangePassword: true,
+      passwordSetupTokenHash: setupToken.tokenHash,
+      passwordSetupExpiresAt: setupToken.expiresAt,
+    },
+    input.engagement,
+    input.event
+  );
+
+  return {
+    admin: result.admin,
+    engagement: result.engagement,
+    setupUrl: buildPasswordSetupUrl(setupToken.token),
+  };
 }
 
 export async function approveCreateAdminRequest(input: {

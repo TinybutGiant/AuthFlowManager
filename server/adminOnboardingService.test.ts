@@ -5,6 +5,7 @@ import {
   approveCreateAdminRequest,
   assertCanLogin,
   completePasswordSetup,
+  createAdminAccountForPasswordSetup,
   createPendingAdminAccount,
   rejectCreateAdminRequest,
   resendPasswordSetupLink,
@@ -12,7 +13,14 @@ import {
   type AdminOnboardingStorage,
 } from "./adminOnboardingService";
 import { hashPasswordSetupToken } from "./passwordSetup";
-import type { AdminUser, AdminUserApproval, InsertAdminUser, InsertAdminUserApproval } from "@shared/schema";
+import type {
+  AdminUser,
+  AdminUserApproval,
+  InsertAdminEngagement,
+  InsertAdminLifecycleEvent,
+  InsertAdminUser,
+  InsertAdminUserApproval,
+} from "@shared/schema";
 
 class MemoryOnboardingStorage implements AdminOnboardingStorage {
   admins = new Map<number, any>();
@@ -23,6 +31,36 @@ class MemoryOnboardingStorage implements AdminOnboardingStorage {
   nextApprovalId = 1;
   nextEngagementId = 1;
   failApprovalInsert = false;
+
+  async createAdminUserForPasswordSetup(
+    adminUser: InsertAdminUser,
+    engagement?: Omit<InsertAdminEngagement, "adminUserId">,
+    event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<{ admin: AdminUser; engagement?: any }> {
+    const newAdmin = {
+      id: this.nextAdminId++,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastLoginAt: null,
+      ...adminUser,
+    };
+    this.admins.set(newAdmin.id, newAdmin);
+
+    if (!engagement) {
+      return { admin: newAdmin };
+    }
+
+    const newEngagement = this.seedEngagement(newAdmin.id, engagement);
+    if (event) {
+      this.lifecycleEvents.push({
+        ...event,
+        adminUserId: newAdmin.id,
+        engagementId: newEngagement.id,
+      });
+    }
+
+    return { admin: newAdmin, engagement: newEngagement };
+  }
 
   async createAdminUserWithApproval(adminUser: InsertAdminUser, approval: InsertAdminUserApproval): Promise<AdminUser> {
     const adminsSnapshot = new Map(this.admins);
@@ -236,6 +274,54 @@ test("create admin is atomic when approval creation fails", async () => {
   assert.equal(store.approvals.size, 0);
 });
 
+test("direct create activates admin and stores setup token without approval", async () => {
+  process.env.ADMIN_APP_ORIGIN = "https://admin.example.com";
+  const store = new MemoryOnboardingStorage();
+
+  const result = await createAdminAccountForPasswordSetup({
+    storage: store,
+    adminUser: pendingAdmin({ status: "pending", passwordSetupTokenHash: null }),
+  });
+
+  assert.equal(store.approvals.size, 0);
+  assert.equal(result.admin.status, "active");
+  assert.equal(result.admin.mustChangePassword, true);
+  assert.ok(result.admin.passwordSetupTokenHash);
+  assert.ok(result.admin.passwordSetupExpiresAt > new Date());
+
+  const token = new URL(result.setupUrl).searchParams.get("token");
+  assert.equal(result.admin.passwordSetupTokenHash, hashPasswordSetupToken(token!));
+});
+
+test("direct trainee create stores engagement and lifecycle event", async () => {
+  const store = new MemoryOnboardingStorage();
+
+  const result = await createAdminAccountForPasswordSetup({
+    storage: store,
+    adminUser: pendingAdmin({ role: "trainee_access" }),
+    engagement: {
+      engagementType: "intern",
+      workAuthorizationType: "none",
+      endDate: "2026-08-31",
+      supervisorAdminId: 1,
+      workScope: "Training project",
+      status: "draft",
+    },
+    event: {
+      eventType: "engagement_created",
+      actorAdminId: 1,
+      metadata: {},
+      notes: null,
+    },
+  });
+
+  assert.equal(result.admin.status, "active");
+  assert.equal(result.engagement?.status, "draft");
+  assert.equal(store.approvals.size, 0);
+  assert.equal(store.lifecycleEvents.length, 1);
+  assert.equal(store.lifecycleEvents[0].eventType, "engagement_created");
+});
+
 test("approve create activates admin, stores setup token hash, and approves request", async () => {
   process.env.ADMIN_APP_ORIGIN = "https://admin.example.com";
   const store = new MemoryOnboardingStorage();
@@ -275,6 +361,23 @@ test("approve email failure leaves database state consistent for resend", async 
   assert.equal(store.admins.get(admin.id).mustChangePassword, true);
   assert.ok(store.admins.get(admin.id).passwordSetupTokenHash);
   assert.equal(store.approvals.get(result.approval.id).status, "approved");
+});
+
+test("approve trainee create does not cancel engagement", async () => {
+  const store = new MemoryOnboardingStorage();
+  const admin = await createPendingAdminAccount({
+    storage: store,
+    adminUser: pendingAdmin({ role: "trainee_access" }),
+    requestedBy: 1,
+    requestData: { adminData: { email: "trainee@example.com", role: "trainee_access" } },
+  });
+  const approval = [...store.approvals.values()][0];
+  const engagement = store.seedEngagement(admin.id, { status: "draft" });
+
+  await approveCreateAdminRequest({ storage: store, approvalId: approval.id, approvedBy: 1 });
+
+  assert.equal(store.engagements.get(engagement.id).status, "draft");
+  assert.equal(store.lifecycleEvents.length, 0);
 });
 
 test("resend setup link overwrites existing setup token", async () => {

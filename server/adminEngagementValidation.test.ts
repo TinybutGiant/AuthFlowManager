@@ -149,6 +149,11 @@ test("create admin UI separates Access Role from Engagement fields", async () =>
   assert.match(source, /End date is required for Trainee Access/);
   assert.match(source, /Trainee Access is for temporary interns or trainees/);
   assert.match(source, /Engagement tracks start\/end dates, supervisor, work scope/);
+  assert.match(source, /\? "Create Trainee User"/);
+  assert.match(source, /: "Create Admin"/);
+  assert.match(source, /data-testid="select-supervisor-admin"/);
+  assert.match(source, /ROLE_DISPLAY_NAMES\[admin\.role\]/);
+  assert.doesNotMatch(source, /data-testid="input-supervisor-admin-id"/);
 
   for (const forbidden of ['intern', 'contractor', 'employee', 'advisor', 'cpt', 'opt', 'stem_opt', 'full_time', 'part_time']) {
     assert.equal(accessRoleSection.includes(`value="${forbidden}"`), false, `${forbidden} must not appear in access role dropdown`);
@@ -216,27 +221,15 @@ test("backend sensitive routes and engagement management APIs do not allow train
   }
 });
 
-test("trainee approval requestData includes sanitized engagement snapshot", async () => {
+test("create admin route directly creates active setup account instead of pending approval", async () => {
   const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
-  const start = source.indexOf('const engagementSnapshot = engagementData');
-  const end = source.indexOf('const approvalRequest =', start);
-  const snapshotBlock = source.slice(start, end);
+  const start = source.indexOf('app.post("/api/admin/users"');
+  const end = source.indexOf('app.get("/api/admin/users/:id/engagements"', start);
+  const createRouteBlock = source.slice(start, end);
 
-  assert.match(snapshotBlock, /const engagementSnapshot = engagementData/);
-  for (const field of [
-    'engagement_type',
-    'schedule_type',
-    'work_authorization_type',
-    'start_date',
-    'end_date',
-    'supervisor_admin_id',
-    'expected_hours_per_week',
-    'work_scope',
-    'status',
-  ]) {
-    assert.match(snapshotBlock, new RegExp(`${field}:`));
-  }
-
-  assert.doesNotMatch(snapshotBlock, /password/i);
-  assert.doesNotMatch(snapshotBlock, /token/i);
+  assert.match(createRouteBlock, /createAdminAccountForPasswordSetup/);
+  assert.match(createRouteBlock, /sendAdminPasswordSetupEmail/);
+  assert.match(createRouteBlock, /Admin was created and activated, but password setup email failed/);
+  assert.doesNotMatch(createRouteBlock, /createPendingAdminAccount/);
+  assert.doesNotMatch(createRouteBlock, /createAdminUserWithApprovalAndEngagement/);
 });

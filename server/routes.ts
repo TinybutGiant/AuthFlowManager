@@ -21,7 +21,7 @@ import {
   approveCreateAdminRequest,
   assertCanLogin,
   completePasswordSetup,
-  createPendingAdminAccount,
+  createAdminAccountForPasswordSetup,
   rejectCreateAdminRequest,
   resendPasswordSetupLink,
   sanitizeAdminUser,
@@ -231,70 +231,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const placeholderPassword = crypto.randomBytes(32).toString('base64url');
       const passwordHash = await bcrypt.hash(placeholderPassword, 12);
 
-      const pendingAdminUser = {
+      const adminUser = {
           ...adminData,
           passwordHash,
-          mustChangePassword: true,
-          passwordSetupTokenHash: null,
-          passwordSetupExpiresAt: null,
           createdBy: req.adminUser.id,
       };
-      const engagementSnapshot = engagementData
-        ? {
-            engagement_type: engagementData.engagementType,
-            schedule_type: engagementData.scheduleType ?? null,
-            work_authorization_type: engagementData.workAuthorizationType,
-            start_date: engagementData.startDate ?? null,
-            end_date: engagementData.endDate ?? null,
-            supervisor_admin_id: engagementData.supervisorAdminId ?? null,
-            expected_hours_per_week: engagementData.expectedHoursPerWeek ?? null,
-            work_scope: engagementData.workScope ?? null,
-            status: engagementData.status,
-          }
-        : undefined;
-      const approvalRequest = {
-        targetAdminId: 0,
-        action: 'create',
-        requestedBy: req.adminUser.id,
-        requestData: {
-          adminData: {
-            name: adminData.name,
-            email: adminData.email,
-            role: adminData.role
-          }
-          ,
-          ...(engagementSnapshot ? { engagementData: engagementSnapshot } : {})
-        }
-      };
 
-      let newAdmin;
-      if (engagementData) {
-        newAdmin = await storage.createAdminUserWithApprovalAndEngagement(
-          pendingAdminUser,
-          approvalRequest,
-          {
-            ...engagementData,
-            createdBy: req.adminUser.id,
-          },
-          {
-            eventType: 'engagement_created',
+      const delivery = await createAdminAccountForPasswordSetup({
+        storage,
+        adminUser,
+        ...(engagementData
+          ? {
+              engagement: {
+                ...engagementData,
+                createdBy: req.adminUser.id,
+              },
+              event: {
+                eventType: 'engagement_created',
+                actorAdminId: req.adminUser.id,
+                metadata: {},
+                notes: null,
+              },
+            }
+          : {}),
+      });
+
+      if (delivery.engagement) {
+        try {
+          await storage.createAdminLifecycleEvent({
+            adminUserId: delivery.admin.id,
+            engagementId: delivery.engagement.id,
+            eventType: 'account_activated',
             actorAdminId: req.adminUser.id,
-            metadata: {},
+            metadata: { source: 'direct_create' },
             notes: null,
-          }
-        );
-      } else {
-        newAdmin = await createPendingAdminAccount({
-          storage,
-          adminUser: pendingAdminUser,
-          requestedBy: req.adminUser.id,
-          requestData: approvalRequest.requestData
+          });
+        } catch (eventError) {
+          console.warn("Failed to record account_activated lifecycle event:", eventError);
+        }
+      }
+
+      const emailSent = await sendAdminPasswordSetupEmail({
+        to: delivery.admin.email,
+        name: delivery.admin.name,
+        setupUrl: delivery.setupUrl,
+        role: delivery.admin.role,
+      });
+
+      if (!emailSent) {
+        return res.status(502).json({
+          message: "Admin was created and activated, but password setup email failed. Use resend setup link after fixing email delivery.",
+          admin: sanitizeAdminUser(delivery.admin),
         });
       }
 
-      // TODO: If setup invitation is later sent during this same create step,
-      // write an invitation_sent lifecycle event at the email service boundary.
-      res.status(201).json(sanitizeAdminUser(newAdmin));
+      if (delivery.engagement) {
+        try {
+          await storage.createAdminLifecycleEvent({
+            adminUserId: delivery.admin.id,
+            engagementId: delivery.engagement.id,
+            eventType: 'invitation_sent',
+            actorAdminId: req.adminUser.id,
+            metadata: { channel: 'email', purpose: 'password_setup', source: 'direct_create' },
+            notes: null,
+          });
+        } catch (eventError) {
+          console.warn("Failed to record invitation_sent lifecycle event:", eventError);
+        }
+      }
+
+      res.status(201).json(sanitizeAdminUser(delivery.admin));
     } catch (error: any) {
       res.status(400).json({ message: "Failed to create admin user", error: error?.message || 'Unknown error' });
     }
@@ -512,6 +518,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           to: result.delivery.admin.email,
           name: result.delivery.admin.name,
           setupUrl: result.delivery.setupUrl,
+          role: result.delivery.admin.role,
         });
 
         if (!emailSent) {
@@ -570,6 +577,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         to: delivery.admin.email,
         name: delivery.admin.name,
         setupUrl: delivery.setupUrl,
+        role: delivery.admin.role,
       });
 
       if (!emailSent) {
