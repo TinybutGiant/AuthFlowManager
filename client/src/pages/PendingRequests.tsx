@@ -5,9 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { BadgePlus, ArrowLeftRight, Delete, CheckCircle, XCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { ApiError, apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 import { AdminUserApproval } from "@/types/admin";
 import { isUnauthorizedError } from "@/lib/authUtils";
+
+const APPROVE_CREATE_EMAIL_FAILURE_MESSAGE =
+  "Admin was activated, but password setup email failed. Use resend setup link after fixing email delivery.";
 
 export default function PendingRequests() {
   const { toast } = useToast();
@@ -24,6 +27,7 @@ export default function PendingRequests() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/approvals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       toast({
         title: "Success",
         description: "Approval request updated successfully",
@@ -41,9 +45,27 @@ export default function PendingRequests() {
         }, 500);
         return;
       }
+
+      if (
+        error instanceof ApiError &&
+        error.status === 502 &&
+        error.serverMessage === APPROVE_CREATE_EMAIL_FAILURE_MESSAGE
+      ) {
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/approvals"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+        toast({
+          title: "Approval completed, email failed",
+          description:
+            "The admin is active, but password setup email delivery failed. Use Resend setup link after fixing email delivery.",
+          variant: "warning",
+          duration: 8000,
+        });
+        return;
+      }
+
       toast({
         title: "Error",
-        description: "Failed to update approval request",
+        description: getApiErrorMessage(error, "Failed to update approval request"),
         variant: "destructive",
       });
     },

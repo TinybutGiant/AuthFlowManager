@@ -1,20 +1,45 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { ArrowLeftRight, Delete, CheckCircle } from "lucide-react";
+import { ArrowLeftRight, Delete, CheckCircle, Send } from "lucide-react";
 import { AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
+import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function AdminProfile() {
   const params = useParams();
   const adminId = params.id ? parseInt(params.id) : undefined;
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: admin, isLoading } = useQuery<AdminUser>({
     queryKey: ["/api/admin/users", adminId],
     enabled: !!adminId,
     retry: false,
+  });
+
+  const resendSetupMutation = useMutation({
+    mutationFn: async (targetAdminId: number) => {
+      await apiRequest("POST", `/api/admin/users/${targetAdminId}/resend-setup-link`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId] });
+      toast({
+        title: "Setup email sent",
+        description: "A fresh password setup link has been sent.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Resend failed",
+        description: getApiErrorMessage(error, "Could not send password setup email."),
+        variant: "destructive",
+      });
+    },
   });
 
   if (isLoading) {
@@ -81,6 +106,17 @@ export default function AdminProfile() {
           </p>
         </div>
         <div className="flex space-x-3">
+          {admin.status === "active" && admin.mustChangePassword && (
+            <Button
+              variant="outline"
+              onClick={() => resendSetupMutation.mutate(admin.id)}
+              disabled={resendSetupMutation.isPending}
+              data-testid="button-resend-setup"
+            >
+              <Send className="h-4 w-4 mr-2" />
+              Resend setup
+            </Button>
+          )}
           <Link href={`/admin-management/change-role/${admin.id}`}>
             <Button variant="outline" data-testid="button-change-role">
               <ArrowLeftRight className="h-4 w-4 mr-2" />
@@ -125,8 +161,11 @@ export default function AdminProfile() {
                 
                 <div>
                   <Label className="text-sm font-medium text-muted-foreground">Status</Label>
-                  <div className="mt-1" data-testid="text-admin-status">
+                  <div className="mt-1 flex flex-wrap items-center gap-2" data-testid="text-admin-status">
                     {getStatusBadge(admin.status)}
+                    {admin.status === "active" && admin.mustChangePassword && (
+                      <Badge variant="secondary">Password setup pending</Badge>
+                    )}
                   </div>
                 </div>
                 

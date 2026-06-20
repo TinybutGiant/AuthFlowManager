@@ -9,10 +9,63 @@ export const tokenManager = {
   removeToken: () => localStorage.removeItem(TOKEN_KEY),
 };
 
-async function throwIfResNotOk(res: Response) {
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+  bodyText: string;
+  serverMessage: string;
+
+  constructor(status: number, serverMessage: string, body: unknown, bodyText: string) {
+    super(`${status}: ${serverMessage}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+    this.bodyText = bodyText;
+    this.serverMessage = serverMessage;
+  }
+}
+
+function parseErrorBody(text: string): unknown {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function getServerMessage(body: unknown, text: string, fallback: string) {
+  if (body && typeof body === "object" && "message" in body) {
+    const message = (body as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  }
+
+  return text || fallback;
+}
+
+export function getApiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiError) {
+    return error.serverMessage || fallback;
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+export async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const body = parseErrorBody(text);
+    const serverMessage = getServerMessage(body, text, res.statusText);
+    throw new ApiError(res.status, serverMessage, body, text);
   }
 }
 
