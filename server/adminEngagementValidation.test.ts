@@ -7,6 +7,9 @@ import {
   adminUserUpdateSchema,
   engagementPayloadSchema,
   lifecycleEventPayloadSchema,
+  traineeActivityLogPayloadSchema,
+  traineeEndEngagementPayloadSchema,
+  validateActivityDateWithinEngagement,
   validateTraineeEngagement,
 } from "./adminEngagementValidation";
 import { z } from "zod";
@@ -71,9 +74,91 @@ test("lifecycle event payload is append-only metadata and cannot carry permissio
   }).success, true);
 
   assert.equal(lifecycleEventPayloadSchema.safeParse({
+    eventType: 'activity_log_submitted',
+    metadata: { activity_log_id: 1, activity_type: 'learning', activity_date: '2026-06-20' },
+  }).success, true);
+
+  for (const eventType of [
+    'onboarding_started',
+    'engagement_activated',
+    'offboarding_started',
+    'access_disabled',
+    'engagement_ended',
+    'offboarding_email_sent',
+    'offboarding_email_failed',
+    'self_offboarding_requested',
+    'early_offboarding_started',
+    'engagement_cancelled',
+  ]) {
+    assert.equal(lifecycleEventPayloadSchema.safeParse({
+      eventType,
+      metadata: { source: 'test' },
+    }).success, true, `${eventType} should be valid`);
+  }
+
+  assert.equal(lifecycleEventPayloadSchema.safeParse({
     eventType: 'permission_granted',
     permissions: ['finance.*'],
   }).success, false);
+});
+
+test("trainee end engagement validation only accepts optional reason", () => {
+  assert.equal(traineeEndEngagementPayloadSchema.safeParse({}).success, true);
+  assert.equal(traineeEndEngagementPayloadSchema.safeParse({ reason: "Need to end early" }).success, true);
+  assert.equal(traineeEndEngagementPayloadSchema.safeParse({ reason: "x".repeat(1001) }).success, false);
+  assert.equal(traineeEndEngagementPayloadSchema.safeParse({
+    reason: "Unsafe attempt",
+    adminUserId: 99,
+    engagementId: 88,
+    status: "active",
+    eventType: "engagement_ended",
+  }).success, false);
+});
+
+test("trainee activity log validation accepts safe payload and rejects unsafe fields", () => {
+  assert.equal(traineeActivityLogPayloadSchema.safeParse({
+    activityType: 'learning',
+    activityDate: '2026-06-20',
+    durationMinutes: 45,
+    summary: 'Completed onboarding reading.',
+    learningObjective: 'Understand product basics.',
+  }).success, true);
+
+  assert.equal(traineeActivityLogPayloadSchema.safeParse({
+    activityType: 'clock_in',
+    activityDate: '2026-06-20',
+    summary: 'Unsafe type.',
+  }).success, false);
+
+  assert.equal(traineeActivityLogPayloadSchema.safeParse({
+    activityType: 'learning',
+    activityDate: '2026-06-20',
+    durationMinutes: 481,
+    summary: 'Too long.',
+  }).success, false);
+
+  assert.equal(traineeActivityLogPayloadSchema.safeParse({
+    activityType: 'learning',
+    activityDate: '2026-06-20',
+    summary: '',
+  }).success, false);
+
+  assert.equal(traineeActivityLogPayloadSchema.safeParse({
+    activityType: 'learning',
+    activityDate: '2026-06-20',
+    summary: 'Cannot pick another user.',
+    adminUserId: 99,
+    engagementId: 88,
+  }).success, false);
+});
+
+test("trainee activity log date must stay within engagement range", () => {
+  const engagement = { startDate: '2026-06-01', endDate: '2026-08-31' };
+
+  assert.equal(validateActivityDateWithinEngagement('2026-06-01', engagement), null);
+  assert.equal(validateActivityDateWithinEngagement('2026-08-31', engagement), null);
+  assert.match(validateActivityDateWithinEngagement('2026-05-31', engagement) ?? '', /before/);
+  assert.match(validateActivityDateWithinEngagement('2026-09-01', engagement) ?? '', /after/);
 });
 
 test("admin update allowlist rejects protected fields", () => {
@@ -194,8 +279,16 @@ test("trainee login redirects to trainee workspace and app defines safe route", 
   assert.match(appSource, /allowedRoles={\["trainee_access"\]}/);
   assert.doesNotMatch(appSource, /allowedRoles=\{\[[^\]]*"trainee_access"[^\]]*"admin_finance"/);
   assert.match(traineePageSource, /Trainee Workspace/);
-  assert.match(traineePageSource, /Your trainee access is active\./);
-  assert.match(traineePageSource, /Training and activity features are not available yet\./);
+  assert.match(traineePageSource, /Current Engagement/);
+  assert.match(traineePageSource, /Activity Log/);
+  assert.match(traineePageSource, /Recent Activity Logs/);
+  assert.match(traineePageSource, /This is not a payroll timesheet/);
+  assert.match(traineePageSource, /Activity log submission is available only when your engagement is active/);
+  assert.match(traineePageSource, /No activity logs submitted yet/);
+  assert.match(traineePageSource, /Could not load your trainee workspace/);
+  assert.match(traineePageSource, /End My Trainee Access/);
+  assert.match(traineePageSource, /This will disable your trainee access/);
+  assert.doesNotMatch(traineePageSource, /delete account|Delete Account|Clock In|Clock Out/);
 });
 
 test("backend sensitive routes and engagement management APIs do not allow trainee access", async () => {
@@ -214,11 +307,81 @@ test("backend sensitive routes and engagement management APIs do not allow train
     /app\.post\("\/api\/admin\/users\/:id\/engagements", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.patch\("\/api\/admin\/engagements\/:engagementId", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.post\("\/api\/admin\/engagements\/:engagementId\/events", requireAuth, requireRole\(\['super_admin'\]\)/,
+    /app\.get\("\/api\/admin\/engagements\/:engagementId\/activity-logs", requireAuth, requireRole\(\['super_admin'\]\)/,
+    /app\.post\("\/api\/admin\/engagements\/run-lifecycle-transitions", requireAuth, requireRole\(\['super_admin'\]\)/,
   ];
 
   for (const pattern of sensitivePatterns) {
     assert.match(source, pattern);
   }
+});
+
+test("admin profile exposes manual lifecycle transition action only in admin area", async () => {
+  const profileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const traineeSource = await readFile(new URL("../client/src/pages/TraineeWorkspace.tsx", import.meta.url), "utf8");
+
+  assert.match(profileSource, /\/api\/admin\/engagements\/run-lifecycle-transitions/);
+  assert.match(profileSource, /Run all due lifecycle transitions/);
+  assert.match(profileSource, /Checks all due trainee engagements, not only this user/);
+  assert.doesNotMatch(traineeSource, /run-lifecycle-transitions|Run all due lifecycle transitions/);
+});
+
+test("trainee workspace APIs are scoped to authenticated trainee", async () => {
+  const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  for (const route of [
+    'app.get("/api/trainee/me/engagement"',
+    'app.get("/api/trainee/me/lifecycle-events"',
+    'app.get("/api/trainee/me/activity-logs"',
+    'app.post("/api/trainee/me/activity-logs"',
+  ]) {
+    const start = source.indexOf(route);
+    assert.notEqual(start, -1, `${route} should exist`);
+    const end = source.indexOf('});', start);
+    const block = source.slice(start, end);
+
+    assert.match(block, /requireAuth, requireRole\(\['trainee_access'\]\)/);
+    assert.match(block, /req\.adminUser\.id/);
+    assert.doesNotMatch(block, /req\.params\.adminUserId|req\.body\.adminUserId|req\.body\.engagementId/);
+  }
+
+  const postStart = source.indexOf('app.post("/api/trainee/me/activity-logs"');
+  const postEnd = source.indexOf('  // Admin management routes', postStart);
+  const postBlock = source.slice(postStart, postEnd);
+
+  assert.match(postBlock, /engagement\.status !== 'active'/);
+  assert.match(postBlock, /validateActivityDateWithinEngagement/);
+  assert.match(postBlock, /eventType: 'activity_log_submitted'/);
+  assert.match(postBlock, /status: 'submitted'/);
+
+  const endStart = source.indexOf('app.post("/api/trainee/me/end-engagement"');
+  const endEnd = source.indexOf('  // Admin management routes', endStart);
+  const endBlock = source.slice(endStart, endEnd);
+
+  assert.match(endBlock, /requireAuth, requireRole\(\['trainee_access'\]\)/);
+  assert.match(endBlock, /traineeEndEngagementPayloadSchema/);
+  assert.match(endBlock, /selfOffboardTraineeEngagement/);
+  assert.match(endBlock, /adminUserId: req\.adminUser\.id/);
+  assert.doesNotMatch(endBlock, /req\.params|req\.body\.adminUserId|req\.body\.engagementId|req\.body\.status|req\.body\.eventType/);
+});
+
+test("trainee engagement empty state and lifecycle metadata are sanitized", async () => {
+  const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const engagementStart = source.indexOf('app.get("/api/trainee/me/engagement"');
+  const engagementEnd = source.indexOf('app.get("/api/trainee/me/lifecycle-events"', engagementStart);
+  const engagementBlock = source.slice(engagementStart, engagementEnd);
+
+  assert.match(engagementBlock, /return res\.json\(null\)/);
+  assert.doesNotMatch(engagementBlock, /status\(404\)/);
+  assert.match(source, /metadata: sanitizeTraineeLifecycleMetadata\(event\.metadata\)/);
+  const sanitizerStart = source.indexOf("function sanitizeTraineeLifecycleMetadata");
+  const sanitizerEnd = source.indexOf("function sanitizeActivityLog", sanitizerStart);
+  const sanitizerBlock = source.slice(sanitizerStart, sanitizerEnd);
+
+  assert.match(sanitizerBlock, /const safeKeys = new Set/);
+  assert.doesNotMatch(sanitizerBlock, /password/);
+  assert.doesNotMatch(sanitizerBlock, /token/);
+  assert.doesNotMatch(sanitizerBlock, /hash/);
 });
 
 test("create admin route directly creates active setup account instead of pending approval", async () => {

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { ArrowLeftRight, Delete, CheckCircle, Send } from "lucide-react";
+import { ArrowLeftRight, Delete, CheckCircle, Send, RefreshCw } from "lucide-react";
 import { AdminEngagement, AdminLifecycleEvent, AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
 import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -49,6 +49,31 @@ export default function AdminProfile() {
       toast({
         title: "Resend failed",
         description: getApiErrorMessage(error, "Could not send password setup email."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const lifecycleTransitionMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/admin/engagements/run-lifecycle-transitions");
+      return response.json() as Promise<{ activated_count: number; offboarded_count: number; errors?: unknown[] }>;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "engagements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "lifecycle-events"] });
+      toast({
+        title: "Lifecycle transitions run",
+        description: `Activated ${result.activated_count}, offboarded ${result.offboarded_count}.`,
+        variant: result.errors && result.errors.length > 0 ? "warning" : "default",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Lifecycle transition failed",
+        description: getApiErrorMessage(error, "Could not run lifecycle transitions."),
         variant: "destructive",
       });
     },
@@ -119,6 +144,20 @@ export default function AdminProfile() {
           </p>
         </div>
         <div className="flex space-x-3">
+          <div className="space-y-1">
+            <Button
+              variant="outline"
+              onClick={() => lifecycleTransitionMutation.mutate()}
+              disabled={lifecycleTransitionMutation.isPending}
+              data-testid="button-run-lifecycle-transitions"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Run all due lifecycle transitions
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Checks all due trainee engagements, not only this user.
+            </p>
+          </div>
           {admin.status === "active" && admin.mustChangePassword && (
             <Button
               variant="outline"

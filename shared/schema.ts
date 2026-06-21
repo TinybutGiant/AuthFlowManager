@@ -106,6 +106,7 @@ export const adminEngagements = pgTable("admin_engagements", {
   workScope: text("work_scope"),
   expectedHoursPerWeek: integer("expected_hours_per_week"),
   status: text("status").notNull().default("draft"),
+  endedAt: timestamp("ended_at"),
   createdBy: integer("created_by").references(() => adminUsers.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -123,6 +124,22 @@ export const adminLifecycleEvents = pgTable("admin_lifecycle_events", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const adminActivityLogs = pgTable("admin_activity_logs", {
+  id: serial("id").primaryKey(),
+  engagementId: integer("engagement_id").notNull().references(() => adminEngagements.id),
+  adminUserId: integer("admin_user_id").notNull().references(() => adminUsers.id),
+  activityType: text("activity_type").notNull(),
+  activityDate: date("activity_date").notNull(),
+  durationMinutes: integer("duration_minutes"),
+  summary: text("summary").notNull(),
+  learningObjective: text("learning_objective"),
+  status: text("status").notNull().default("submitted"),
+  reviewedBy: integer("reviewed_by").references(() => adminUsers.id),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Relations
 export const adminUsersRelations = relations(adminUsers, ({ one, many }) => ({
   createdByUser: one(adminUsers, {
@@ -136,6 +153,7 @@ export const adminUsersRelations = relations(adminUsers, ({ one, many }) => ({
   targetRequests: many(adminUserApprovals, { relationName: "targetAdmin" }),
   engagements: many(adminEngagements, { relationName: "engagementAdmin" }),
   lifecycleEvents: many(adminLifecycleEvents, { relationName: "eventAdmin" }),
+  activityLogs: many(adminActivityLogs, { relationName: "activityLogAdmin" }),
 }));
 
 export const adminUserApprovalsRelations = relations(adminUserApprovals, ({ one }) => ({
@@ -173,6 +191,7 @@ export const adminEngagementsRelations = relations(adminEngagements, ({ one, man
     relationName: "engagementCreatedBy",
   }),
   lifecycleEvents: many(adminLifecycleEvents, { relationName: "engagementEvents" }),
+  activityLogs: many(adminActivityLogs, { relationName: "engagementActivityLogs" }),
 }));
 
 export const adminLifecycleEventsRelations = relations(adminLifecycleEvents, ({ one }) => ({
@@ -190,6 +209,24 @@ export const adminLifecycleEventsRelations = relations(adminLifecycleEvents, ({ 
     fields: [adminLifecycleEvents.actorAdminId],
     references: [adminUsers.id],
     relationName: "eventActor",
+  }),
+}));
+
+export const adminActivityLogsRelations = relations(adminActivityLogs, ({ one }) => ({
+  engagement: one(adminEngagements, {
+    fields: [adminActivityLogs.engagementId],
+    references: [adminEngagements.id],
+    relationName: "engagementActivityLogs",
+  }),
+  adminUser: one(adminUsers, {
+    fields: [adminActivityLogs.adminUserId],
+    references: [adminUsers.id],
+    relationName: "activityLogAdmin",
+  }),
+  reviewer: one(adminUsers, {
+    fields: [adminActivityLogs.reviewedBy],
+    references: [adminUsers.id],
+    relationName: "activityLogReviewer",
   }),
 }));
 
@@ -218,6 +255,12 @@ export const insertAdminLifecycleEventSchema = createInsertSchema(adminLifecycle
   createdAt: true,
 });
 
+export const insertAdminActivityLogSchema = createInsertSchema(adminActivityLogs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Types
 export type AdminUser = typeof adminUsers.$inferSelect;
 export type InsertAdminUser = z.infer<typeof insertAdminUserSchema>;
@@ -227,6 +270,8 @@ export type AdminEngagement = typeof adminEngagements.$inferSelect;
 export type InsertAdminEngagement = z.infer<typeof insertAdminEngagementSchema>;
 export type AdminLifecycleEvent = typeof adminLifecycleEvents.$inferSelect;
 export type InsertAdminLifecycleEvent = z.infer<typeof insertAdminLifecycleEventSchema>;
+export type AdminActivityLog = typeof adminActivityLogs.$inferSelect;
+export type InsertAdminActivityLog = z.infer<typeof insertAdminActivityLogSchema>;
 
 export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support' | 'trainee_access';
 export type AdminStatus = 'pending' | 'active' | 'inactive' | 'rejected';
@@ -241,6 +286,8 @@ export type AdminLifecycleEventType =
   | 'engagement_updated'
   | 'invitation_sent'
   | 'account_activated'
+  | 'onboarding_started'
+  | 'engagement_activated'
   | 'permission_granted'
   | 'permission_revoked'
   | 'office_hour_attended'
@@ -248,4 +295,19 @@ export type AdminLifecycleEventType =
   | 'offboarding_started'
   | 'access_disabled'
   | 'offboarding_email_sent'
-  | 'engagement_ended';
+  | 'offboarding_email_failed'
+  | 'engagement_ended'
+  | 'self_offboarding_requested'
+  | 'early_offboarding_started'
+  | 'engagement_cancelled'
+  | 'activity_log_submitted';
+export type AdminActivityType =
+  | 'office_hour'
+  | 'training'
+  | 'learning'
+  | 'research'
+  | 'documentation'
+  | 'draft_work'
+  | 'meeting'
+  | 'other';
+export type AdminActivityLogStatus = 'submitted' | 'reviewed';

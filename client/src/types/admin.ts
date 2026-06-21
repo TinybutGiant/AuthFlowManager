@@ -39,6 +39,8 @@ export type AdminLifecycleEventType =
   | 'engagement_updated'
   | 'invitation_sent'
   | 'account_activated'
+  | 'onboarding_started'
+  | 'engagement_activated'
   | 'permission_granted'
   | 'permission_revoked'
   | 'office_hour_attended'
@@ -46,7 +48,22 @@ export type AdminLifecycleEventType =
   | 'offboarding_started'
   | 'access_disabled'
   | 'offboarding_email_sent'
-  | 'engagement_ended';
+  | 'offboarding_email_failed'
+  | 'engagement_ended'
+  | 'self_offboarding_requested'
+  | 'early_offboarding_started'
+  | 'engagement_cancelled'
+  | 'activity_log_submitted';
+export type AdminActivityType =
+  | 'office_hour'
+  | 'training'
+  | 'learning'
+  | 'research'
+  | 'documentation'
+  | 'draft_work'
+  | 'meeting'
+  | 'other';
+export type AdminActivityLogStatus = 'submitted' | 'reviewed';
 
 export interface AdminEngagement {
   id: number;
@@ -60,6 +77,7 @@ export interface AdminEngagement {
   workScope?: string | null;
   expectedHoursPerWeek?: number | null;
   status: EngagementStatus;
+  endedAt?: string | null;
   createdBy?: number | null;
   createdAt: string;
   updatedAt: string;
@@ -75,6 +93,37 @@ export interface AdminLifecycleEvent {
   metadata: Record<string, unknown>;
   notes?: string | null;
   createdAt: string;
+}
+
+export interface TraineeEngagement {
+  id: number;
+  engagement_type: EngagementType;
+  schedule_type?: EngagementScheduleType | null;
+  work_authorization_type: WorkAuthorizationType;
+  start_date?: string | null;
+  end_date?: string | null;
+  expected_hours_per_week?: number | null;
+  work_scope?: string | null;
+  status: EngagementStatus;
+  ended_at?: string | null;
+  supervisor?: {
+    id: number;
+    name: string;
+    email: string;
+    role: AdminRole;
+  } | null;
+}
+
+export interface AdminActivityLog {
+  id: number;
+  activity_type: AdminActivityType;
+  activity_date: string;
+  duration_minutes?: number | null;
+  summary: string;
+  learning_objective?: string | null;
+  status: AdminActivityLogStatus;
+  reviewed_at?: string | null;
+  created_at: string;
 }
 
 export const ROLE_PERMISSIONS = {

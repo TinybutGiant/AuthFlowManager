@@ -16,6 +16,8 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { hashPasswordSetupToken } from './passwordSetup';
 import { sendAdminPasswordSetupEmail } from './email';
+import { runEngagementLifecycleTransitions } from './adminEngagementLifecycleService';
+import { selfOffboardTraineeEngagement } from './traineeSelfOffboardingService';
 import {
   AdminOnboardingError,
   approveCreateAdminRequest,
@@ -32,7 +34,10 @@ import {
   engagementPayloadSchema,
   engagementTypeSchema,
   lifecycleEventPayloadSchema,
+  traineeActivityLogPayloadSchema,
+  traineeEndEngagementPayloadSchema,
   updateEngagementPayloadSchema,
+  validateActivityDateWithinEngagement,
   validateTraineeEngagement,
   validateEngagementDates,
 } from './adminEngagementValidation';
@@ -65,6 +70,84 @@ const passwordSetupTokenSchema = z.object({
 const completePasswordSetupSchema = passwordSetupTokenSchema.extend({
   password: z.string().min(8),
 });
+
+function safeDateOnly(value: string | Date | null | undefined) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function sanitizeEngagementForTrainee(engagement: any, supervisor?: any) {
+  return {
+    id: engagement.id,
+    engagement_type: engagement.engagementType,
+    schedule_type: engagement.scheduleType,
+    work_authorization_type: engagement.workAuthorizationType,
+    start_date: safeDateOnly(engagement.startDate),
+    end_date: safeDateOnly(engagement.endDate),
+    expected_hours_per_week: engagement.expectedHoursPerWeek,
+    work_scope: engagement.workScope,
+    status: engagement.status,
+    ended_at: engagement.endedAt,
+    supervisor: supervisor
+      ? {
+          id: supervisor.id,
+          name: supervisor.name,
+          email: supervisor.email,
+          role: supervisor.role,
+        }
+      : null,
+  };
+}
+
+function sanitizeLifecycleEvent(event: any) {
+  return {
+    id: event.id,
+    event_type: event.eventType,
+    occurred_at: event.occurredAt,
+    notes: event.notes,
+    metadata: sanitizeTraineeLifecycleMetadata(event.metadata),
+  };
+}
+
+function sanitizeTraineeLifecycleMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return {};
+  }
+
+  const safeKeys = new Set([
+    'previous_status',
+    'new_status',
+    'start_date',
+    'end_date',
+    'reason',
+    'activity_log_id',
+    'activity_type',
+    'activity_date',
+    'channel',
+    'purpose',
+    'source',
+    'already_inactive',
+  ]);
+
+  return Object.fromEntries(
+    Object.entries(metadata as Record<string, unknown>).filter(([key]) => safeKeys.has(key))
+  );
+}
+
+function sanitizeActivityLog(log: any) {
+  return {
+    id: log.id,
+    activity_type: log.activityType,
+    activity_date: safeDateOnly(log.activityDate),
+    duration_minutes: log.durationMinutes,
+    summary: log.summary,
+    learning_objective: log.learningObjective,
+    status: log.status,
+    reviewed_at: log.reviewedAt,
+    created_at: log.createdAt,
+  };
+}
 
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -185,6 +268,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/auth/logout', (req, res) => {
     // For JWT, logout is handled client-side by removing the token
     res.json({ message: "Logged out successfully" });
+  });
+
+  // Trainee-scoped workspace routes. These never accept user ids or engagement ids
+  // from trainee-controlled params/body; scope is always req.adminUser.id.
+  app.get("/api/trainee/me/engagement", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
+      if (!engagement) {
+        return res.json(null);
+      }
+
+      const supervisor = engagement.supervisorAdminId
+        ? await storage.getAdminUser(engagement.supervisorAdminId)
+        : undefined;
+
+      res.json(sanitizeEngagementForTrainee(engagement, supervisor));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch trainee engagement" });
+    }
+  });
+
+  app.get("/api/trainee/me/lifecycle-events", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const events = await storage.listAdminLifecycleEvents(req.adminUser.id);
+      res.json(events.slice(0, 50).map(sanitizeLifecycleEvent));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch trainee lifecycle events" });
+    }
+  });
+
+  app.get("/api/trainee/me/activity-logs", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const logs = await storage.listAdminActivityLogs(req.adminUser.id);
+      res.json(logs.map(sanitizeActivityLog));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch trainee activity logs" });
+    }
+  });
+
+  app.post("/api/trainee/me/activity-logs", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
+      if (!engagement || engagement.status !== 'active') {
+        return res.status(400).json({
+          message: "Activity log submission is available only when your engagement is active.",
+        });
+      }
+
+      const activityData = traineeActivityLogPayloadSchema.parse(req.body);
+      const dateError = validateActivityDateWithinEngagement(activityData.activityDate, engagement);
+      if (dateError) {
+        return res.status(400).json({ message: "Invalid activity date", error: dateError });
+      }
+
+      const activityLog = await storage.createAdminActivityLogWithEvent(
+        {
+          engagementId: engagement.id,
+          adminUserId: req.adminUser.id,
+          activityType: activityData.activityType,
+          activityDate: activityData.activityDate,
+          durationMinutes: activityData.durationMinutes ?? null,
+          summary: activityData.summary,
+          learningObjective: activityData.learningObjective ?? null,
+          status: 'submitted',
+        },
+        {
+          eventType: 'activity_log_submitted',
+          actorAdminId: req.adminUser.id,
+          metadata: {
+            activity_type: activityData.activityType,
+            activity_date: activityData.activityDate,
+          },
+          notes: null,
+        }
+      );
+
+      res.status(201).json(sanitizeActivityLog(activityLog));
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to submit activity log", error: error?.message });
+    }
+  });
+
+  app.post("/api/trainee/me/end-engagement", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const payload = traineeEndEngagementPayloadSchema.parse(req.body ?? {});
+      const result = await selfOffboardTraineeEngagement({
+        adminUserId: req.adminUser.id,
+        reason: payload.reason ?? null,
+      });
+
+      // TODO: Notify the supervisor/admin after self-offboarding once notification
+      // recipients and copy are finalized. Do not emit email-sent events until an
+      // actual delivery attempt exists.
+      res.json({
+        status: result.status,
+        engagement: result.engagement ? sanitizeEngagementForTrainee(result.engagement) : null,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to end trainee engagement", error: error?.message });
+    }
   });
 
   // Admin management routes (super_admin only)
@@ -425,6 +608,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(event);
     } catch (error: any) {
       res.status(400).json({ message: "Failed to create lifecycle event", error: error?.message });
+    }
+  });
+
+  app.get("/api/admin/engagements/:engagementId/activity-logs", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const engagementId = parseInt(req.params.engagementId);
+      const engagement = await storage.getAdminEngagement(engagementId);
+      if (!engagement) {
+        return res.status(404).json({ message: "Admin engagement not found" });
+      }
+
+      const logs = await storage.listAdminActivityLogsForEngagement(engagementId);
+      res.json(logs.map(sanitizeActivityLog));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch admin activity logs" });
+    }
+  });
+
+  app.post("/api/admin/engagements/run-lifecycle-transitions", requireAuth, requireRole(['super_admin']), async (_req: any, res) => {
+    try {
+      const result = await runEngagementLifecycleTransitions();
+      res.json({
+        activated_count: result.activatedCount,
+        offboarded_count: result.offboardedCount,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        message: "Failed to run engagement lifecycle transitions",
+        error: error?.message,
+      });
     }
   });
 

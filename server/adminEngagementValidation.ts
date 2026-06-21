@@ -6,11 +6,24 @@ export const engagementTypeSchema = z.enum(['employee', 'intern', 'contractor', 
 export const scheduleTypeSchema = z.enum(['full_time', 'part_time']);
 export const workAuthorizationTypeSchema = z.enum(['none', 'cpt', 'opt', 'stem_opt', 'other']);
 export const engagementStatusSchema = z.enum(['draft', 'invited', 'active', 'offboarding', 'ended', 'cancelled']);
+export const activityTypeSchema = z.enum([
+  'office_hour',
+  'training',
+  'learning',
+  'research',
+  'documentation',
+  'draft_work',
+  'meeting',
+  'other',
+]);
+export const activityLogStatusSchema = z.enum(['submitted', 'reviewed']);
 export const lifecycleEventTypeSchema = z.enum([
   'engagement_created',
   'engagement_updated',
   'invitation_sent',
   'account_activated',
+  'onboarding_started',
+  'engagement_activated',
   'permission_granted',
   'permission_revoked',
   'office_hour_attended',
@@ -18,7 +31,12 @@ export const lifecycleEventTypeSchema = z.enum([
   'offboarding_started',
   'access_disabled',
   'offboarding_email_sent',
+  'offboarding_email_failed',
   'engagement_ended',
+  'self_offboarding_requested',
+  'early_offboarding_started',
+  'engagement_cancelled',
+  'activity_log_submitted',
 ]);
 
 const optionalDateSchema = z.preprocess(
@@ -140,3 +158,48 @@ export const lifecycleEventPayloadSchema = z.object({
   metadata: z.record(z.any()).optional(),
   notes: z.string().nullable().optional(),
 }).strict();
+
+export const traineeActivityLogPayloadSchema = z.object({
+  activityType: activityTypeSchema,
+  activityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Activity date is required"),
+  durationMinutes: z.preprocess(
+    (value) => value === "" || value === undefined || value === null ? null : Number(value),
+    z.number().int().positive().max(480).nullable().optional()
+  ),
+  summary: z.string().trim().min(1, "Summary is required").max(2000),
+  learningObjective: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? null : value,
+    z.string().trim().max(1000).nullable().optional()
+  ),
+}).strict();
+
+export const traineeEndEngagementPayloadSchema = z.object({
+  reason: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? null : value,
+    z.string().trim().max(1000).nullable().optional()
+  ),
+}).strict();
+
+export function validateActivityDateWithinEngagement(
+  activityDate: string,
+  engagement: { startDate?: string | Date | null; endDate?: string | Date | null }
+): string | null {
+  const toDateOnly = (value: string | Date | null | undefined) => {
+    if (!value) return null;
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    return String(value).slice(0, 10);
+  };
+
+  const startDate = toDateOnly(engagement.startDate);
+  const endDate = toDateOnly(engagement.endDate);
+
+  if (startDate && activityDate < startDate) {
+    return "Activity date cannot be before your engagement start date";
+  }
+
+  if (endDate && activityDate > endDate) {
+    return "Activity date cannot be after your engagement end date";
+  }
+
+  return null;
+}

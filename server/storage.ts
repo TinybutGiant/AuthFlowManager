@@ -4,6 +4,7 @@ import {
   adminUserApprovals,
   adminEngagements,
   adminLifecycleEvents,
+  adminActivityLogs,
   type User,
   type InsertUser,
   type AdminUser,
@@ -14,9 +15,12 @@ import {
   type InsertAdminEngagement,
   type AdminLifecycleEvent,
   type InsertAdminLifecycleEvent,
+  type AdminActivityLog,
+  type InsertAdminActivityLog,
   type AdminRole,
   type AdminStatus,
   type ApprovalStatus,
+  type EngagementStatus,
 } from "@shared/schema";
 import {
   guideApplicationsLite,
@@ -36,7 +40,7 @@ import {
 } from "../shared/main-schema";
 import { db } from "./db";
 import { mainDb } from "./main-db";
-import { eq, and, desc, inArray, lt, or, isNull, gt } from "drizzle-orm";
+import { eq, and, desc, inArray, lt, or, isNull, gt, lte } from "drizzle-orm";
 
 // Interface for storage operations
 export interface IStorage {
@@ -103,6 +107,21 @@ export interface IStorage {
   ): Promise<AdminEngagement | undefined>;
   listAdminLifecycleEvents(adminUserId: number): Promise<AdminLifecycleEvent[]>;
   createAdminLifecycleEvent(event: InsertAdminLifecycleEvent): Promise<AdminLifecycleEvent>;
+  getCurrentTraineeEngagement(adminUserId: number): Promise<AdminEngagement | undefined>;
+  listAdminActivityLogs(adminUserId: number): Promise<AdminActivityLog[]>;
+  listAdminActivityLogsForEngagement(engagementId: number): Promise<AdminActivityLog[]>;
+  createAdminActivityLogWithEvent(
+    activityLog: InsertAdminActivityLog,
+    event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminActivityLog>;
+  listDueTraineeEngagementsForActivation(now: Date): Promise<AdminEngagement[]>;
+  listExpiredActiveTraineeEngagements(now: Date): Promise<AdminEngagement[]>;
+  activateTraineeEngagementLifecycle(engagementId: number, now: Date): Promise<boolean>;
+  offboardTraineeEngagementLifecycle(engagementId: number, now: Date): Promise<boolean>;
+  selfOffboardTraineeEngagement(
+    adminUserId: number,
+    input: { reason?: string | null; now?: Date }
+  ): Promise<{ status: "ended" | "cancelled" | "already_ended"; engagement?: AdminEngagement }>;
   
   // Admin authentication
   authenticateAdmin(email: string, password: string): Promise<AdminUser | null>;
@@ -595,6 +614,500 @@ export class DatabaseStorage implements IStorage {
       .values(event)
       .returning();
     return newEvent;
+  }
+
+  async getCurrentTraineeEngagement(adminUserId: number): Promise<AdminEngagement | undefined> {
+    const engagements = await db
+      .select()
+      .from(adminEngagements)
+      .where(
+        and(
+          eq(adminEngagements.adminUserId, adminUserId),
+          inArray(adminEngagements.status, ['active', 'invited', 'draft'])
+        )
+      )
+      .orderBy(desc(adminEngagements.createdAt));
+
+    return (
+      engagements.find((engagement) => engagement.status === 'active') ??
+      engagements.find((engagement) => engagement.status === 'invited') ??
+      engagements[0]
+    );
+  }
+
+  async listAdminActivityLogs(adminUserId: number): Promise<AdminActivityLog[]> {
+    return await db
+      .select()
+      .from(adminActivityLogs)
+      .where(eq(adminActivityLogs.adminUserId, adminUserId))
+      .orderBy(desc(adminActivityLogs.activityDate), desc(adminActivityLogs.createdAt));
+  }
+
+  async listAdminActivityLogsForEngagement(engagementId: number): Promise<AdminActivityLog[]> {
+    return await db
+      .select()
+      .from(adminActivityLogs)
+      .where(eq(adminActivityLogs.engagementId, engagementId))
+      .orderBy(desc(adminActivityLogs.activityDate), desc(adminActivityLogs.createdAt));
+  }
+
+  async createAdminActivityLogWithEvent(
+    activityLog: InsertAdminActivityLog,
+    event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminActivityLog> {
+    return await db.transaction(async (tx) => {
+      const [newActivityLog] = await tx
+        .insert(adminActivityLogs)
+        .values(activityLog)
+        .returning();
+
+      if (event) {
+        const eventMetadata = event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+          ? event.metadata as Record<string, unknown>
+          : {};
+        const metadata = event.eventType === 'activity_log_submitted'
+          ? { ...eventMetadata, activity_log_id: newActivityLog.id }
+          : eventMetadata;
+
+        await tx.insert(adminLifecycleEvents).values({
+          ...event,
+          metadata,
+          adminUserId: newActivityLog.adminUserId,
+          engagementId: newActivityLog.engagementId,
+        });
+      }
+
+      return newActivityLog;
+    });
+  }
+
+  async listDueTraineeEngagementsForActivation(now: Date): Promise<AdminEngagement[]> {
+    const today = now.toISOString().slice(0, 10);
+    const rows = await db
+      .select({ engagement: adminEngagements })
+      .from(adminEngagements)
+      .innerJoin(adminUsers, eq(adminUsers.id, adminEngagements.adminUserId))
+      .where(
+        and(
+          eq(adminUsers.role, 'trainee_access'),
+          eq(adminUsers.status, 'active'),
+          inArray(adminEngagements.status, ['draft', 'invited']),
+          lte(adminEngagements.startDate, today)
+        )
+      )
+      .orderBy(desc(adminEngagements.createdAt));
+
+    return rows.map((row) => row.engagement);
+  }
+
+  async listExpiredActiveTraineeEngagements(now: Date): Promise<AdminEngagement[]> {
+    const today = now.toISOString().slice(0, 10);
+    const rows = await db
+      .select({ engagement: adminEngagements })
+      .from(adminEngagements)
+      .innerJoin(adminUsers, eq(adminUsers.id, adminEngagements.adminUserId))
+      .where(
+        and(
+          eq(adminUsers.role, 'trainee_access'),
+          eq(adminEngagements.status, 'active'),
+          lt(adminEngagements.endDate, today)
+        )
+      )
+      .orderBy(desc(adminEngagements.createdAt));
+
+    return rows.map((row) => row.engagement);
+  }
+
+  async activateTraineeEngagementLifecycle(engagementId: number, now: Date): Promise<boolean> {
+    const today = now.toISOString().slice(0, 10);
+    return await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({ engagement: adminEngagements, admin: adminUsers })
+        .from(adminEngagements)
+        .innerJoin(adminUsers, eq(adminUsers.id, adminEngagements.adminUserId))
+        .where(
+          and(
+            eq(adminEngagements.id, engagementId),
+            eq(adminUsers.role, 'trainee_access'),
+            eq(adminUsers.status, 'active'),
+            lte(adminEngagements.startDate, today),
+            inArray(adminEngagements.status, ['draft', 'invited'])
+          )
+        );
+
+      if (!candidate) {
+        return false;
+      }
+
+      const [updatedEngagement] = await tx
+        .update(adminEngagements)
+        .set({
+          status: 'active',
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminEngagements.id, engagementId),
+            inArray(adminEngagements.status, ['draft', 'invited'])
+          )
+        )
+        .returning();
+
+      if (!updatedEngagement) {
+        return false;
+      }
+
+      const metadata = {
+        previous_status: candidate.engagement.status,
+        new_status: 'active',
+        start_date: updatedEngagement.startDate,
+      };
+
+      await tx.insert(adminLifecycleEvents).values([
+        {
+          adminUserId: updatedEngagement.adminUserId,
+          engagementId: updatedEngagement.id,
+          eventType: 'onboarding_started',
+          occurredAt: now,
+          actorAdminId: null,
+          metadata: {
+            ...metadata,
+          },
+          notes: null,
+        },
+        {
+          adminUserId: updatedEngagement.adminUserId,
+          engagementId: updatedEngagement.id,
+          eventType: 'engagement_activated',
+          occurredAt: now,
+          actorAdminId: null,
+          metadata: {
+            ...metadata,
+          },
+          notes: null,
+        },
+      ]);
+
+      return true;
+    });
+  }
+
+  async offboardTraineeEngagementLifecycle(engagementId: number, now: Date): Promise<boolean> {
+    const today = now.toISOString().slice(0, 10);
+    return await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({ engagement: adminEngagements, admin: adminUsers })
+        .from(adminEngagements)
+        .innerJoin(adminUsers, eq(adminUsers.id, adminEngagements.adminUserId))
+        .where(
+          and(
+            eq(adminEngagements.id, engagementId),
+            eq(adminUsers.role, 'trainee_access'),
+            eq(adminEngagements.status, 'active'),
+            lt(adminEngagements.endDate, today)
+          )
+        );
+
+      if (!candidate) {
+        return false;
+      }
+
+      const [offboardingEngagement] = await tx
+        .update(adminEngagements)
+        .set({
+          status: 'offboarding',
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminEngagements.id, engagementId),
+            eq(adminEngagements.status, 'active')
+          )
+        )
+        .returning();
+
+      if (!offboardingEngagement) {
+        return false;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId: offboardingEngagement.adminUserId,
+        engagementId: offboardingEngagement.id,
+        eventType: 'offboarding_started',
+        occurredAt: now,
+        actorAdminId: null,
+        metadata: {
+          previous_status: 'active',
+          new_status: 'offboarding',
+          end_date: offboardingEngagement.endDate,
+        },
+        notes: null,
+      });
+
+      const alreadyInactive = candidate.admin.status !== 'active';
+      if (!alreadyInactive) {
+        await tx
+          .update(adminUsers)
+          .set({
+            status: 'inactive',
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(adminUsers.id, offboardingEngagement.adminUserId),
+              eq(adminUsers.role, 'trainee_access'),
+              eq(adminUsers.status, 'active')
+            )
+          )
+          .returning();
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId: offboardingEngagement.adminUserId,
+        engagementId: offboardingEngagement.id,
+        eventType: 'access_disabled',
+        occurredAt: now,
+        actorAdminId: null,
+        metadata: {
+          previous_status: candidate.admin.status,
+          new_status: alreadyInactive ? candidate.admin.status : 'inactive',
+          end_date: offboardingEngagement.endDate,
+          already_inactive: alreadyInactive,
+        },
+        notes: null,
+      });
+
+      const [endedEngagement] = await tx
+        .update(adminEngagements)
+        .set({
+          status: 'ended',
+          endedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(adminEngagements.id, offboardingEngagement.id))
+        .returning();
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId: endedEngagement.adminUserId,
+        engagementId: endedEngagement.id,
+        eventType: 'engagement_ended',
+        occurredAt: now,
+        actorAdminId: null,
+        metadata: {
+          previous_status: 'offboarding',
+          new_status: 'ended',
+          end_date: endedEngagement.endDate,
+        },
+        notes: null,
+      });
+
+      return true;
+    });
+  }
+
+  async selfOffboardTraineeEngagement(
+    adminUserId: number,
+    input: { reason?: string | null; now?: Date }
+  ): Promise<{ status: "ended" | "cancelled" | "already_ended"; engagement?: AdminEngagement }> {
+    const now = input.now ?? new Date();
+    const reason = input.reason?.trim() || null;
+
+    return await db.transaction(async (tx) => {
+      const engagements = await tx
+        .select()
+        .from(adminEngagements)
+        .where(
+          and(
+            eq(adminEngagements.adminUserId, adminUserId),
+            inArray(adminEngagements.status, ['active', 'invited', 'draft'])
+          )
+        )
+        .orderBy(desc(adminEngagements.createdAt));
+
+      const engagement =
+        engagements.find((candidate) => candidate.status === 'active') ??
+        engagements.find((candidate) => candidate.status === 'invited') ??
+        engagements[0];
+
+      if (!engagement) {
+        return { status: "already_ended" as const };
+      }
+
+      if (engagement.status === 'active') {
+        const [offboardingEngagement] = await tx
+          .update(adminEngagements)
+          .set({
+            status: 'offboarding',
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(adminEngagements.id, engagement.id),
+              eq(adminEngagements.status, 'active')
+            )
+          )
+          .returning();
+
+        if (!offboardingEngagement) {
+          return { status: "already_ended" as const };
+        }
+
+        await tx.insert(adminLifecycleEvents).values({
+          adminUserId,
+          engagementId: engagement.id,
+          eventType: 'self_offboarding_requested',
+          occurredAt: now,
+          actorAdminId: adminUserId,
+          metadata: {
+            previous_status: engagement.status,
+            reason,
+          },
+          notes: reason,
+        });
+
+        await tx.insert(adminLifecycleEvents).values({
+          adminUserId,
+          engagementId: engagement.id,
+          eventType: 'early_offboarding_started',
+          occurredAt: now,
+          actorAdminId: adminUserId,
+          metadata: {
+            previous_status: 'active',
+            new_status: 'offboarding',
+            reason,
+          },
+          notes: null,
+        });
+
+        await tx
+          .update(adminUsers)
+          .set({
+            status: 'inactive',
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(adminUsers.id, adminUserId),
+              eq(adminUsers.role, 'trainee_access')
+            )
+          );
+
+        await tx.insert(adminLifecycleEvents).values({
+          adminUserId,
+          engagementId: engagement.id,
+          eventType: 'access_disabled',
+          occurredAt: now,
+          actorAdminId: adminUserId,
+          metadata: {
+            previous_status: 'active',
+            new_status: 'inactive',
+            reason,
+          },
+          notes: null,
+        });
+
+        const [endedEngagement] = await tx
+          .update(adminEngagements)
+          .set({
+            status: 'ended',
+            endedAt: now,
+            updatedAt: now,
+          })
+          .where(eq(adminEngagements.id, engagement.id))
+          .returning();
+
+        await tx.insert(adminLifecycleEvents).values({
+          adminUserId,
+          engagementId: engagement.id,
+          eventType: 'engagement_ended',
+          occurredAt: now,
+          actorAdminId: adminUserId,
+          metadata: {
+            previous_status: 'offboarding',
+            new_status: 'ended',
+            reason,
+          },
+          notes: null,
+        });
+
+        return { status: "ended" as const, engagement: endedEngagement };
+      }
+
+      const [cancelledEngagement] = await tx
+        .update(adminEngagements)
+        .set({
+          status: 'cancelled',
+          endedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminEngagements.id, engagement.id),
+            inArray(adminEngagements.status, ['draft', 'invited'])
+          )
+        )
+        .returning();
+
+      if (!cancelledEngagement) {
+        return { status: "already_ended" as const };
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId,
+        engagementId: engagement.id,
+        eventType: 'self_offboarding_requested',
+        occurredAt: now,
+        actorAdminId: adminUserId,
+        metadata: {
+          previous_status: engagement.status,
+          reason,
+        },
+        notes: reason,
+      });
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId,
+        engagementId: engagement.id,
+        eventType: 'engagement_cancelled',
+        occurredAt: now,
+        actorAdminId: adminUserId,
+        metadata: {
+          previous_status: engagement.status,
+          new_status: 'cancelled',
+          reason,
+        },
+        notes: null,
+      });
+
+      await tx
+        .update(adminUsers)
+        .set({
+          status: 'inactive',
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminUsers.id, adminUserId),
+            eq(adminUsers.role, 'trainee_access')
+          )
+        );
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId,
+        engagementId: engagement.id,
+        eventType: 'access_disabled',
+        occurredAt: now,
+        actorAdminId: adminUserId,
+        metadata: {
+          previous_status: 'active',
+          new_status: 'inactive',
+          reason,
+        },
+        notes: null,
+      });
+
+      return { status: "cancelled" as const, engagement: cancelledEngagement };
+    });
   }
 
   // Admin authentication (placeholder - would use bcrypt in real implementation)
