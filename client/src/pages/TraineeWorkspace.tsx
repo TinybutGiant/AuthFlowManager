@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, ClipboardList, GraduationCap, UserRound } from "lucide-react";
+import { CalendarDays, CheckCircle2, ClipboardList, Download, FileText, GraduationCap, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, getApiErrorMessage, tokenManager } from "@/lib/queryClient";
-import { AdminActivityLog, AdminActivityType, ROLE_DISPLAY_NAMES, TraineeEngagement } from "@/types/admin";
+import { AdminActivityLog, AdminActivityType, ROLE_DISPLAY_NAMES, TraineeDocument, TraineeEngagement } from "@/types/admin";
 
 const ACTIVITY_TYPE_LABELS: Record<AdminActivityType, string> = {
   office_hour: "Office Hour",
@@ -46,6 +47,17 @@ function formatDate(value: string | null | undefined) {
   return new Date(`${value}T00:00:00`).toLocaleDateString();
 }
 
+function formatDateTime(value: string | null | undefined) {
+  return value ? new Date(value).toLocaleString() : "Not set";
+}
+
+function getOfferLetterStatusVariant(status: string) {
+  if (status === "accepted") return "default" as const;
+  if (status === "voided" || status === "declined") return "destructive" as const;
+  if (status === "viewed") return "outline" as const;
+  return "secondary" as const;
+}
+
 export default function TraineeWorkspace() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -55,6 +67,7 @@ export default function TraineeWorkspace() {
   const [summary, setSummary] = useState("");
   const [learningObjective, setLearningObjective] = useState("");
   const [endReason, setEndReason] = useState("");
+  const [offerAcceptedAcknowledgement, setOfferAcceptedAcknowledgement] = useState(false);
 
   const engagementQuery = useQuery<TraineeEngagement | null>({
     queryKey: ["/api/trainee/me/engagement"],
@@ -66,8 +79,16 @@ export default function TraineeWorkspace() {
     retry: false,
   });
 
+  const documentsQuery = useQuery<TraineeDocument[]>({
+    queryKey: ["/api/trainee/me/documents"],
+    retry: false,
+  });
+
   const engagement = engagementQuery.data;
   const logs = activityLogsQuery.data ?? [];
+  const documents = documentsQuery.data ?? [];
+  const offerLetter = documents.find((document) => document.document_type === "offer_letter" && document.status !== "voided")
+    ?? documents.find((document) => document.document_type === "offer_letter");
   const canSubmitActivity = engagement?.status === "active";
   const canEndEngagement = Boolean(engagement && !["ended", "cancelled"].includes(engagement.status));
 
@@ -137,7 +158,73 @@ export default function TraineeWorkspace() {
     },
   });
 
-  const workspaceError = engagementQuery.isError || activityLogsQuery.isError;
+  const markOfferLetterViewedMutation = useMutation({
+    mutationFn: async (documentId: number) => {
+      const response = await apiRequest("POST", `/api/trainee/me/documents/${documentId}/view`);
+      return response.json() as Promise<TraineeDocument>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/lifecycle-events"] });
+    },
+  });
+
+  const acceptOfferLetterMutation = useMutation({
+    mutationFn: async (documentId: number) => {
+      const response = await apiRequest("POST", `/api/trainee/me/documents/${documentId}/accept`);
+      return response.json() as Promise<TraineeDocument>;
+    },
+    onSuccess: () => {
+      setOfferAcceptedAcknowledgement(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/documents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/lifecycle-events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/engagement"] });
+      toast({
+        title: "Offer letter accepted",
+        description: "Your acceptance has been recorded.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not accept offer letter",
+        description: getApiErrorMessage(error, "Please try again or contact your supervisor."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  useEffect(() => {
+    if (offerLetter?.status === "sent" && !markOfferLetterViewedMutation.isPending) {
+      markOfferLetterViewedMutation.mutate(offerLetter.id);
+    }
+  }, [offerLetter?.id, offerLetter?.status]);
+
+  const downloadOfferLetter = async (document: TraineeDocument) => {
+    try {
+      const token = tokenManager.getToken();
+      const response = await fetch(`/api/trainee/me/documents/${document.id}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = window.document.createElement("a");
+      anchor.href = url;
+      anchor.download = `offer-letter-v${document.version}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast({
+        title: "Could not download offer letter",
+        description: getApiErrorMessage(error, "Please try again."),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const workspaceError = engagementQuery.isError || activityLogsQuery.isError || documentsQuery.isError;
 
   return (
     <div className="space-y-8">
@@ -222,6 +309,85 @@ export default function TraineeWorkspace() {
               <p className="text-muted-foreground" data-testid="text-supervisor-fallback">
                 Supervisor information is not available yet.
               </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="xl:col-span-3">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Offer Letter
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {documentsQuery.isLoading ? (
+              <p className="text-muted-foreground">Loading offer letter...</p>
+            ) : !offerLetter ? (
+              <p className="text-muted-foreground" data-testid="text-no-offer-letter">
+                No offer letter is available yet.
+              </p>
+            ) : offerLetter.status === "voided" ? (
+              <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground" data-testid="text-offer-letter-voided">
+                This offer letter is no longer available.
+              </p>
+            ) : (
+              <div className="space-y-4" data-testid="card-offer-letter">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-lg font-medium">{offerLetter.title}</h2>
+                      <Badge variant={getOfferLetterStatusVariant(offerLetter.status)}>{offerLetter.status}</Badge>
+                      <Badge variant="outline">v{offerLetter.version}</Badge>
+                    </div>
+                    {offerLetter.accepted_at && (
+                      <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Accepted {formatDateTime(offerLetter.accepted_at)}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => downloadOfferLetter(offerLetter)}
+                    data-testid="button-download-offer-letter"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Download PDF
+                  </Button>
+                </div>
+
+                <div className="rounded-md border border-border bg-muted/20 p-4">
+                  <p className="whitespace-pre-wrap text-sm leading-6">{offerLetter.body}</p>
+                </div>
+
+                {offerLetter.status === "accepted" ? (
+                  <Button disabled data-testid="button-offer-letter-accepted">
+                    Accepted
+                  </Button>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="offer-letter-acknowledgement"
+                        checked={offerAcceptedAcknowledgement}
+                        onCheckedChange={(checked) => setOfferAcceptedAcknowledgement(checked === true)}
+                        data-testid="checkbox-offer-letter-acknowledgement"
+                      />
+                      <Label htmlFor="offer-letter-acknowledgement" className="text-sm">
+                        I have read and accept this offer letter.
+                      </Label>
+                    </div>
+                    <Button
+                      onClick={() => acceptOfferLetterMutation.mutate(offerLetter.id)}
+                      disabled={!offerAcceptedAcknowledgement || acceptOfferLetterMutation.isPending}
+                      data-testid="button-accept-offer-letter"
+                    >
+                      {acceptOfferLetterMutation.isPending ? "Accepting..." : "Accept Offer Letter"}
+                    </Button>
+                  </div>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

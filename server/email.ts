@@ -7,6 +7,13 @@ interface PasswordSetupEmailInput {
   role: AdminRole;
 }
 
+interface OfferLetterEmailInput {
+  to: string;
+  name: string;
+  workspaceUrl: string;
+  title: string;
+}
+
 const ROLE_DISPLAY_NAMES: Record<AdminRole, string> = {
   super_admin: "Super Admin",
   admin_finance: "Finance Admin",
@@ -40,8 +47,51 @@ function getMailgunConfig() {
   };
 }
 
-export async function sendAdminPasswordSetupEmail(input: PasswordSetupEmailInput): Promise<boolean> {
+async function sendMailgunMessage(input: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+  logLabel: string;
+  developmentFallbackUrl?: string;
+}): Promise<boolean> {
   const mailgun = getMailgunConfig();
+
+  if (!mailgun.configured) {
+    console.warn(`[email] Mailgun is not configured. ${input.logLabel} email was not sent.`);
+    if (input.developmentFallbackUrl && process.env.NODE_ENV !== "production") {
+      console.warn(`[email] ${input.logLabel} link:`, input.developmentFallbackUrl);
+    }
+    return false;
+  }
+
+  const body = new URLSearchParams({
+    from: mailgun.from!,
+    to: input.to,
+    subject: input.subject,
+    text: input.text,
+    html: input.html,
+  });
+
+  const response = await fetch(`https://api.mailgun.net/v3/${mailgun.domain}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`api:${mailgun.apiKey}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[email] Mailgun ${input.logLabel} email failed:`, response.status, errorText);
+    return false;
+  }
+
+  return true;
+}
+
+export async function sendAdminPasswordSetupEmail(input: PasswordSetupEmailInput): Promise<boolean> {
   const roleLabel = ROLE_DISPLAY_NAMES[input.role] ?? "YaoTu";
   const escapedName = escapeHtml(input.name);
   const escapedSetupUrl = escapeHtml(input.setupUrl);
@@ -57,36 +107,44 @@ export async function sendAdminPasswordSetupEmail(input: PasswordSetupEmailInput
     </div>
   `;
 
-  if (!mailgun.configured) {
-    console.warn("[email] Mailgun is not configured. Password setup email was not sent.");
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[email] Password setup link:", input.setupUrl);
-    }
-    return false;
-  }
-
-  const body = new URLSearchParams({
-    from: mailgun.from!,
+  return sendMailgunMessage({
     to: input.to,
     subject,
     text,
     html,
+    logLabel: "Password setup",
+    developmentFallbackUrl: input.setupUrl,
   });
+}
 
-  const response = await fetch(`https://api.mailgun.net/v3/${mailgun.domain}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`api:${mailgun.apiKey}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body,
+export async function sendOfferLetterReadyEmail(input: OfferLetterEmailInput): Promise<boolean> {
+  const escapedName = escapeHtml(input.name);
+  const escapedWorkspaceUrl = escapeHtml(input.workspaceUrl);
+  const escapedTitle = escapeHtml(input.title);
+  const subject = "Your Yaotu trainee offer letter is ready for review";
+  const text = [
+    `Hello ${input.name},`,
+    "",
+    `Your trainee offer letter "${input.title}" is ready for review.`,
+    "Please log in to your trainee workspace to review and accept it.",
+    "",
+    input.workspaceUrl,
+  ].join("\n");
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <p>Hello ${escapedName},</p>
+      <p>Your trainee offer letter <strong>${escapedTitle}</strong> is ready for review.</p>
+      <p>Please log in to your trainee workspace to review and accept it.</p>
+      <p><a href="${escapedWorkspaceUrl}">${escapedWorkspaceUrl}</a></p>
+    </div>
+  `;
+
+  return sendMailgunMessage({
+    to: input.to,
+    subject,
+    text,
+    html,
+    logLabel: "Offer letter",
+    developmentFallbackUrl: input.workspaceUrl,
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("[email] Mailgun password setup email failed:", response.status, errorText);
-    return false;
-  }
-
-  return true;
 }

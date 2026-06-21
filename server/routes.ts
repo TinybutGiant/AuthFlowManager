@@ -33,6 +33,7 @@ import {
   adminUserUpdateSchema,
   engagementPayloadSchema,
   engagementTypeSchema,
+  offerLetterPayloadSchema,
   lifecycleEventPayloadSchema,
   traineeActivityLogPayloadSchema,
   traineeEndEngagementPayloadSchema,
@@ -41,6 +42,16 @@ import {
   validateTraineeEngagement,
   validateEngagementDates,
 } from './adminEngagementValidation';
+import {
+  acceptOfferLetterForTrainee,
+  createOfferLetterDocument,
+  getOfferLetterDownload,
+  OfferLetterError,
+  regenerateOfferLetterPdf,
+  sendOfferLetterDocument,
+  viewOfferLetterForTrainee,
+  voidOfferLetterDocument,
+} from './offerLetterService';
 
 // Login/Register schemas
 const loginSchema = z.object({
@@ -147,6 +158,74 @@ function sanitizeActivityLog(log: any) {
     reviewed_at: log.reviewedAt,
     created_at: log.createdAt,
   };
+}
+
+function sanitizeAdminEngagementDocument(document: any) {
+  return {
+    id: document.id,
+    engagement_id: document.engagementId,
+    admin_user_id: document.adminUserId,
+    document_type: document.documentType,
+    status: document.status,
+    title: document.title,
+    body: document.body,
+    version: document.version,
+    file_sha256: document.fileSha256,
+    file_content_type: document.fileContentType,
+    file_size_bytes: document.fileSizeBytes,
+    has_pdf: Boolean(document.fileKey),
+    sent_at: document.sentAt,
+    viewed_at: document.viewedAt,
+    accepted_at: document.acceptedAt,
+    declined_at: document.declinedAt,
+    voided_at: document.voidedAt,
+    voided_by: document.voidedBy,
+    created_by: document.createdBy,
+    created_at: document.createdAt,
+    updated_at: document.updatedAt,
+  };
+}
+
+function sanitizeTraineeDocument(document: any) {
+  return {
+    id: document.id,
+    document_type: document.documentType,
+    status: document.status,
+    title: document.title,
+    body: document.body,
+    version: document.version,
+    sent_at: document.sentAt,
+    viewed_at: document.viewedAt,
+    accepted_at: document.acceptedAt,
+    declined_at: document.declinedAt,
+  };
+}
+
+function getRequestIp(req: any) {
+  const forwarded = req.headers["x-forwarded-for"];
+  const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const forwardedIp = forwardedValue?.split(",")[0]?.trim();
+  return forwardedIp || req.ip || null;
+}
+
+function sendOfferLetterPdf(res: any, result: Awaited<ReturnType<typeof getOfferLetterDownload>>) {
+  res.setHeader("Content-Type", result.object.contentType || "application/pdf");
+  res.setHeader("Content-Length", String(result.object.buffer.byteLength));
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
+  res.send(result.object.buffer);
+}
+
+function handleOfferLetterRouteError(res: any, error: unknown, fallbackMessage: string) {
+  if (error instanceof OfferLetterError) {
+    return res.status(error.statusCode).json({ message: error.message });
+  }
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({ message: fallbackMessage });
+  }
+
+  console.error("[offer-letter route]", fallbackMessage, error);
+  return res.status(500).json({ message: fallbackMessage });
 }
 
 
@@ -295,6 +374,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(events.slice(0, 50).map(sanitizeLifecycleEvent));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch trainee lifecycle events" });
+    }
+  });
+
+  app.get("/api/trainee/me/documents", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const documents = await storage.listTraineeEngagementDocuments(req.adminUser.id);
+      res.json(
+        documents
+          .filter((document) => document.documentType === "offer_letter" && document.status !== "draft")
+          .map(sanitizeTraineeDocument)
+      );
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch trainee documents" });
+    }
+  });
+
+  app.post("/api/trainee/me/documents/:documentId/view", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const document = await viewOfferLetterForTrainee({
+        storage,
+        adminUserId: req.adminUser.id,
+        documentId: parseInt(req.params.documentId),
+      });
+      res.json(sanitizeTraineeDocument(document));
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to mark offer letter viewed");
+    }
+  });
+
+  app.get("/api/trainee/me/documents/:documentId/download", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const result = await getOfferLetterDownload({
+        storage,
+        requester: "trainee",
+        adminUserId: req.adminUser.id,
+        documentId: parseInt(req.params.documentId),
+      });
+      sendOfferLetterPdf(res, result);
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to download offer letter");
+    }
+  });
+
+  app.post("/api/trainee/me/documents/:documentId/accept", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+    try {
+      const document = await acceptOfferLetterForTrainee({
+        storage,
+        adminUserId: req.adminUser.id,
+        documentId: parseInt(req.params.documentId),
+        ip: getRequestIp(req),
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json(sanitizeTraineeDocument(document));
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to accept offer letter");
     }
   });
 
@@ -575,6 +709,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(400).json({ message: "Failed to update admin engagement", error: error?.message });
     }
   });
+
+  app.get("/api/admin/engagements/:engagementId/documents", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const engagementId = parseInt(req.params.engagementId);
+      const engagement = await storage.getAdminEngagement(engagementId);
+      if (!engagement) {
+        return res.status(404).json({ message: "Admin engagement not found" });
+      }
+
+      const documents = await storage.listAdminEngagementDocuments(engagementId);
+      res.json(documents.map(sanitizeAdminEngagementDocument));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch engagement documents" });
+    }
+  });
+
+  app.post("/api/admin/engagements/:engagementId/documents", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const engagementId = parseInt(req.params.engagementId);
+      const payload = offerLetterPayloadSchema.parse(req.body);
+      const document = await createOfferLetterDocument({
+        storage,
+        engagementId,
+        actorAdminId: req.adminUser.id,
+        title: payload.title,
+        body: payload.body,
+      });
+
+      res.status(201).json(sanitizeAdminEngagementDocument(document));
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to create offer letter");
+    }
+  });
+
+  app.post(
+    "/api/admin/engagements/:engagementId/documents/:documentId/regenerate-pdf",
+    requireAuth,
+    requireRole(['super_admin']),
+    async (req: any, res) => {
+      try {
+        const document = await regenerateOfferLetterPdf({
+          storage,
+          engagementId: parseInt(req.params.engagementId),
+          documentId: parseInt(req.params.documentId),
+          actorAdminId: req.adminUser.id,
+        });
+        res.json(sanitizeAdminEngagementDocument(document));
+      } catch (error) {
+        handleOfferLetterRouteError(res, error, "Failed to regenerate offer letter PDF");
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/engagements/:engagementId/documents/:documentId/send",
+    requireAuth,
+    requireRole(['super_admin']),
+    async (req: any, res) => {
+      try {
+        const document = await sendOfferLetterDocument({
+          storage,
+          engagementId: parseInt(req.params.engagementId),
+          documentId: parseInt(req.params.documentId),
+          actorAdminId: req.adminUser.id,
+        });
+        res.json(sanitizeAdminEngagementDocument(document));
+      } catch (error) {
+        handleOfferLetterRouteError(res, error, "Failed to send offer letter");
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/engagements/:engagementId/documents/:documentId/download",
+    requireAuth,
+    requireRole(['super_admin']),
+    async (req: any, res) => {
+      try {
+        const result = await getOfferLetterDownload({
+          storage,
+          requester: "admin",
+          engagementId: parseInt(req.params.engagementId),
+          documentId: parseInt(req.params.documentId),
+        });
+        sendOfferLetterPdf(res, result);
+      } catch (error) {
+        handleOfferLetterRouteError(res, error, "Failed to download offer letter");
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/engagements/:engagementId/documents/:documentId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    async (req: any, res) => {
+      try {
+        const document = await voidOfferLetterDocument({
+          storage,
+          engagementId: parseInt(req.params.engagementId),
+          documentId: parseInt(req.params.documentId),
+          actorAdminId: req.adminUser.id,
+        });
+        res.json(sanitizeAdminEngagementDocument(document));
+      } catch (error) {
+        handleOfferLetterRouteError(res, error, "Failed to void offer letter");
+      }
+    }
+  );
 
   app.get("/api/admin/users/:id/lifecycle-events", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {

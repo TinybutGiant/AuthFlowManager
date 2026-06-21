@@ -53,7 +53,14 @@ export type AdminLifecycleEventType =
   | 'self_offboarding_requested'
   | 'early_offboarding_started'
   | 'engagement_cancelled'
-  | 'activity_log_submitted';
+  | 'activity_log_submitted'
+  | 'offer_letter_created'
+  | 'offer_letter_pdf_generated'
+  | 'offer_letter_sent'
+  | 'offer_letter_viewed'
+  | 'offer_letter_accepted'
+  | 'offer_letter_declined'
+  | 'offer_letter_voided';
 export type AdminActivityType =
   | 'office_hour'
   | 'training'
@@ -64,6 +71,8 @@ export type AdminActivityType =
   | 'meeting'
   | 'other';
 export type AdminActivityLogStatus = 'submitted' | 'reviewed';
+export type AdminEngagementDocumentType = 'offer_letter';
+export type AdminEngagementDocumentStatus = 'draft' | 'sent' | 'viewed' | 'accepted' | 'declined' | 'voided';
 
 export interface AdminEngagement {
   id: number;
@@ -124,6 +133,43 @@ export interface AdminActivityLog {
   status: AdminActivityLogStatus;
   reviewed_at?: string | null;
   created_at: string;
+}
+
+export interface AdminEngagementDocument {
+  id: number;
+  engagement_id: number;
+  admin_user_id: number;
+  document_type: AdminEngagementDocumentType;
+  status: AdminEngagementDocumentStatus;
+  title: string;
+  body: string;
+  version: number;
+  file_sha256?: string | null;
+  file_content_type?: string | null;
+  file_size_bytes?: number | null;
+  has_pdf: boolean;
+  sent_at?: string | null;
+  viewed_at?: string | null;
+  accepted_at?: string | null;
+  declined_at?: string | null;
+  voided_at?: string | null;
+  voided_by?: number | null;
+  created_by?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TraineeDocument {
+  id: number;
+  document_type: AdminEngagementDocumentType;
+  status: AdminEngagementDocumentStatus;
+  title: string;
+  body: string;
+  version: number;
+  sent_at?: string | null;
+  viewed_at?: string | null;
+  accepted_at?: string | null;
+  declined_at?: string | null;
 }
 
 export const ROLE_PERMISSIONS = {
