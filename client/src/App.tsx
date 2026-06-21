@@ -40,7 +40,15 @@ function VerifierApplicationDetailRoute() {
 }
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
+  const [location, setLocation] = useLocation();
+  const adminUser = (user as any)?.adminUser;
+
+  React.useEffect(() => {
+    if (!isLoading && isAuthenticated && location === "/" && adminUser?.role === "trainee_access") {
+      setLocation("/trainee");
+    }
+  }, [adminUser?.role, isAuthenticated, isLoading, location, setLocation]);
 
   if (isLoading) {
     return (
@@ -51,6 +59,10 @@ function Router() {
         </div>
       </div>
     );
+  }
+
+  if (isAuthenticated && location === "/" && adminUser?.role === "trainee_access") {
+    return null;
   }
 
   return (

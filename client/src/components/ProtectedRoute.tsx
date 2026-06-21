@@ -1,6 +1,9 @@
 import { useAuth } from "@/hooks/useAuth";
+import { Button } from "@/components/ui/button";
 import { AdminRole } from "@/types/admin";
 import { useToast } from "@/hooks/use-toast";
+import { tokenManager } from "@/lib/queryClient";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
 interface ProtectedRouteProps {
@@ -11,6 +14,13 @@ interface ProtectedRouteProps {
 export default function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const handleSwitchAccount = () => {
+    tokenManager.removeToken();
+    queryClient.clear();
+    window.location.href = "/";
+  };
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -47,7 +57,10 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-foreground mb-2">Access Denied</h1>
-          <p className="text-muted-foreground">You don't have permission to access this page.</p>
+          <p className="text-muted-foreground mb-4">You don't have permission to access this page.</p>
+          <Button onClick={handleSwitchAccount} variant="outline" data-testid="button-switch-account">
+            Switch account
+          </Button>
         </div>
       </div>
     );
