@@ -18,6 +18,7 @@ import {
   ChevronRight,
   ClipboardList,
   GraduationCap,
+  RefreshCw,
 } from "lucide-react";
 import { AdminRole } from "@/types/admin";
 
@@ -82,6 +83,19 @@ const menuItems: MenuItem[] = [
         title: "Delete Admin",
         href: "/admin-management/delete",
         icon: Delete,
+        roles: ['super_admin'],
+      },
+    ],
+  },
+  {
+    title: "Admin Operations",
+    icon: RefreshCw,
+    roles: ['super_admin'],
+    children: [
+      {
+        title: "Lifecycle Jobs",
+        href: "/admin-operations/lifecycle-jobs",
+        icon: RefreshCw,
         roles: ['super_admin'],
       },
     ],

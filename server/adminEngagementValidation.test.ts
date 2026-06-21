@@ -250,6 +250,7 @@ test("trainee access does not gain existing sensitive sidebar routes", async () 
   const sensitiveSections = [
     'Pending Requests',
     'Admin Management',
+    'Admin Operations',
     'Finance Management',
     'Cancellation review',
     'Verifier Management',
@@ -316,13 +317,22 @@ test("backend sensitive routes and engagement management APIs do not allow train
   }
 });
 
-test("admin profile exposes manual lifecycle transition action only in admin area", async () => {
+test("lifecycle jobs are exposed only through admin operations", async () => {
+  const appSource = await readFile(new URL("../client/src/App.tsx", import.meta.url), "utf8");
+  const sidebarSource = await readFile(new URL("../client/src/components/Sidebar.tsx", import.meta.url), "utf8");
   const profileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const lifecycleJobsSource = await readFile(new URL("../client/src/pages/LifecycleJobs.tsx", import.meta.url), "utf8");
   const traineeSource = await readFile(new URL("../client/src/pages/TraineeWorkspace.tsx", import.meta.url), "utf8");
 
-  assert.match(profileSource, /\/api\/admin\/engagements\/run-lifecycle-transitions/);
-  assert.match(profileSource, /Run all due lifecycle transitions/);
-  assert.match(profileSource, /Checks all due trainee engagements, not only this user/);
+  assert.match(appSource, /path="\/admin-operations\/lifecycle-jobs"/);
+  assert.match(appSource, /allowedRoles={\["super_admin"\]}/);
+  assert.match(sidebarSource, /title: "Admin Operations"/);
+  assert.match(sidebarSource, /title: "Lifecycle Jobs"/);
+  assert.match(sidebarSource, /href: "\/admin-operations\/lifecycle-jobs"/);
+  assert.match(lifecycleJobsSource, /\/api\/admin\/engagements\/run-lifecycle-transitions/);
+  assert.match(lifecycleJobsSource, /Run all due lifecycle transitions/);
+  assert.match(lifecycleJobsSource, /Checks all due trainee engagements, not only one user/);
+  assert.doesNotMatch(profileSource, /run-lifecycle-transitions|Run all due lifecycle transitions/);
   assert.doesNotMatch(traineeSource, /run-lifecycle-transitions|Run all due lifecycle transitions/);
 });
 

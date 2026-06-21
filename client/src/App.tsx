@@ -26,6 +26,7 @@ import SupportManagement from "@/pages/SupportManagement";
 import CancellationReview from "@/pages/CancellationReview";
 import CancellationReviewDetail from "@/pages/CancellationReviewDetail";
 import TraineeWorkspace from "@/pages/TraineeWorkspace";
+import LifecycleJobs from "@/pages/LifecycleJobs";
 import NotFound from "@/pages/not-found";
 
 function VerifierApplicationDetailRoute() {
@@ -129,6 +130,14 @@ function Router() {
             <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <DeleteAdmin />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
+          <Route path="/admin-operations/lifecycle-jobs">
+            <ProtectedRoute allowedRoles={["super_admin"]}>
+              <AdminLayout>
+                <LifecycleJobs />
               </AdminLayout>
             </ProtectedRoute>
           </Route>
