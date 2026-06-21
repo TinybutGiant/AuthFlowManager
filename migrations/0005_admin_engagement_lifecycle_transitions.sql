@@ -19,5 +19,15 @@ ALTER TABLE "admin_lifecycle_events"
       'offboarding_email_sent',
       'offboarding_email_failed',
       'engagement_ended',
-      'activity_log_submitted'
+      'self_offboarding_requested',
+      'early_offboarding_started',
+      'engagement_cancelled',
+      'activity_log_submitted',
+      'offer_letter_created',
+      'offer_letter_pdf_generated',
+      'offer_letter_sent',
+      'offer_letter_viewed',
+      'offer_letter_accepted',
+      'offer_letter_declined',
+      'offer_letter_voided'
     ));
