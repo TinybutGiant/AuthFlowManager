@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { spawn } from "child_process";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { assertAdminSchemaReady, SchemaNotReadyError } from "./schemaHealth";
 
 const app = express();
 app.use(express.json());
@@ -70,6 +71,16 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  try {
+    await assertAdminSchemaReady();
+  } catch (error) {
+    if (error instanceof SchemaNotReadyError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
