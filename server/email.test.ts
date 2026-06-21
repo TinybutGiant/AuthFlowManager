@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { sendAdminPasswordSetupEmail } from "./email";
+import { sendAdminPasswordSetupEmail, sendOfferLetterReadyEmail } from "./email";
 
 const mailEnvKeys = [
   "MAILGUN_API_KEY",
@@ -121,6 +121,38 @@ test("password setup email uses access role label in subject and body", async ()
     assert.equal(sent, true);
     assert.match(requestedBody, /subject=Set\+up\+your\+YaoTu\+Finance\+Admin\+password/);
     assert.match(requestedBody, /Your\+Finance\+Admin\+account\+has\+been\+created/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+test("offer letter email is link-only and uses trainee workspace URL", async () => {
+  const restoreEnv = withCleanMailEnv();
+  const originalFetch = globalThis.fetch;
+  let requestedBody = "";
+
+  globalThis.fetch = (async (_input, init) => {
+    requestedBody = String(init?.body);
+    return new Response("OK", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    process.env.MAILGUN_API_KEY = "test-api-key";
+    process.env.MAILGUN_DOMAIN = "mg.example.com";
+    process.env.MAILGUN_FROM = "YaoTu Admin <admin@mg.example.com>";
+
+    const sent = await sendOfferLetterReadyEmail({
+      to: "trainee@example.com",
+      name: "Trainee User",
+      workspaceUrl: "https://admin.example.com/trainee",
+      title: "Trainee Offer Letter",
+    });
+
+    assert.equal(sent, true);
+    assert.match(requestedBody, /subject=Your\+Yaotu\+trainee\+offer\+letter\+is\+ready\+for\+review/);
+    assert.match(requestedBody, /https%3A%2F%2Fadmin\.example\.com%2Ftrainee/);
+    assert.doesNotMatch(requestedBody, /attachment|token|bearer|documentId/i);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();

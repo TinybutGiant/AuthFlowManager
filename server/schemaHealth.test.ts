@@ -7,6 +7,7 @@ test("schema preflight checks Phase 2 admin lifecycle migration prerequisites", 
 
   for (const required of [
     "admin_activity_logs",
+    "admin_engagement_documents",
     "admin_engagements",
     "admin_lifecycle_events",
     "must_change_password",
@@ -17,6 +18,17 @@ test("schema preflight checks Phase 2 admin lifecycle migration prerequisites", 
     "early_offboarding_started",
     "engagement_cancelled",
     "activity_log_submitted",
+    "file_key",
+    "file_sha256",
+    "file_size_bytes",
+    "accepted_by",
+    "offer_letter_created",
+    "offer_letter_pdf_generated",
+    "offer_letter_sent",
+    "offer_letter_viewed",
+    "offer_letter_accepted",
+    "offer_letter_declined",
+    "offer_letter_voided",
   ]) {
     assert.match(source, new RegExp(required));
   }

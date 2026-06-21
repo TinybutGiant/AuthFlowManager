@@ -6,6 +6,7 @@ import {
   accessRoleSchema,
   adminUserUpdateSchema,
   engagementPayloadSchema,
+  offerLetterPayloadSchema,
   lifecycleEventPayloadSchema,
   traineeActivityLogPayloadSchema,
   traineeEndEngagementPayloadSchema,
@@ -89,6 +90,13 @@ test("lifecycle event payload is append-only metadata and cannot carry permissio
     'self_offboarding_requested',
     'early_offboarding_started',
     'engagement_cancelled',
+    'offer_letter_created',
+    'offer_letter_pdf_generated',
+    'offer_letter_sent',
+    'offer_letter_viewed',
+    'offer_letter_accepted',
+    'offer_letter_declined',
+    'offer_letter_voided',
   ]) {
     assert.equal(lifecycleEventPayloadSchema.safeParse({
       eventType,
@@ -99,6 +107,34 @@ test("lifecycle event payload is append-only metadata and cannot carry permissio
   assert.equal(lifecycleEventPayloadSchema.safeParse({
     eventType: 'permission_granted',
     permissions: ['finance.*'],
+  }).success, false);
+});
+
+test("offer letter validation only accepts minimal plain text payload", () => {
+  assert.equal(offerLetterPayloadSchema.safeParse({
+    documentType: "offer_letter",
+    title: "Offer Letter",
+    body: "Please review this offer letter.",
+  }).success, true);
+
+  assert.equal(offerLetterPayloadSchema.safeParse({
+    documentType: "contract",
+    title: "Offer Letter",
+    body: "Body",
+  }).success, false);
+
+  assert.equal(offerLetterPayloadSchema.safeParse({
+    title: "",
+    body: "Body",
+  }).success, false);
+
+  assert.equal(offerLetterPayloadSchema.safeParse({
+    title: "Offer Letter",
+    body: "Body",
+    status: "accepted",
+    adminUserId: 1,
+    engagementId: 2,
+    fileKey: "unsafe",
   }).success, false);
 });
 
@@ -310,11 +346,74 @@ test("backend sensitive routes and engagement management APIs do not allow train
     /app\.post\("\/api\/admin\/engagements\/:engagementId\/events", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.get\("\/api\/admin\/engagements\/:engagementId\/activity-logs", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.post\("\/api\/admin\/engagements\/run-lifecycle-transitions", requireAuth, requireRole\(\['super_admin'\]\)/,
+    /app\.get\("\/api\/admin\/engagements\/:engagementId\/documents", requireAuth, requireRole\(\['super_admin'\]\)/,
+    /app\.post\("\/api\/admin\/engagements\/:engagementId\/documents", requireAuth, requireRole\(\['super_admin'\]\)/,
   ];
 
   for (const pattern of sensitivePatterns) {
     assert.match(source, pattern);
   }
+});
+
+test("offer letter APIs use admin or trainee scoped permissions", async () => {
+  const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  for (const required of [
+    '"/api/admin/engagements/:engagementId/documents/:documentId/regenerate-pdf"',
+    '"/api/admin/engagements/:engagementId/documents/:documentId/send"',
+    '"/api/admin/engagements/:engagementId/documents/:documentId/download"',
+    '"/api/admin/engagements/:engagementId/documents/:documentId/void"',
+  ]) {
+    const start = source.indexOf(required);
+    assert.notEqual(start, -1, `${required} should exist`);
+    const block = source.slice(start, source.indexOf(");", start));
+    assert.match(block, /requireRole\(\['super_admin'\]\)/);
+  }
+
+  for (const required of [
+    '"/api/trainee/me/documents"',
+    '"/api/trainee/me/documents/:documentId/view"',
+    '"/api/trainee/me/documents/:documentId/download"',
+    '"/api/trainee/me/documents/:documentId/accept"',
+  ]) {
+    const start = source.indexOf(required);
+    assert.notEqual(start, -1, `${required} should exist`);
+    const block = source.slice(start, source.indexOf(");", start));
+    assert.match(block, /requireRole\(\['trainee_access'\]\)/);
+    assert.match(block, /req\.adminUser\.id/);
+    assert.doesNotMatch(block, /req\.body\.adminUserId|req\.body\.engagementId|req\.params\.adminUserId/);
+  }
+});
+
+test("admin profile hides unsafe actions for accepted offer letters", async () => {
+  const source = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+
+  assert.match(
+    source,
+    /const canRegenerate = offerLetter && !\["accepted", "voided"\]\.includes\(offerLetter\.status\)/,
+  );
+  assert.match(
+    source,
+    /const canSend = offerLetter && \["draft", "sent", "viewed"\]\.includes\(offerLetter\.status\)/,
+  );
+  assert.match(
+    source,
+    /\{offerLetter && !\["accepted", "voided"\]\.includes\(offerLetter\.status\) && \(/,
+  );
+  assert.doesNotMatch(source, /\{offerLetter && offerLetter\.status !== "voided" && \(/);
+});
+
+test("offer letter route errors do not expose raw storage errors", async () => {
+  const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const start = source.indexOf("function handleOfferLetterRouteError");
+  const end = source.indexOf("export async function registerRoutes", start);
+  const block = source.slice(start, end);
+
+  assert.match(block, /error instanceof z\.ZodError/);
+  assert.match(block, /return res\.status\(400\)\.json\(\{ message: fallbackMessage \}\)/);
+  assert.match(block, /console\.error\("\[offer-letter route\]"/);
+  assert.match(block, /return res\.status\(500\)\.json\(\{ message: fallbackMessage \}\)/);
+  assert.doesNotMatch(block, /error:\s*error|String\(error\)/);
 });
 
 test("lifecycle jobs are exposed only through admin operations", async () => {
@@ -342,6 +441,10 @@ test("trainee workspace APIs are scoped to authenticated trainee", async () => {
   for (const route of [
     'app.get("/api/trainee/me/engagement"',
     'app.get("/api/trainee/me/lifecycle-events"',
+    'app.get("/api/trainee/me/documents"',
+    'app.post("/api/trainee/me/documents/:documentId/view"',
+    'app.get("/api/trainee/me/documents/:documentId/download"',
+    'app.post("/api/trainee/me/documents/:documentId/accept"',
     'app.get("/api/trainee/me/activity-logs"',
     'app.post("/api/trainee/me/activity-logs"',
   ]) {

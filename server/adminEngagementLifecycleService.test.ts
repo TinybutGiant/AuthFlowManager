@@ -10,6 +10,7 @@ import type { AdminEngagement, AdminUser } from "@shared/schema";
 class MemoryLifecycleStorage {
   admins = new Map<number, any>();
   engagements = new Map<number, any>();
+  documents = new Map<number, any>();
   events: any[] = [];
 
   seedAdmin(overrides: Partial<AdminUser> = {}) {
@@ -44,6 +45,22 @@ class MemoryLifecycleStorage {
     };
     this.engagements.set(engagement.id, engagement);
     return engagement;
+  }
+
+  seedOfferLetter(engagementId: number, overrides: Record<string, any> = {}) {
+    const engagement = this.engagements.get(engagementId);
+    const document = {
+      id: this.documents.size + 1,
+      engagementId,
+      adminUserId: engagement.adminUserId,
+      documentType: "offer_letter",
+      status: "accepted",
+      acceptedAt: new Date("2026-05-15T00:00:00Z"),
+      voidedAt: null,
+      ...overrides,
+    };
+    this.documents.set(document.id, document);
+    return document;
   }
 
   async listDueTraineeEngagementsForActivation(now: Date) {
@@ -109,6 +126,16 @@ class MemoryLifecycleStorage {
     return true;
   }
 
+  async hasAcceptedOfferLetterForEngagement(engagementId: number) {
+    return [...this.documents.values()].some((document) => (
+      document.engagementId === engagementId &&
+      document.documentType === "offer_letter" &&
+      document.status === "accepted" &&
+      document.acceptedAt &&
+      !document.voidedAt
+    ));
+  }
+
   async offboardTraineeEngagementLifecycle(engagementId: number, now: Date) {
     const today = now.toISOString().slice(0, 10);
     const engagement = this.engagements.get(engagementId);
@@ -169,6 +196,7 @@ test("due invited trainee engagement becomes active and records onboarding event
   const store = new MemoryLifecycleStorage();
   const admin = store.seedAdmin();
   const engagement = store.seedEngagement(admin.id, { status: "invited", startDate: "2026-06-01" });
+  store.seedOfferLetter(engagement.id);
 
   const result = await activateDueEngagements(new Date("2026-06-01T12:00:00Z"), store as any);
 
@@ -182,10 +210,23 @@ test("due invited trainee engagement becomes active and records onboarding event
   });
 });
 
+test("due trainee engagement does not activate before offer letter acceptance", async () => {
+  const store = new MemoryLifecycleStorage();
+  const admin = store.seedAdmin();
+  const engagement = store.seedEngagement(admin.id, { status: "invited", startDate: "2026-06-01" });
+
+  const result = await activateDueEngagements(new Date("2026-06-01T12:00:00Z"), store as any);
+
+  assert.equal(result.activatedCount, 0);
+  assert.equal(store.engagements.get(engagement.id).status, "invited");
+  assert.equal(store.events.length, 0);
+});
+
 test("activation transition is idempotent", async () => {
   const store = new MemoryLifecycleStorage();
   const admin = store.seedAdmin();
-  store.seedEngagement(admin.id, { status: "draft", startDate: "2026-06-01" });
+  const engagement = store.seedEngagement(admin.id, { status: "draft", startDate: "2026-06-01" });
+  store.seedOfferLetter(engagement.id);
   const now = new Date("2026-06-02T00:00:00Z");
 
   await activateDueEngagements(now, store as any);
