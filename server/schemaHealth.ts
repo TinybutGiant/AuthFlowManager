@@ -4,6 +4,7 @@ const REQUIRED_TABLES = [
   "admin_engagements",
   "admin_lifecycle_events",
   "admin_activity_logs",
+  "admin_engagement_documents",
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -11,6 +12,10 @@ const REQUIRED_COLUMNS = [
   ["admin_users", "password_setup_token_hash"],
   ["admin_users", "password_setup_expires_at"],
   ["admin_engagements", "ended_at"],
+  ["admin_engagement_documents", "file_key"],
+  ["admin_engagement_documents", "file_sha256"],
+  ["admin_engagement_documents", "file_size_bytes"],
+  ["admin_engagement_documents", "accepted_by"],
 ] as const;
 
 const REQUIRED_LIFECYCLE_EVENT_TYPES = [
@@ -21,6 +26,13 @@ const REQUIRED_LIFECYCLE_EVENT_TYPES = [
   "early_offboarding_started",
   "engagement_cancelled",
   "activity_log_submitted",
+  "offer_letter_created",
+  "offer_letter_pdf_generated",
+  "offer_letter_sent",
+  "offer_letter_viewed",
+  "offer_letter_accepted",
+  "offer_letter_declined",
+  "offer_letter_voided",
 ] as const;
 
 export class SchemaNotReadyError extends Error {

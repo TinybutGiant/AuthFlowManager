@@ -26,6 +26,11 @@ export async function activateDueEngagements(
 
   for (const engagement of dueEngagements) {
     try {
+      const hasAcceptedOfferLetter = await lifecycleStorage.hasAcceptedOfferLetterForEngagement(engagement.id);
+      if (!hasAcceptedOfferLetter) {
+        continue;
+      }
+
       const activated = await lifecycleStorage.activateTraineeEngagementLifecycle(engagement.id, now);
       if (activated) {
         activatedCount += 1;

@@ -5,6 +5,7 @@ import {
   adminEngagements,
   adminLifecycleEvents,
   adminActivityLogs,
+  adminEngagementDocuments,
   type User,
   type InsertUser,
   type AdminUser,
@@ -17,6 +18,8 @@ import {
   type InsertAdminLifecycleEvent,
   type AdminActivityLog,
   type InsertAdminActivityLog,
+  type AdminEngagementDocument,
+  type InsertAdminEngagementDocument,
   type AdminRole,
   type AdminStatus,
   type ApprovalStatus,
@@ -40,7 +43,7 @@ import {
 } from "../shared/main-schema";
 import { db } from "./db";
 import { mainDb } from "./main-db";
-import { eq, and, desc, inArray, lt, or, isNull, gt, lte } from "drizzle-orm";
+import { eq, and, desc, inArray, lt, or, isNull, gt, lte, sql } from "drizzle-orm";
 
 // Interface for storage operations
 export interface IStorage {
@@ -114,6 +117,41 @@ export interface IStorage {
     activityLog: InsertAdminActivityLog,
     event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
   ): Promise<AdminActivityLog>;
+  listAdminEngagementDocuments(engagementId: number): Promise<AdminEngagementDocument[]>;
+  listTraineeEngagementDocuments(adminUserId: number): Promise<AdminEngagementDocument[]>;
+  getAdminEngagementDocument(id: number): Promise<AdminEngagementDocument | undefined>;
+  getAdminEngagementDocumentForEngagement(
+    engagementId: number,
+    documentId: number
+  ): Promise<AdminEngagementDocument | undefined>;
+  getTraineeEngagementDocument(
+    adminUserId: number,
+    documentId: number
+  ): Promise<AdminEngagementDocument | undefined>;
+  createAdminEngagementDocumentWithEvent(
+    document: InsertAdminEngagementDocument,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminEngagementDocument>;
+  updateAdminEngagementDocument(
+    id: number,
+    updates: Partial<AdminEngagementDocument>
+  ): Promise<AdminEngagementDocument | undefined>;
+  updateAdminEngagementDocumentWithEvent(
+    id: number,
+    updates: Partial<AdminEngagementDocument>,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminEngagementDocument | undefined>;
+  markOfferLetterViewed(
+    documentId: number,
+    adminUserId: number,
+    now: Date
+  ): Promise<AdminEngagementDocument | undefined>;
+  markOfferLetterAccepted(
+    documentId: number,
+    adminUserId: number,
+    input: { now: Date; ip?: string | null; userAgent?: string | null }
+  ): Promise<AdminEngagementDocument | undefined>;
+  hasAcceptedOfferLetterForEngagement(engagementId: number): Promise<boolean>;
   listDueTraineeEngagementsForActivation(now: Date): Promise<AdminEngagement[]>;
   listExpiredActiveTraineeEngagements(now: Date): Promise<AdminEngagement[]>;
   activateTraineeEngagementLifecycle(engagementId: number, now: Date): Promise<boolean>;
@@ -681,6 +719,285 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async listAdminEngagementDocuments(engagementId: number): Promise<AdminEngagementDocument[]> {
+    return await db
+      .select()
+      .from(adminEngagementDocuments)
+      .where(eq(adminEngagementDocuments.engagementId, engagementId))
+      .orderBy(desc(adminEngagementDocuments.version), desc(adminEngagementDocuments.createdAt));
+  }
+
+  async listTraineeEngagementDocuments(adminUserId: number): Promise<AdminEngagementDocument[]> {
+    return await db
+      .select()
+      .from(adminEngagementDocuments)
+      .where(eq(adminEngagementDocuments.adminUserId, adminUserId))
+      .orderBy(desc(adminEngagementDocuments.version), desc(adminEngagementDocuments.createdAt));
+  }
+
+  async getAdminEngagementDocument(id: number): Promise<AdminEngagementDocument | undefined> {
+    const [document] = await db
+      .select()
+      .from(adminEngagementDocuments)
+      .where(eq(adminEngagementDocuments.id, id));
+    return document;
+  }
+
+  async getAdminEngagementDocumentForEngagement(
+    engagementId: number,
+    documentId: number
+  ): Promise<AdminEngagementDocument | undefined> {
+    const [document] = await db
+      .select()
+      .from(adminEngagementDocuments)
+      .where(
+        and(
+          eq(adminEngagementDocuments.id, documentId),
+          eq(adminEngagementDocuments.engagementId, engagementId)
+        )
+      );
+    return document;
+  }
+
+  async getTraineeEngagementDocument(
+    adminUserId: number,
+    documentId: number
+  ): Promise<AdminEngagementDocument | undefined> {
+    const [document] = await db
+      .select()
+      .from(adminEngagementDocuments)
+      .where(
+        and(
+          eq(adminEngagementDocuments.id, documentId),
+          eq(adminEngagementDocuments.adminUserId, adminUserId)
+        )
+      );
+    return document;
+  }
+
+  private safeDocumentEventMetadata(
+    document: Pick<AdminEngagementDocument, "id" | "documentType" | "version" | "status">,
+    metadata?: unknown
+  ) {
+    const base = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? metadata as Record<string, unknown>
+      : {};
+    return {
+      ...base,
+      document_id: document.id,
+      document_type: document.documentType,
+      document_version: document.version,
+      document_status: document.status,
+    };
+  }
+
+  async createAdminEngagementDocumentWithEvent(
+    document: InsertAdminEngagementDocument,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminEngagementDocument> {
+    return await db.transaction(async (tx) => {
+      const [newDocument] = await tx
+        .insert(adminEngagementDocuments)
+        .values(document)
+        .returning();
+
+      await tx.insert(adminLifecycleEvents).values({
+        ...event,
+        adminUserId: newDocument.adminUserId,
+        engagementId: newDocument.engagementId,
+        metadata: this.safeDocumentEventMetadata(newDocument, event.metadata),
+      });
+
+      return newDocument;
+    });
+  }
+
+  async updateAdminEngagementDocument(
+    id: number,
+    updates: Partial<AdminEngagementDocument>
+  ): Promise<AdminEngagementDocument | undefined> {
+    const [document] = await db
+      .update(adminEngagementDocuments)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(adminEngagementDocuments.id, id))
+      .returning();
+    return document;
+  }
+
+  async updateAdminEngagementDocumentWithEvent(
+    id: number,
+    updates: Partial<AdminEngagementDocument>,
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<AdminEngagementDocument | undefined> {
+    return await db.transaction(async (tx) => {
+      const [document] = await tx
+        .update(adminEngagementDocuments)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(adminEngagementDocuments.id, id))
+        .returning();
+
+      if (!document) {
+        return undefined;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        ...event,
+        adminUserId: document.adminUserId,
+        engagementId: document.engagementId,
+        metadata: this.safeDocumentEventMetadata(document, event.metadata),
+      });
+
+      return document;
+    });
+  }
+
+  async markOfferLetterViewed(
+    documentId: number,
+    adminUserId: number,
+    now: Date
+  ): Promise<AdminEngagementDocument | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(adminEngagementDocuments)
+        .where(
+          and(
+            eq(adminEngagementDocuments.id, documentId),
+            eq(adminEngagementDocuments.adminUserId, adminUserId)
+          )
+        );
+
+      if (!existing || existing.status !== "sent") {
+        return existing;
+      }
+
+      const [document] = await tx
+        .update(adminEngagementDocuments)
+        .set({
+          status: "viewed",
+          viewedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminEngagementDocuments.id, documentId),
+            eq(adminEngagementDocuments.adminUserId, adminUserId),
+            eq(adminEngagementDocuments.status, "sent")
+          )
+        )
+        .returning();
+
+      if (!document) {
+        const [current] = await tx
+          .select()
+          .from(adminEngagementDocuments)
+          .where(
+            and(
+              eq(adminEngagementDocuments.id, documentId),
+              eq(adminEngagementDocuments.adminUserId, adminUserId)
+            )
+          );
+        return current;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId,
+        engagementId: document.engagementId,
+        eventType: "offer_letter_viewed",
+        occurredAt: now,
+        actorAdminId: adminUserId,
+        metadata: this.safeDocumentEventMetadata(document),
+        notes: null,
+      });
+
+      return document;
+    });
+  }
+
+  async markOfferLetterAccepted(
+    documentId: number,
+    adminUserId: number,
+    input: { now: Date; ip?: string | null; userAgent?: string | null }
+  ): Promise<AdminEngagementDocument | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(adminEngagementDocuments)
+        .where(
+          and(
+            eq(adminEngagementDocuments.id, documentId),
+            eq(adminEngagementDocuments.adminUserId, adminUserId)
+          )
+        );
+
+      if (!existing || existing.status === "accepted" || !["sent", "viewed"].includes(existing.status)) {
+        return existing;
+      }
+
+      const [document] = await tx
+        .update(adminEngagementDocuments)
+        .set({
+          status: "accepted",
+          acceptedAt: input.now,
+          acceptedBy: adminUserId,
+          acceptedIp: input.ip ?? null,
+          acceptedUserAgent: input.userAgent ?? null,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(adminEngagementDocuments.id, documentId),
+            eq(adminEngagementDocuments.adminUserId, adminUserId),
+            inArray(adminEngagementDocuments.status, ["sent", "viewed"])
+          )
+        )
+        .returning();
+
+      if (!document) {
+        const [current] = await tx
+          .select()
+          .from(adminEngagementDocuments)
+          .where(
+            and(
+              eq(adminEngagementDocuments.id, documentId),
+              eq(adminEngagementDocuments.adminUserId, adminUserId)
+            )
+          );
+        return current;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId,
+        engagementId: document.engagementId,
+        eventType: "offer_letter_accepted",
+        occurredAt: input.now,
+        actorAdminId: adminUserId,
+        metadata: this.safeDocumentEventMetadata(document),
+        notes: null,
+      });
+
+      return document;
+    });
+  }
+
+  async hasAcceptedOfferLetterForEngagement(engagementId: number): Promise<boolean> {
+    const [row] = await db
+      .select({ id: adminEngagementDocuments.id })
+      .from(adminEngagementDocuments)
+      .where(
+        and(
+          eq(adminEngagementDocuments.engagementId, engagementId),
+          eq(adminEngagementDocuments.documentType, "offer_letter"),
+          eq(adminEngagementDocuments.status, "accepted"),
+          isNull(adminEngagementDocuments.voidedAt),
+          sql`${adminEngagementDocuments.acceptedAt} IS NOT NULL`
+        )
+      )
+      .limit(1);
+
+    return Boolean(row);
+  }
+
   async listDueTraineeEngagementsForActivation(now: Date): Promise<AdminEngagement[]> {
     const today = now.toISOString().slice(0, 10);
     const rows = await db
@@ -692,7 +1009,16 @@ export class DatabaseStorage implements IStorage {
           eq(adminUsers.role, 'trainee_access'),
           eq(adminUsers.status, 'active'),
           inArray(adminEngagements.status, ['draft', 'invited']),
-          lte(adminEngagements.startDate, today)
+          lte(adminEngagements.startDate, today),
+          sql`exists (
+            select 1
+            from admin_engagement_documents d
+            where d.engagement_id = ${adminEngagements.id}
+              and d.document_type = 'offer_letter'
+              and d.status = 'accepted'
+              and d.accepted_at is not null
+              and d.voided_at is null
+          )`
         )
       )
       .orderBy(desc(adminEngagements.createdAt));
@@ -731,7 +1057,16 @@ export class DatabaseStorage implements IStorage {
             eq(adminUsers.role, 'trainee_access'),
             eq(adminUsers.status, 'active'),
             lte(adminEngagements.startDate, today),
-            inArray(adminEngagements.status, ['draft', 'invited'])
+            inArray(adminEngagements.status, ['draft', 'invited']),
+            sql`exists (
+              select 1
+              from admin_engagement_documents d
+              where d.engagement_id = ${adminEngagements.id}
+                and d.document_type = 'offer_letter'
+                and d.status = 'accepted'
+                and d.accepted_at is not null
+                and d.voided_at is null
+            )`
           )
         );
 

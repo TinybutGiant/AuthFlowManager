@@ -37,6 +37,23 @@ export const lifecycleEventTypeSchema = z.enum([
   'early_offboarding_started',
   'engagement_cancelled',
   'activity_log_submitted',
+  'offer_letter_created',
+  'offer_letter_pdf_generated',
+  'offer_letter_sent',
+  'offer_letter_viewed',
+  'offer_letter_accepted',
+  'offer_letter_declined',
+  'offer_letter_voided',
+]);
+
+export const engagementDocumentTypeSchema = z.enum(['offer_letter']);
+export const engagementDocumentStatusSchema = z.enum([
+  'draft',
+  'sent',
+  'viewed',
+  'accepted',
+  'declined',
+  'voided',
 ]);
 
 const optionalDateSchema = z.preprocess(
@@ -178,6 +195,12 @@ export const traineeEndEngagementPayloadSchema = z.object({
     (value) => typeof value === "string" && value.trim() === "" ? null : value,
     z.string().trim().max(1000).nullable().optional()
   ),
+}).strict();
+
+export const offerLetterPayloadSchema = z.object({
+  documentType: engagementDocumentTypeSchema.default('offer_letter'),
+  title: z.string().trim().min(1, "Title is required").max(200),
+  body: z.string().trim().min(1, "Body is required").max(20000),
 }).strict();
 
 export function validateActivityDateWithinEngagement(
