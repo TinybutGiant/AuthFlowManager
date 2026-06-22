@@ -16,6 +16,7 @@ import {
   validateActivityDateWithinEngagement,
   validateTraineeEngagement,
 } from "./adminEngagementValidation";
+import { deriveLegacyRoleFromIdentityAndAccessGroup } from "../client/src/lib/adminIdentity";
 import { z } from "zod";
 
 test("access role rejects engagement identity and lifecycle values", () => {
@@ -313,29 +314,101 @@ test("trainee access requires engagement, end date, supervisor, and work scope",
   assert.equal(traineeCreateSchema.safeParse({ role: 'admin_finance' }).success, true);
 });
 
-test("create admin UI separates Access Role from Engagement fields", async () => {
+test("identity and access group mapping derives legacy roles for Phase A compatibility", () => {
+  assert.equal(
+    deriveLegacyRoleFromIdentityAndAccessGroup('admin_staff', 'finance_admin'),
+    'admin_finance'
+  );
+  assert.equal(
+    deriveLegacyRoleFromIdentityAndAccessGroup('admin_staff', 'verifier_admin'),
+    'admin_verifier'
+  );
+  assert.equal(
+    deriveLegacyRoleFromIdentityAndAccessGroup('admin_staff', 'support_admin'),
+    'admin_support'
+  );
+  assert.equal(
+    deriveLegacyRoleFromIdentityAndAccessGroup('trainee', undefined),
+    'trainee_access'
+  );
+  assert.equal(
+    deriveLegacyRoleFromIdentityAndAccessGroup('admin_staff', undefined),
+    undefined
+  );
+});
+
+test("create admin UI separates Identity Type, Access Groups, and Engagement fields", async () => {
   const source = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
-  const accessRoleSection = source.slice(
-    source.indexOf('data-testid="select-admin-role"'),
+  const identitySource = await readFile(new URL("../client/src/lib/adminIdentity.ts", import.meta.url), "utf8");
+  const identityTypeSection = source.slice(
+    source.indexOf('data-testid="select-identity-type"'),
+    source.indexOf('{isAdminStaffIdentity &&')
+  );
+  const assignableAccessGroupSection = source.slice(
+    source.indexOf('data-testid="select-assignable-access-group"'),
+    source.indexOf('{isTraineeIdentity &&')
+  );
+  const defaultAccessGroupSection = source.slice(
+    source.indexOf('Default Access Groups'),
     source.indexOf('<h2 className="text-lg font-medium text-foreground">Engagement</h2>')
   );
+  const workAuthorizationSection = source.slice(
+    source.indexOf('data-testid="select-work-authorization-type"'),
+    source.indexOf('data-testid="select-supervisor-admin"')
+  );
 
-  assert.match(source, />Access Role</);
-  assert.match(source, /All Access Roles|Select an access role/);
-  assert.match(accessRoleSection, /value="trainee_access">Trainee Access/);
-  assert.match(source, /isTraineeAccess &&/);
+  assert.match(source, />Identity Type</);
+  assert.match(source, /Identity Type describes the person's relationship to the organization/);
+  assert.match(identitySource, /Admin Staff/);
+  assert.match(identitySource, /Trainee/);
+  assert.match(source, /Assignable Access Groups/);
+  assert.match(source, /Assignable Access Groups control which admin functions this person can use/);
+  assert.match(identitySource, /Finance Admin/);
+  assert.match(identitySource, /Verifier Admin/);
+  assert.match(identitySource, /Support Admin/);
+  assert.match(source, /Default Access Groups/);
+  assert.match(defaultAccessGroupSection, /Trainee Workspace/);
+  assert.match(defaultAccessGroupSection, /Trainee accounts receive limited Trainee Workspace access by default/);
+  assert.match(source, /isTraineeIdentity &&/);
   assert.match(source, />Engagement</);
-  assert.match(source, /End date is required for Trainee Access/);
-  assert.match(source, /Trainee Access is for temporary interns or trainees/);
+  assert.match(source, />Work Authorization</);
+  assert.match(source, /End date is required for Trainee/);
+  assert.match(source, /Trainee identity is for temporary interns or trainees/);
   assert.match(source, /Engagement tracks start\/end dates, supervisor, work scope/);
   assert.match(source, /\? "Create Trainee User"/);
   assert.match(source, /: "Create Admin"/);
   assert.match(source, /data-testid="select-supervisor-admin"/);
-  assert.match(source, /ROLE_DISPLAY_NAMES\[admin\.role\]/);
   assert.doesNotMatch(source, /data-testid="input-supervisor-admin-id"/);
+  assert.doesNotMatch(source, />Access Role</);
+  assert.doesNotMatch(source, /Select an access role/);
+  assert.doesNotMatch(source, /value="trainee_access">Trainee Access/);
+  assert.doesNotMatch(source, /Account Type/);
 
-  for (const forbidden of ['intern', 'contractor', 'employee', 'advisor', 'cpt', 'opt', 'stem_opt', 'full_time', 'part_time']) {
-    assert.equal(accessRoleSection.includes(`value="${forbidden}"`), false, `${forbidden} must not appear in access role dropdown`);
+  assert.match(identityTypeSection, /IDENTITY_TYPE_OPTIONS/);
+  assert.match(assignableAccessGroupSection, /ASSIGNABLE_ACCESS_GROUP_OPTIONS/);
+  assert.doesNotMatch(assignableAccessGroupSection, /trainee_access|Trainee Access/);
+  assert.equal(assignableAccessGroupSection.includes('value="cpt"'), false);
+  assert.equal(assignableAccessGroupSection.includes('value="opt"'), false);
+  assert.equal(assignableAccessGroupSection.includes('value="stem_opt"'), false);
+  assert.equal(assignableAccessGroupSection.includes('>CPT<'), false);
+  assert.equal(assignableAccessGroupSection.includes('>OPT<'), false);
+  assert.equal(assignableAccessGroupSection.includes('>STEM OPT<'), false);
+  assert.doesNotMatch(defaultAccessGroupSection, /Finance Admin|Verifier Admin|Support Admin|Super Admin/);
+  assert.match(workAuthorizationSection, /value="cpt">CPT/);
+  assert.match(workAuthorizationSection, /value="opt">OPT/);
+  assert.match(workAuthorizationSection, /value="stem_opt">STEM OPT/);
+
+  for (const forbidden of ['cpt', 'opt', 'stem_opt']) {
+    assert.equal(assignableAccessGroupSection.includes(`value="${forbidden}"`), false, `${forbidden} must not appear in assignable access groups`);
+  }
+
+  for (const required of [
+    'form.setValue("accessGroup", undefined',
+    'clearTraineeEngagementFields()',
+    'deriveLegacyRoleFromIdentityAndAccessGroup',
+    'role,',
+  ]) {
+    assert.match(source, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });
 

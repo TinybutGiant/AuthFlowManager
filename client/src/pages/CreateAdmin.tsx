@@ -12,6 +12,14 @@ import { useToast } from "@/hooks/use-toast";
 import { ApiError, apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
+import {
+  ASSIGNABLE_ACCESS_GROUP_OPTIONS,
+  DEFAULT_TRAINEE_ACCESS_GROUP,
+  IDENTITY_TYPE_OPTIONS,
+  deriveLegacyRoleFromIdentityAndAccessGroup,
+  type AssignableAccessGroup,
+  type IdentityType,
+} from "@/lib/adminIdentity";
 
 const CREATE_EMAIL_FAILURE_MESSAGE =
   "Admin was created and activated, but password setup email failed. Use resend setup link after fixing email delivery.";
@@ -19,9 +27,10 @@ const CREATE_EMAIL_FAILURE_MESSAGE =
 const createAdminSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   email: z.string().email("Invalid email address"),
-  role: z.enum(['admin_finance', 'admin_verifier', 'admin_support', 'trainee_access'], {
-    required_error: "Please select an access role",
+  identityType: z.enum(['admin_staff', 'trainee'], {
+    required_error: "Please select an identity type",
   }),
+  accessGroup: z.enum(['finance_admin', 'verifier_admin', 'support_admin']).optional(),
   engagementType: z.enum(['employee', 'intern', 'contractor', 'advisor', 'other']).optional(),
   scheduleType: z.enum(['full_time', 'part_time']).optional(),
   workAuthorizationType: z.enum(['none', 'cpt', 'opt', 'stem_opt', 'other']).default('none'),
@@ -31,35 +40,42 @@ const createAdminSchema = z.object({
   expectedHoursPerWeek: z.string().optional(),
   workScope: z.string().optional(),
 }).superRefine((data, ctx) => {
-  if (data.role === 'trainee_access' && !data.engagementType) {
+  if (data.identityType === 'admin_staff' && !data.accessGroup) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accessGroup'],
+      message: 'Assignable Access Group is required for Admin Staff',
+    });
+  }
+  if (data.identityType === 'trainee' && !data.engagementType) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['engagementType'],
-      message: 'Engagement is required for Trainee Access',
+      message: 'Engagement is required for Trainee',
     });
   }
-  if (data.role === 'trainee_access' && !data.endDate) {
+  if (data.identityType === 'trainee' && !data.endDate) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['endDate'],
-      message: 'End date is required for Trainee Access',
+      message: 'End date is required for Trainee',
     });
   }
-  if (data.role === 'trainee_access' && !data.supervisorAdminId) {
+  if (data.identityType === 'trainee' && !data.supervisorAdminId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['supervisorAdminId'],
-      message: 'Supervisor is required for Trainee Access',
+      message: 'Supervisor is required for Trainee',
     });
   }
-  if (data.role === 'trainee_access' && !data.workScope?.trim()) {
+  if (data.identityType === 'trainee' && !data.workScope?.trim()) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['workScope'],
-      message: 'Work scope is required for Trainee Access',
+      message: 'Work scope is required for Trainee',
     });
   }
-  if (data.engagementType === 'intern' && !data.endDate) {
+  if (data.identityType === 'trainee' && data.engagementType === 'intern' && !data.endDate) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['endDate'],
@@ -87,7 +103,8 @@ export default function CreateAdmin() {
     defaultValues: {
       name: "",
       email: "",
-      role: undefined,
+      identityType: undefined,
+      accessGroup: undefined,
       engagementType: undefined,
       scheduleType: undefined,
       workAuthorizationType: 'none',
@@ -98,8 +115,10 @@ export default function CreateAdmin() {
       workScope: "",
     },
   });
-  const selectedRole = form.watch("role");
-  const isTraineeAccess = selectedRole === 'trainee_access';
+  const selectedIdentityType = form.watch("identityType");
+  const selectedAccessGroup = form.watch("accessGroup");
+  const isAdminStaffIdentity = selectedIdentityType === 'admin_staff';
+  const isTraineeIdentity = selectedIdentityType === 'trainee';
   const traineeEmail = form.watch("email");
 
   const { data: admins = [] } = useQuery<AdminUser[]>({
@@ -112,15 +131,35 @@ export default function CreateAdmin() {
     admin.email.toLowerCase() !== traineeEmail.toLowerCase()
   ));
 
+  const clearTraineeEngagementFields = () => {
+    form.setValue("engagementType", undefined);
+    form.setValue("scheduleType", undefined);
+    form.setValue("workAuthorizationType", "none");
+    form.setValue("startDate", "");
+    form.setValue("endDate", "");
+    form.setValue("supervisorAdminId", "");
+    form.setValue("expectedHoursPerWeek", "");
+    form.setValue("workScope", "");
+  };
+
+  const getSupervisorRoleLabel = (role: AdminUser["role"]) => {
+    return role === "trainee_access" ? "Trainee" : ROLE_DISPLAY_NAMES[role] || role;
+  };
+
   const createAdminMutation = useMutation({
     mutationFn: async (data: CreateAdminForm) => {
+      const role = deriveLegacyRoleFromIdentityAndAccessGroup(data.identityType, data.accessGroup);
+      if (!role) {
+        throw new Error("Select an identity type and assignable access group.");
+      }
+
       const payload: any = {
         name: data.name,
         email: data.email,
-        role: data.role,
+        role,
       };
 
-      if (data.role === 'trainee_access') {
+      if (role === 'trainee_access') {
         payload.engagement = {
           engagementType: data.engagementType || 'intern',
           scheduleType: data.scheduleType || null,
@@ -141,7 +180,7 @@ export default function CreateAdmin() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/approvals"] });
       toast({
         title: "Success",
-        description: isTraineeAccess
+        description: isTraineeIdentity
           ? "Trainee user created. Password setup email sent."
           : "Admin created. Password setup email sent.",
       });
@@ -179,7 +218,7 @@ export default function CreateAdmin() {
 
       toast({
         title: "Error",
-        description: getApiErrorMessage(error, isTraineeAccess ? "Failed to create trainee user" : "Failed to create admin"),
+        description: getApiErrorMessage(error, isTraineeIdentity ? "Failed to create trainee user" : "Failed to create admin"),
         variant: "destructive",
       });
     },
@@ -239,52 +278,100 @@ export default function CreateAdmin() {
               </div>
 
               <div>
-                <Label htmlFor="role">Access Role</Label>
+                <Label htmlFor="identity-type">Identity Type</Label>
                 <Select 
-                  value={form.watch("role") || ""} 
+                  value={selectedIdentityType || ""}
                   onValueChange={(value) => {
-                    form.setValue("role", value as any, { shouldValidate: true });
-                    if (value === 'trainee_access') {
+                    const identityType = value as IdentityType;
+                    form.setValue("identityType", identityType, { shouldValidate: true });
+                    if (identityType === 'trainee') {
+                      form.setValue("accessGroup", undefined, { shouldValidate: true });
                       form.setValue("engagementType", "intern", { shouldValidate: true });
                     } else {
-                      form.setValue("engagementType", undefined);
-                      form.setValue("scheduleType", undefined);
-                      form.setValue("workAuthorizationType", "none");
-                      form.setValue("startDate", "");
-                      form.setValue("endDate", "");
-                      form.setValue("supervisorAdminId", "");
-                      form.setValue("expectedHoursPerWeek", "");
-                      form.setValue("workScope", "");
+                      form.setValue("accessGroup", undefined, { shouldValidate: true });
+                      clearTraineeEngagementFields();
                     }
                   }}
                 >
-                  <SelectTrigger data-testid="select-admin-role">
-                    <SelectValue placeholder="Select an access role" />
+                  <SelectTrigger id="identity-type" data-testid="select-identity-type">
+                    <SelectValue placeholder="Select identity type" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="admin_finance">Finance Admin</SelectItem>
-                    <SelectItem value="admin_verifier">Verifier Admin</SelectItem>
-                    <SelectItem value="admin_support">Support Admin</SelectItem>
-                    <SelectItem value="trainee_access">Trainee Access</SelectItem>
+                    {IDENTITY_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                {form.formState.errors.role && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  Identity Type describes the person's relationship to the organization.
+                </p>
+                {form.formState.errors.identityType && (
                   <p className="text-sm text-destructive mt-1">
-                    {form.formState.errors.role.message}
+                    {form.formState.errors.identityType.message}
                   </p>
                 )}
               </div>
+
+              {isAdminStaffIdentity && (
+                <section className="rounded-md border border-border p-5 space-y-4">
+                  <div>
+                    <Label htmlFor="assignable-access-group">Assignable Access Groups</Label>
+                    <Select
+                      value={selectedAccessGroup || ""}
+                      onValueChange={(value) => form.setValue("accessGroup", value as AssignableAccessGroup, { shouldValidate: true })}
+                    >
+                      <SelectTrigger id="assignable-access-group" data-testid="select-assignable-access-group">
+                        <SelectValue placeholder="Select assignable access group" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ASSIGNABLE_ACCESS_GROUP_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Assignable Access Groups control which admin functions this person can use.
+                    </p>
+                    {form.formState.errors.accessGroup && (
+                      <p className="text-sm text-destructive mt-1">
+                        {form.formState.errors.accessGroup.message}
+                      </p>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {isTraineeIdentity && (
+                <section className="rounded-md border border-border p-5 space-y-3">
+                  <div>
+                    <h2 className="text-lg font-medium text-foreground">Default Access Groups</h2>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Trainee accounts receive limited Trainee Workspace access by default. Their dates, authorization, and lifecycle are managed through Engagement fields.
+                    </p>
+                  </div>
+                  <div
+                    className="inline-flex rounded-md border border-border bg-muted px-3 py-1 text-sm font-medium text-foreground"
+                    data-testid="pill-default-access-group"
+                  >
+                    {DEFAULT_TRAINEE_ACCESS_GROUP.label}
+                  </div>
+                </section>
+              )}
 
               <div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
                 After this user is created, the account will be activated and a one-time password setup link will be sent to the email address above. The link expires in 24 hours.
               </div>
 
-              {isTraineeAccess && (
-              <section className="rounded-md border border-border p-5 space-y-5">
+              {isTraineeIdentity && (
+                <section className="rounded-md border border-border p-5 space-y-5">
                   <div>
                     <h2 className="text-lg font-medium text-foreground">Engagement</h2>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Trainee Access is for temporary interns or trainees. It does not grant access to core admin operations.
+                      Trainee identity is for temporary interns or trainees. It does not grant access to core admin operations.
                     </p>
                     <p className="text-sm text-muted-foreground mt-1">
                       Engagement tracks start/end dates, supervisor, work scope, and onboarding/offboarding events.
@@ -333,7 +420,7 @@ export default function CreateAdmin() {
                     </div>
 
                     <div>
-                      <Label htmlFor="work-authorization-type">Work Authorization Type</Label>
+                      <Label htmlFor="work-authorization-type">Work Authorization</Label>
                       <Select
                         value={form.watch("workAuthorizationType") || "none"}
                         onValueChange={(value) => form.setValue("workAuthorizationType", value as any)}
@@ -366,7 +453,7 @@ export default function CreateAdmin() {
                           ) : (
                             supervisorOptions.map((admin) => (
                               <SelectItem key={admin.id} value={String(admin.id)}>
-                                {admin.name} - {admin.email} - {ROLE_DISPLAY_NAMES[admin.role] || admin.role}
+                                {admin.name} - {admin.email} - {getSupervisorRoleLabel(admin.role)}
                               </SelectItem>
                             ))
                           )}
@@ -433,7 +520,7 @@ export default function CreateAdmin() {
                     )}
                   </div>
                   {/* TODO: Add permission override UI only after a clear override model exists. Permissions remain role-derived for now. */}
-              </section>
+                </section>
               )}
 
               <div className="flex justify-end space-x-3 pt-4">
@@ -452,7 +539,7 @@ export default function CreateAdmin() {
                 >
                   {createAdminMutation.isPending
                     ? "Creating..."
-                    : isTraineeAccess
+                    : isTraineeIdentity
                       ? "Create Trainee User"
                       : "Create Admin"}
                 </Button>
