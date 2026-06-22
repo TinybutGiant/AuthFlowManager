@@ -2,6 +2,7 @@ import {
   users,
   adminUsers,
   adminUserApprovals,
+  adminUserAccessGrants,
   adminEngagements,
   adminLifecycleEvents,
   adminActivityLogs,
@@ -24,6 +25,7 @@ import {
   type AdminDocumentTemplate,
   type InsertAdminDocumentTemplate,
   type AdminRole,
+  type AdminAccessGroup,
   type AdminStatus,
   type ApprovalStatus,
   type EngagementStatus,
@@ -47,6 +49,12 @@ import {
 import { db } from "./db";
 import { mainDb } from "./main-db";
 import { eq, and, desc, inArray, lt, or, isNull, gt, lte, sql } from "drizzle-orm";
+import {
+  deriveAccessGroupsFromLegacyRole,
+  deriveAccountTypeFromLegacyRole,
+  ROLE_DERIVED_ACCESS_GRANT_SOURCE,
+  ROLE_DERIVED_ACCESS_GRANT_SOURCES,
+} from "./adminAccessModel";
 
 // Interface for storage operations
 export interface IStorage {
@@ -76,6 +84,7 @@ export interface IStorage {
   updateAdminUser(id: number, updates: Partial<AdminUser>): Promise<AdminUser>;
   deleteAdminUser(id: number): Promise<void>;
   listAdminUsers(filters?: { role?: AdminRole; status?: AdminStatus }): Promise<AdminUser[]>;
+  getActiveAccessGroupsForAdminUser(adminUserId: number): Promise<AdminAccessGroup[]>;
   activateCreateApprovalForPasswordSetup(
     approvalId: number,
     targetAdminId: number,
@@ -201,6 +210,58 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private buildAdminUserInsert(adminUser: InsertAdminUser): InsertAdminUser {
+    return {
+      ...adminUser,
+      accountType: adminUser.accountType ?? deriveAccountTypeFromLegacyRole(adminUser.role),
+    };
+  }
+
+  private async createRoleDerivedAccessGrants(
+    tx: Pick<typeof db, "insert">,
+    adminUserId: number,
+    role: AdminRole,
+    grantedBy?: number | null,
+  ) {
+    const accessGroups = deriveAccessGroupsFromLegacyRole(role);
+    if (accessGroups.length === 0) {
+      return;
+    }
+
+    await tx
+      .insert(adminUserAccessGrants)
+      .values(
+        accessGroups.map((accessGroup) => ({
+          adminUserId,
+          accessGroup,
+          source: ROLE_DERIVED_ACCESS_GRANT_SOURCE,
+          metadata: { legacyRole: role },
+          grantedBy: grantedBy ?? null,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+
+  private async syncRoleDerivedAccessGrants(
+    tx: Pick<typeof db, "insert" | "update">,
+    adminUserId: number,
+    role: AdminRole,
+  ) {
+    const now = new Date();
+    await tx
+      .update(adminUserAccessGrants)
+      .set({ revokedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(adminUserAccessGrants.adminUserId, adminUserId),
+          isNull(adminUserAccessGrants.revokedAt),
+          inArray(adminUserAccessGrants.source, ROLE_DERIVED_ACCESS_GRANT_SOURCES),
+        ),
+      );
+
+    await this.createRoleDerivedAccessGrants(tx, adminUserId, role);
+  }
+
   // User operations for JWT Auth
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
@@ -257,11 +318,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createAdminUser(adminUser: InsertAdminUser): Promise<AdminUser> {
-    const [newAdmin] = await db
-      .insert(adminUsers)
-      .values(adminUser)
-      .returning();
-    return newAdmin;
+    return await db.transaction(async (tx) => {
+      const adminInsert = this.buildAdminUserInsert(adminUser);
+      const [newAdmin] = await tx
+        .insert(adminUsers)
+        .values(adminInsert)
+        .returning();
+
+      await this.createRoleDerivedAccessGrants(tx, newAdmin.id, newAdmin.role, newAdmin.createdBy);
+      return newAdmin;
+    });
   }
 
   async createAdminUserForPasswordSetup(
@@ -270,10 +336,13 @@ export class DatabaseStorage implements IStorage {
     event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
   ): Promise<{ admin: AdminUser; engagement?: AdminEngagement }> {
     return await db.transaction(async (tx) => {
+      const adminInsert = this.buildAdminUserInsert(adminUser);
       const [newAdmin] = await tx
         .insert(adminUsers)
-        .values(adminUser)
+        .values(adminInsert)
         .returning();
+
+      await this.createRoleDerivedAccessGrants(tx, newAdmin.id, newAdmin.role, newAdmin.createdBy);
 
       if (!engagement) {
         return { admin: newAdmin };
@@ -304,10 +373,13 @@ export class DatabaseStorage implements IStorage {
     approval: InsertAdminUserApproval
   ): Promise<AdminUser> {
     return await db.transaction(async (tx) => {
+      const adminInsert = this.buildAdminUserInsert(adminUser);
       const [newAdmin] = await tx
         .insert(adminUsers)
-        .values(adminUser)
+        .values(adminInsert)
         .returning();
+
+      await this.createRoleDerivedAccessGrants(tx, newAdmin.id, newAdmin.role, newAdmin.createdBy);
 
       await tx.insert(adminUserApprovals).values({
         ...approval,
@@ -325,10 +397,13 @@ export class DatabaseStorage implements IStorage {
     event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
   ): Promise<AdminUser> {
     return await db.transaction(async (tx) => {
+      const adminInsert = this.buildAdminUserInsert(adminUser);
       const [newAdmin] = await tx
         .insert(adminUsers)
-        .values(adminUser)
+        .values(adminInsert)
         .returning();
+
+      await this.createRoleDerivedAccessGrants(tx, newAdmin.id, newAdmin.role, newAdmin.createdBy);
 
       await tx.insert(adminUserApprovals).values({
         ...approval,
@@ -354,12 +429,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAdminUser(id: number, updates: Partial<AdminUser>): Promise<AdminUser> {
-    const [updatedAdmin] = await db
-      .update(adminUsers)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(adminUsers.id, id))
-      .returning();
-    return updatedAdmin;
+    return await db.transaction(async (tx) => {
+      const nextUpdates = {
+        ...updates,
+        ...(updates.role ? { accountType: deriveAccountTypeFromLegacyRole(updates.role) } : {}),
+        updatedAt: new Date(),
+      };
+
+      const [updatedAdmin] = await tx
+        .update(adminUsers)
+        .set(nextUpdates)
+        .where(eq(adminUsers.id, id))
+        .returning();
+
+      if (updatedAdmin && updates.role) {
+        await this.syncRoleDerivedAccessGrants(tx, updatedAdmin.id, updatedAdmin.role);
+      }
+
+      return updatedAdmin;
+    });
   }
 
   async deleteAdminUser(id: number): Promise<void> {
@@ -380,6 +468,20 @@ export class DatabaseStorage implements IStorage {
     }
 
     return await db.select().from(adminUsers).orderBy(desc(adminUsers.createdAt));
+  }
+
+  async getActiveAccessGroupsForAdminUser(adminUserId: number): Promise<AdminAccessGroup[]> {
+    const grants = await db
+      .select({ accessGroup: adminUserAccessGrants.accessGroup })
+      .from(adminUserAccessGrants)
+      .where(
+        and(
+          eq(adminUserAccessGrants.adminUserId, adminUserId),
+          isNull(adminUserAccessGrants.revokedAt),
+        ),
+      );
+
+    return grants.map((grant) => grant.accessGroup as AdminAccessGroup);
   }
 
   async activateCreateApprovalForPasswordSetup(

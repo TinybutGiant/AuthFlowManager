@@ -3,6 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  deriveAccessGroupsFromLegacyRole,
+  deriveAccountTypeFromLegacyRole,
+  deriveLegacyRoleFromAccountTypeAndAccessGroup,
+} from "./adminAccessModel";
+import {
   accessRoleSchema,
   adminUserUpdateSchema,
   documentTemplatePayloadSchema,
@@ -335,6 +340,76 @@ test("identity and access group mapping derives legacy roles for Phase A compati
     deriveLegacyRoleFromIdentityAndAccessGroup('admin_staff', undefined),
     undefined
   );
+});
+
+test("Phase B legacy role mapping derives account type and access grants", () => {
+  assert.equal(deriveAccountTypeFromLegacyRole("trainee_access"), "trainee");
+  assert.equal(deriveAccountTypeFromLegacyRole("admin_finance"), "admin_staff");
+  assert.equal(deriveAccountTypeFromLegacyRole("admin_verifier"), "admin_staff");
+  assert.equal(deriveAccountTypeFromLegacyRole("admin_support"), "admin_staff");
+  assert.equal(deriveAccountTypeFromLegacyRole("super_admin"), "admin_staff");
+
+  assert.deepEqual(deriveAccessGroupsFromLegacyRole("trainee_access"), ["trainee_workspace"]);
+  assert.deepEqual(deriveAccessGroupsFromLegacyRole("admin_finance"), ["finance_admin"]);
+  assert.deepEqual(deriveAccessGroupsFromLegacyRole("admin_verifier"), ["verifier_admin"]);
+  assert.deepEqual(deriveAccessGroupsFromLegacyRole("admin_support"), ["support_admin"]);
+  assert.deepEqual(deriveAccessGroupsFromLegacyRole("super_admin"), ["super_admin"]);
+
+  assert.equal(
+    deriveLegacyRoleFromAccountTypeAndAccessGroup("admin_staff", "finance_admin"),
+    "admin_finance",
+  );
+  assert.equal(
+    deriveLegacyRoleFromAccountTypeAndAccessGroup("trainee", "finance_admin"),
+    "trainee_access",
+  );
+  assert.equal(
+    deriveLegacyRoleFromAccountTypeAndAccessGroup("contractor", "support_admin"),
+    undefined,
+  );
+});
+
+test("Phase B migration adds account type and role-derived access grants without changing legacy role", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0011_admin_account_type_access_grants.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "account_type" text/);
+  assert.match(migration, /"role" = 'trainee_access' THEN 'trainee'/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS "admin_user_access_grants"/);
+  assert.match(migration, /"admin_user_id" integer NOT NULL REFERENCES "admin_users"\("id"\) ON DELETE CASCADE/);
+  assert.match(migration, /"access_group" text NOT NULL/);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS "idx_admin_user_access_grants_active_unique"/);
+  assert.match(migration, /WHERE "revoked_at" IS NULL/);
+  assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
+  assert.match(migration, /TO anon, authenticated/);
+  assert.match(migration, /USING \(false\)/);
+  assert.match(migration, /WITH CHECK \(false\)/);
+  assert.match(migration, /WHEN 'admin_finance' THEN 'finance_admin'/);
+  assert.match(migration, /WHEN 'admin_verifier' THEN 'verifier_admin'/);
+  assert.match(migration, /WHEN 'admin_support' THEN 'support_admin'/);
+  assert.match(migration, /WHEN 'trainee_access' THEN 'trainee_workspace'/);
+  assert.match(migration, /WHEN 'super_admin' THEN 'super_admin'/);
+  assert.doesNotMatch(migration, /DROP COLUMN "role"|ALTER TYPE "admin_role"/);
+});
+
+test("Phase B storage dual-writes account type and role-derived grants while preserving role auth", async () => {
+  const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.match(storageSource, /accountType: adminUser\.accountType \?\? deriveAccountTypeFromLegacyRole\(adminUser\.role\)/);
+  assert.match(storageSource, /createRoleDerivedAccessGrants/);
+  assert.match(storageSource, /syncRoleDerivedAccessGrants/);
+  assert.match(storageSource, /ROLE_DERIVED_ACCESS_GRANT_SOURCE/);
+  assert.match(storageSource, /ROLE_DERIVED_ACCESS_GRANT_SOURCES/);
+  assert.match(storageSource, /getActiveAccessGroupsForAdminUser/);
+  assert.match(routesSource, /accountType: serializedAdminUser\.accountType/);
+  assert.match(routesSource, /accessGroups: serializedAdminUser\.accessGroups/);
+  assert.match(routesSource, /adminUser: serializedAdminUser/);
+  assert.match(routesSource, /requireRole\(\['super_admin'\]\)/);
+  assert.match(routesSource, /requireRole\(\['trainee_access'\]\)/);
+  assert.doesNotMatch(routesSource, /requireAccessGroup|accessGroups\.includes/);
 });
 
 test("create admin UI separates Identity Type, Access Groups, and Engagement fields", async () => {

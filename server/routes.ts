@@ -63,6 +63,7 @@ import {
   previewOfferLetterTemplate,
   updateDocumentTemplate,
 } from './documentTemplateService';
+import { deriveAccountTypeFromLegacyRole } from './adminAccessModel';
 
 // Login/Register schemas
 const loginSchema = z.object({
@@ -219,6 +220,17 @@ function sanitizeAdminDocumentTemplate(template: any) {
   };
 }
 
+async function serializeAdminUser(adminUser: any) {
+  const safeAdmin = sanitizeAdminUser(adminUser);
+  const accessGroups = await storage.getActiveAccessGroupsForAdminUser(adminUser.id);
+
+  return {
+    ...safeAdmin,
+    accountType: adminUser.accountType ?? deriveAccountTypeFromLegacyRole(adminUser.role),
+    accessGroups,
+  };
+}
+
 function sanitizeTraineeDocument(document: any) {
   return {
     id: document.id,
@@ -304,6 +316,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Update last login
       await storage.updateAdminUser(adminUser.id, { lastLoginAt: new Date() });
+      const serializedAdminUser = await serializeAdminUser(adminUser);
 
       const token = jwtUtils.generateToken({ userId: adminUser.id.toString(), email: adminUser.email });
       
@@ -313,7 +326,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           id: adminUser.id, 
           email: adminUser.email, 
           name: adminUser.name,
-          role: adminUser.role
+          role: adminUser.role,
+          accountType: serializedAdminUser.accountType,
+          accessGroups: serializedAdminUser.accessGroups,
         }
       });
     } catch (error: any) {
@@ -364,15 +379,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!adminUser) {
         return res.status(404).json({ message: "Admin user not found" });
       }
+      const serializedAdminUser = await serializeAdminUser(adminUser);
       
       res.json({
         id: adminUser.id,
         email: adminUser.email,
         name: adminUser.name,
         role: adminUser.role,
+        accountType: serializedAdminUser.accountType,
+        accessGroups: serializedAdminUser.accessGroups,
         status: adminUser.status,
         mustChangePassword: adminUser.mustChangePassword,
-        adminUser: sanitizeAdminUser(adminUser)
+        adminUser: serializedAdminUser
       });
     } catch (error) {
       console.error("Error fetching user:", error);
@@ -548,7 +566,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         role: role as any, 
         status: status as any 
       });
-      res.json(admins.map(sanitizeAdminUser));
+      res.json(await Promise.all(admins.map(serializeAdminUser)));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch admin users" });
     }
@@ -561,7 +579,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!admin) {
         return res.status(404).json({ message: "Admin user not found" });
       }
-      res.json(sanitizeAdminUser(admin));
+      res.json(await serializeAdminUser(admin));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch admin user" });
     }
@@ -634,7 +652,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!emailSent) {
         return res.status(502).json({
           message: "Admin was created and activated, but password setup email failed. Use resend setup link after fixing email delivery.",
-          admin: sanitizeAdminUser(delivery.admin),
+          admin: await serializeAdminUser(delivery.admin),
         });
       }
 
@@ -653,7 +671,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.status(201).json(sanitizeAdminUser(delivery.admin));
+      res.status(201).json(await serializeAdminUser(delivery.admin));
     } catch (error: any) {
       res.status(400).json({ message: "Failed to create admin user", error: error?.message || 'Unknown error' });
     }
@@ -1076,7 +1094,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const updatedAdmin = await storage.updateAdminUser(id, updates);
-      res.json(sanitizeAdminUser(updatedAdmin));
+      res.json(await serializeAdminUser(updatedAdmin));
     } catch (error: any) {
       res.status(400).json({ message: "Failed to update admin user", error: error?.message });
     }

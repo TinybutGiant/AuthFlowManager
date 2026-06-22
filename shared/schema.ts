@@ -12,6 +12,7 @@ import {
   integer,
   boolean,
   date,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -72,6 +73,7 @@ export const adminUsers = pgTable("admin_users", {
   passwordSetupTokenHash: text("password_setup_token_hash"),
   passwordSetupExpiresAt: timestamp("password_setup_expires_at"),
   role: adminRoleEnum("role").notNull(),
+  accountType: text("account_type").notNull().default("admin_staff"),
   status: adminStatusEnum("status").notNull().default('pending'),
   createdBy: integer("created_by"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -93,6 +95,30 @@ export const adminUserApprovals = pgTable("admin_user_approvals", {
   approvedAt: timestamp("approved_at"),
   notes: text("notes"),
 });
+
+export const adminUserAccessGrants = pgTable(
+  "admin_user_access_grants",
+  {
+    id: serial("id").primaryKey(),
+    adminUserId: integer("admin_user_id").notNull().references(() => adminUsers.id, { onDelete: "cascade" }),
+    accessGroup: text("access_group").notNull(),
+    source: text("source"),
+    metadata: jsonb("metadata").notNull().default({}),
+    grantedBy: integer("granted_by").references(() => adminUsers.id),
+    grantedAt: timestamp("granted_at").notNull().defaultNow(),
+    revokedBy: integer("revoked_by").references(() => adminUsers.id),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_admin_user_access_grants_admin_user_id").on(table.adminUserId),
+    index("idx_admin_user_access_grants_access_group").on(table.accessGroup),
+    uniqueIndex("idx_admin_user_access_grants_active_unique")
+      .on(table.adminUserId, table.accessGroup)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);
 
 export const adminEngagements = pgTable("admin_engagements", {
   id: serial("id").primaryKey(),
@@ -205,6 +231,7 @@ export const adminUsersRelations = relations(adminUsers, ({ one, many }) => ({
   engagements: many(adminEngagements, { relationName: "engagementAdmin" }),
   lifecycleEvents: many(adminLifecycleEvents, { relationName: "eventAdmin" }),
   activityLogs: many(adminActivityLogs, { relationName: "activityLogAdmin" }),
+  accessGrants: many(adminUserAccessGrants, { relationName: "accessGrantAdmin" }),
 }));
 
 export const adminUserApprovalsRelations = relations(adminUserApprovals, ({ one }) => ({
@@ -222,6 +249,24 @@ export const adminUserApprovalsRelations = relations(adminUserApprovals, ({ one 
     fields: [adminUserApprovals.approvedBy],
     references: [adminUsers.id],
     relationName: "approvedBy"
+  }),
+}));
+
+export const adminUserAccessGrantsRelations = relations(adminUserAccessGrants, ({ one }) => ({
+  adminUser: one(adminUsers, {
+    fields: [adminUserAccessGrants.adminUserId],
+    references: [adminUsers.id],
+    relationName: "accessGrantAdmin",
+  }),
+  grantedByUser: one(adminUsers, {
+    fields: [adminUserAccessGrants.grantedBy],
+    references: [adminUsers.id],
+    relationName: "accessGrantGrantedBy",
+  }),
+  revokedByUser: one(adminUsers, {
+    fields: [adminUserAccessGrants.revokedBy],
+    references: [adminUsers.id],
+    relationName: "accessGrantRevokedBy",
   }),
 }));
 
@@ -338,6 +383,13 @@ export const insertAdminUserApprovalSchema = createInsertSchema(adminUserApprova
   approvedAt: true,
 });
 
+export const insertAdminUserAccessGrantSchema = createInsertSchema(adminUserAccessGrants).omit({
+  id: true,
+  grantedAt: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertAdminEngagementSchema = createInsertSchema(adminEngagements).omit({
   id: true,
   createdAt: true,
@@ -372,6 +424,8 @@ export type AdminUser = typeof adminUsers.$inferSelect;
 export type InsertAdminUser = z.infer<typeof insertAdminUserSchema>;
 export type AdminUserApproval = typeof adminUserApprovals.$inferSelect;
 export type InsertAdminUserApproval = z.infer<typeof insertAdminUserApprovalSchema>;
+export type AdminUserAccessGrant = typeof adminUserAccessGrants.$inferSelect;
+export type InsertAdminUserAccessGrant = z.infer<typeof insertAdminUserAccessGrantSchema>;
 export type AdminEngagement = typeof adminEngagements.$inferSelect;
 export type InsertAdminEngagement = z.infer<typeof insertAdminEngagementSchema>;
 export type AdminLifecycleEvent = typeof adminLifecycleEvents.$inferSelect;
@@ -384,6 +438,16 @@ export type AdminEngagementDocument = typeof adminEngagementDocuments.$inferSele
 export type InsertAdminEngagementDocument = z.infer<typeof insertAdminEngagementDocumentSchema>;
 
 export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support' | 'trainee_access';
+export type AdminAccountType = 'admin_staff' | 'trainee' | 'contractor' | 'employee' | 'advisor';
+export type AdminAccessGroup =
+  | 'finance_admin'
+  | 'verifier_admin'
+  | 'support_admin'
+  | 'super_admin'
+  | 'admin_operations'
+  | 'trainee_workspace'
+  | 'document_templates'
+  | 'lifecycle_jobs';
 export type AdminStatus = 'pending' | 'active' | 'inactive' | 'rejected';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 export type ApprovalAction = 'create' | 'change_role' | 'delete';

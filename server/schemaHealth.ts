@@ -6,12 +6,22 @@ const REQUIRED_TABLES = [
   "admin_activity_logs",
   "admin_engagement_documents",
   "admin_document_templates",
+  "admin_user_access_grants",
 ] as const;
 
 const REQUIRED_COLUMNS = [
   ["admin_users", "must_change_password"],
   ["admin_users", "password_setup_token_hash"],
   ["admin_users", "password_setup_expires_at"],
+  ["admin_users", "account_type"],
+  ["admin_user_access_grants", "admin_user_id"],
+  ["admin_user_access_grants", "access_group"],
+  ["admin_user_access_grants", "source"],
+  ["admin_user_access_grants", "metadata"],
+  ["admin_user_access_grants", "granted_by"],
+  ["admin_user_access_grants", "granted_at"],
+  ["admin_user_access_grants", "revoked_by"],
+  ["admin_user_access_grants", "revoked_at"],
   ["admin_engagements", "ended_at"],
   ["admin_engagement_documents", "file_key"],
   ["admin_engagement_documents", "file_sha256"],

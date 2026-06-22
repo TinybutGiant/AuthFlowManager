@@ -1,4 +1,14 @@
 export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support' | 'trainee_access';
+export type AdminAccountType = 'admin_staff' | 'trainee' | 'contractor' | 'employee' | 'advisor';
+export type AdminAccessGroup =
+  | 'finance_admin'
+  | 'verifier_admin'
+  | 'support_admin'
+  | 'super_admin'
+  | 'admin_operations'
+  | 'trainee_workspace'
+  | 'document_templates'
+  | 'lifecycle_jobs';
 export type AdminStatus = 'pending' | 'active' | 'inactive' | 'rejected';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 export type ApprovalAction = 'create' | 'change_role' | 'delete';
@@ -8,6 +18,8 @@ export interface AdminUser {
   name: string;
   email: string;
   role: AdminRole;
+  accountType?: AdminAccountType;
+  accessGroups?: AdminAccessGroup[];
   status: AdminStatus;
   mustChangePassword?: boolean;
   createdBy?: number;
