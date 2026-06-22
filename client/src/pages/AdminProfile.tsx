@@ -577,21 +577,28 @@ export default function AdminProfile() {
                           <span>{engagement.startDate || 'Not set'}</span>
                         </div>
                         <div>
-                          <span className="text-muted-foreground">End: </span>
+                          <span className="text-muted-foreground">
+                            End <RequiredLabel />:{" "}
+                          </span>
                           <span>{engagement.endDate || 'Not set'}</span>
                         </div>
                         <div>
-                          <span className="text-muted-foreground">Supervisor: </span>
+                          <span className="text-muted-foreground">
+                            Supervisor <RequiredLabel />:{" "}
+                          </span>
                           <span>{engagement.supervisorAdminId ? `Admin ID ${engagement.supervisorAdminId}` : 'Not set'}</span>
                         </div>
                         <div>
                           <span className="text-muted-foreground">Expected Hours: </span>
                           <span>{engagement.expectedHoursPerWeek ?? 'Not set'}</span>
                         </div>
+                        <div className="md:col-span-2">
+                          <span className="text-muted-foreground">
+                            Work Scope <RequiredLabel />:{" "}
+                          </span>
+                          <span>{engagement.workScope || 'Not set'}</span>
+                        </div>
                       </div>
-                      {engagement.workScope && (
-                        <p className="text-sm text-muted-foreground mt-3">{engagement.workScope}</p>
-                      )}
                       {admin.role === "trainee_access" && (
                         <div className="mt-4 rounded-md border border-border p-4" data-testid={`card-offer-letter-${engagement.id}`}>
                           {(() => {
