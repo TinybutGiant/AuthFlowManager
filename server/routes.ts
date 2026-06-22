@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, requireAuth, requireRole, jwtUtils } from "./jwtAuth";
+import { setupAuth, requireAuth, requireRole, requireAccessGroup, requireAnyAccessGroup, jwtUtils } from "./jwtAuth";
 import { insertAdminUserApprovalSchema, type AdminRole } from "@shared/schema";
 import {
   insertGuideApplicationApprovalSchema,
@@ -413,7 +413,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Trainee-scoped workspace routes. These never accept user ids or engagement ids
   // from trainee-controlled params/body; scope is always req.adminUser.id.
-  app.get("/api/trainee/me/engagement", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.get(
+    "/api/trainee/me/engagement",
+    requireAuth,
+    requireAnyAccessGroup(['trainee_offer_portal', 'trainee_workspace']),
+    async (req: any, res) => {
     try {
       const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
       if (!engagement) {
@@ -430,7 +434,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/trainee/me/lifecycle-events", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.get("/api/trainee/me/lifecycle-events", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
     try {
       const hasAcceptedOffer = await hasAcceptedOfferForCurrentTrainee(req.adminUser.id);
       if (!hasAcceptedOffer) {
@@ -444,7 +448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/trainee/me/documents", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.get("/api/trainee/me/documents", requireAuth, requireAccessGroup('trainee_offer_portal'), async (req: any, res) => {
     try {
       const documents = await storage.listTraineeEngagementDocuments(req.adminUser.id);
       res.json(
@@ -457,7 +461,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/trainee/me/documents/:documentId/view", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.post("/api/trainee/me/documents/:documentId/view", requireAuth, requireAccessGroup('trainee_offer_portal'), async (req: any, res) => {
     try {
       const document = await viewOfferLetterForTrainee({
         storage,
@@ -470,7 +474,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/trainee/me/documents/:documentId/download", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.get("/api/trainee/me/documents/:documentId/download", requireAuth, requireAccessGroup('trainee_offer_portal'), async (req: any, res) => {
     try {
       const result = await getOfferLetterDownload({
         storage,
@@ -484,7 +488,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/trainee/me/documents/:documentId/accept", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.post("/api/trainee/me/documents/:documentId/accept", requireAuth, requireAccessGroup('trainee_offer_portal'), async (req: any, res) => {
     try {
       const document = await acceptOfferLetterForTrainee({
         storage,
@@ -499,7 +503,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/trainee/me/activity-logs", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.get("/api/trainee/me/activity-logs", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
     try {
       const hasAcceptedOffer = await hasAcceptedOfferForCurrentTrainee(req.adminUser.id);
       if (!hasAcceptedOffer) {
@@ -513,7 +517,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/trainee/me/activity-logs", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.post("/api/trainee/me/activity-logs", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
     try {
       const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
       if (!engagement || engagement.status !== 'active') {
@@ -562,7 +566,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/trainee/me/end-engagement", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
+  app.post(
+    "/api/trainee/me/end-engagement",
+    requireAuth,
+    requireAnyAccessGroup(['trainee_offer_portal', 'trainee_workspace']),
+    async (req: any, res) => {
     try {
       const payload = traineeEndEngagementPayloadSchema.parse(req.body ?? {});
       const result = await selfOffboardTraineeEngagement({

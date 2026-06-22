@@ -43,7 +43,11 @@ export default function Login() {
         title: "登录成功",
         description: `欢迎回来，${data.user.name || data.user.email}`,
       });
-      window.location.href = data.user.role === "trainee_access" ? "/trainee" : "/";
+      const accessGroups = data.user.accessGroups ?? [];
+      const hasTraineeAccess = accessGroups.some((accessGroup: string) =>
+        ["trainee_offer_portal", "trainee_workspace"].includes(accessGroup)
+      );
+      window.location.href = hasTraineeAccess ? "/trainee" : "/";
     },
     onError: (error: any) => {
       toast({

@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AdminLayout from "@/components/AdminLayout";
+import type { AdminAccessGroup } from "@/types/admin";
 
 // Pages
 import Login from "@/pages/Login";
@@ -44,12 +45,16 @@ function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const [location, setLocation] = useLocation();
   const adminUser = (user as any)?.adminUser;
+  const accessGroups = ((user as any)?.accessGroups ?? adminUser?.accessGroups ?? []) as AdminAccessGroup[];
+  const hasTraineeAccess = accessGroups.some((accessGroup) =>
+    ["trainee_offer_portal", "trainee_workspace"].includes(accessGroup)
+  );
 
   React.useEffect(() => {
-    if (!isLoading && isAuthenticated && location === "/" && adminUser?.role === "trainee_access") {
+    if (!isLoading && isAuthenticated && location === "/" && hasTraineeAccess) {
       setLocation("/trainee");
     }
-  }, [adminUser?.role, isAuthenticated, isLoading, location, setLocation]);
+  }, [hasTraineeAccess, isAuthenticated, isLoading, location, setLocation]);
 
   if (isLoading) {
     return (
@@ -62,7 +67,7 @@ function Router() {
     );
   }
 
-  if (isAuthenticated && location === "/" && adminUser?.role === "trainee_access") {
+  if (isAuthenticated && location === "/" && hasTraineeAccess) {
     return null;
   }
 
@@ -76,7 +81,7 @@ function Router() {
         <>
           {/* Dashboard */}
           <Route path="/trainee">
-            <ProtectedRoute allowedRoles={["trainee_access"]}>
+            <ProtectedRoute allowedAccessGroups={["trainee_offer_portal", "trainee_workspace"]}>
               <AdminLayout>
                 <TraineeWorkspace />
               </AdminLayout>

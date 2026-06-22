@@ -1,6 +1,6 @@
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { AdminRole } from "@/types/admin";
+import { AdminAccessGroup, AdminRole } from "@/types/admin";
 import { useToast } from "@/hooks/use-toast";
 import { tokenManager } from "@/lib/queryClient";
 import { useQueryClient } from "@tanstack/react-query";
@@ -8,10 +8,11 @@ import { useEffect } from "react";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  allowedRoles: AdminRole[];
+  allowedRoles?: AdminRole[];
+  allowedAccessGroups?: AdminAccessGroup[];
 }
 
-export default function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
+export default function ProtectedRoute({ children, allowedRoles = [], allowedAccessGroups = [] }: ProtectedRouteProps) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -52,7 +53,13 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
   }
 
   const adminUser = (user as any)?.adminUser;
-  if (!adminUser || !allowedRoles.includes(adminUser.role)) {
+  const accessGroups = ((user as any)?.accessGroups ?? adminUser?.accessGroups ?? []) as AdminAccessGroup[];
+  const hasAllowedRole = allowedRoles.length > 0 && allowedRoles.includes(adminUser?.role);
+  const hasAllowedAccessGroup =
+    allowedAccessGroups.length > 0 &&
+    allowedAccessGroups.some((accessGroup) => accessGroups.includes(accessGroup));
+
+  if (!adminUser || (!hasAllowedRole && !hasAllowedAccessGroup)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">

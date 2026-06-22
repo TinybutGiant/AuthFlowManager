@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import type { Express, RequestHandler } from "express";
 import { storage } from "./storage";
+import type { AdminAccessGroup } from "@shared/schema";
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -92,6 +93,36 @@ export function requireRole(allowedRoles: string[]) {
       res.status(500).json({ message: "Authorization error" });
     }
   };
+}
+
+export function requireAnyAccessGroup(allowedAccessGroups: AdminAccessGroup[]) {
+  return async (req: any, res: any, next: any) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const adminUser = await storage.getAdminUser(parseInt(req.user.id));
+      if (!adminUser || adminUser.status !== 'active') {
+        return res.status(401).json({ message: "Admin user not found or inactive" });
+      }
+
+      const activeAccessGroups = await storage.getActiveAccessGroupsForAdminUser(adminUser.id);
+      if (!allowedAccessGroups.some((accessGroup) => activeAccessGroups.includes(accessGroup))) {
+        return res.status(403).json({ message: "Insufficient permissions" });
+      }
+
+      req.adminUser = adminUser;
+      req.activeAccessGroups = activeAccessGroups;
+      next();
+    } catch (error) {
+      res.status(500).json({ message: "Authorization error" });
+    }
+  };
+}
+
+export function requireAccessGroup(accessGroup: AdminAccessGroup) {
+  return requireAnyAccessGroup([accessGroup]);
 }
 
 export async function setupAuth(app: Express) {

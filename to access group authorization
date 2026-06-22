@@ -1,0 +1,15 @@
+warning: in the working copy of 'client/src/App.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'client/src/components/ProtectedRoute.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'client/src/components/Sidebar.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'client/src/pages/Login.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/adminEngagementValidation.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/jwtAuth.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/routes.ts', LF will be replaced by CRLF the next time Git touches it
+ client/src/App.tsx                       |  13 [32m+++[m[31m-[m
+ client/src/components/ProtectedRoute.tsx |  15 [32m+++[m[31m-[m
+ client/src/components/Sidebar.tsx        |  19 [32m+++[m[31m--[m
+ client/src/pages/Login.tsx               |   6 [32m+[m[31m-[m
+ server/adminEngagementValidation.test.ts | 127 [32m++++++++++++++++++++++++[m[31m-------[m
+ server/jwtAuth.ts                        |  33 [32m+++++++[m[31m-[m
+ server/routes.ts                         |  28 [32m++++[m[31m---[m
+ 7 files changed, 186 insertions(+), 55 deletions(-)

@@ -21,7 +21,7 @@ import {
   GraduationCap,
   RefreshCw,
 } from "lucide-react";
-import { AdminRole } from "@/types/admin";
+import { AdminAccessGroup, AdminRole } from "@/types/admin";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -32,7 +32,8 @@ interface MenuItem {
   title: string;
   href?: string;
   icon: React.ElementType;
-  roles: AdminRole[];
+  roles?: AdminRole[];
+  accessGroups?: AdminAccessGroup[];
   badge?: number;
   children?: MenuItem[];
 }
@@ -48,7 +49,7 @@ const menuItems: MenuItem[] = [
     title: "Trainee Workspace",
     href: "/trainee",
     icon: GraduationCap,
-    roles: ['trainee_access'],
+    accessGroups: ['trainee_offer_portal', 'trainee_workspace'],
   },
   {
     title: "Pending Requests",
@@ -140,6 +141,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   
   const adminUser = (user as any)?.adminUser;
   const userRole = adminUser?.role as AdminRole;
+  const userAccessGroups = ((user as any)?.accessGroups ?? adminUser?.accessGroups ?? []) as AdminAccessGroup[];
 
   const toggleSection = (title: string) => {
     setExpandedSections(prev => 
@@ -149,12 +151,17 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
     );
   };
 
-  const hasAccess = (roles: AdminRole[]) => {
-    return userRole && roles.includes(userRole);
+  const hasAccess = (item: MenuItem) => {
+    const hasRoleAccess = Boolean(item.roles?.length && userRole && item.roles.includes(userRole));
+    const hasAccessGroupAccess = Boolean(
+      item.accessGroups?.length &&
+      item.accessGroups.some((accessGroup) => userAccessGroups.includes(accessGroup))
+    );
+    return hasRoleAccess || hasAccessGroupAccess;
   };
 
   const renderMenuItem = (item: MenuItem) => {
-    if (!hasAccess(item.roles)) return null;
+    if (!hasAccess(item)) return null;
 
     if (item.children) {
       const isExpanded = expandedSections.includes(item.title);

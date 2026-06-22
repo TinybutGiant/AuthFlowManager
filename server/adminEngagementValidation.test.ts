@@ -411,7 +411,7 @@ test("Phase B.1 migration adds trainee offer portal and accepted-offer workspace
   assert.match(migration, /intentionally not revoked/);
 });
 
-test("Phase B storage dual-writes account type and role-derived grants while preserving role auth", async () => {
+test("Phase B storage dual-writes account type and role-derived grants while preserving legacy non-trainee role auth", async () => {
   const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
 
@@ -425,11 +425,13 @@ test("Phase B storage dual-writes account type and role-derived grants while pre
   assert.match(routesSource, /accessGroups: serializedAdminUser\.accessGroups/);
   assert.match(routesSource, /adminUser: serializedAdminUser/);
   assert.match(routesSource, /requireRole\(\['super_admin'\]\)/);
-  assert.match(routesSource, /requireRole\(\['trainee_access'\]\)/);
-  assert.doesNotMatch(routesSource, /requireAccessGroup|accessGroups\.includes/);
+  assert.match(routesSource, /requireRole\(\['super_admin', 'admin_finance'\]\)/);
+  assert.match(routesSource, /requireRole\(\['super_admin', 'admin_verifier'\]\)/);
+  assert.match(routesSource, /requireRole\(\['super_admin', 'admin_support'\]\)/);
+  assert.doesNotMatch(routesSource, /requireAccessGroup\('finance_admin'\)|requireAccessGroup\('verifier_admin'\)|requireAccessGroup\('support_admin'\)|requireAccessGroup\('super_admin'\)/);
 });
 
-test("Phase B.1 offer acceptance grants trainee workspace without replacing role auth", async () => {
+test("Phase B.1 offer acceptance grants trainee workspace before access-group runtime auth", async () => {
   const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
   const offerLetterSource = await readFile(new URL("./offerLetterService.ts", import.meta.url), "utf8");
@@ -448,7 +450,23 @@ test("Phase B.1 offer acceptance grants trainee workspace without replacing role
   assert.match(routesSource, /engagement\.status !== 'active'/);
   assert.match(offerLetterSource, /if \(document\.status === "accepted"\)/);
   assert.match(offerLetterSource, /storage\.markOfferLetterAccepted\(input\.documentId, input\.adminUserId/);
-  assert.doesNotMatch(routesSource, /requireAccessGroup|accessGroups\.includes/);
+  assert.match(routesSource, /requireAccessGroup\('trainee_workspace'\)/);
+});
+
+test("Phase C.1 access group middleware checks active server-side grants after authentication", async () => {
+  const jwtAuthSource = await readFile(new URL("./jwtAuth.ts", import.meta.url), "utf8");
+  const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
+
+  assert.match(jwtAuthSource, /export function requireAnyAccessGroup/);
+  assert.match(jwtAuthSource, /export function requireAccessGroup/);
+  assert.match(jwtAuthSource, /if \(!req\.user\)/);
+  assert.match(jwtAuthSource, /storage\.getAdminUser\(parseInt\(req\.user\.id\)\)/);
+  assert.match(jwtAuthSource, /adminUser\.status !== 'active'/);
+  assert.match(jwtAuthSource, /storage\.getActiveAccessGroupsForAdminUser\(adminUser\.id\)/);
+  assert.match(jwtAuthSource, /activeAccessGroups\.includes\(accessGroup\)/);
+  assert.match(jwtAuthSource, /req\.activeAccessGroups = activeAccessGroups/);
+  assert.match(jwtAuthSource, /export function requireRole/);
+  assert.match(storageSource, /isNull\(adminUserAccessGrants\.revokedAt\)/);
 });
 
 test("create admin UI separates Identity Type, Access Groups, and Engagement fields", async () => {
@@ -551,18 +569,28 @@ test("trainee access does not gain existing sensitive sidebar routes", async () 
 
   assert.match(source, /title: "Trainee Workspace"/);
   assert.match(source, /href: "\/trainee"/);
-  assert.match(source, /roles: \['trainee_access'\]/);
+  assert.match(source, /accessGroups: \['trainee_offer_portal', 'trainee_workspace'\]/);
+  assert.doesNotMatch(source, /title: "Trainee Workspace"[\s\S]*roles: \['trainee_access'\]/);
 });
 
 test("trainee login redirects to trainee workspace and app defines safe route", async () => {
   const loginSource = await readFile(new URL("../client/src/pages/Login.tsx", import.meta.url), "utf8");
   const appSource = await readFile(new URL("../client/src/App.tsx", import.meta.url), "utf8");
+  const protectedRouteSource = await readFile(new URL("../client/src/components/ProtectedRoute.tsx", import.meta.url), "utf8");
   const traineePageSource = await readFile(new URL("../client/src/pages/TraineeWorkspace.tsx", import.meta.url), "utf8");
 
-  assert.match(loginSource, /data\.user\.role === "trainee_access" \? "\/trainee" : "\/"/);
+  assert.match(loginSource, /data\.user\.accessGroups \?\? \[\]/);
+  assert.match(loginSource, /trainee_offer_portal/);
+  assert.match(loginSource, /trainee_workspace/);
+  assert.doesNotMatch(loginSource, /data\.user\.role === "trainee_access"/);
   assert.match(appSource, /path="\/trainee"/);
-  assert.match(appSource, /allowedRoles={\["trainee_access"\]}/);
+  assert.match(appSource, /allowedAccessGroups={\["trainee_offer_portal", "trainee_workspace"\]}/);
+  assert.match(appSource, /hasTraineeAccess/);
+  assert.doesNotMatch(appSource, /adminUser\?\.role === "trainee_access"/);
   assert.doesNotMatch(appSource, /allowedRoles=\{\[[^\]]*"trainee_access"[^\]]*"admin_finance"/);
+  assert.match(protectedRouteSource, /allowedAccessGroups/);
+  assert.match(protectedRouteSource, /accessGroups\.includes\(accessGroup\)/);
+  assert.match(protectedRouteSource, /allowedRoles/);
   assert.match(traineePageSource, /Trainee Workspace/);
   assert.match(traineePageSource, /Current Engagement/);
   assert.match(traineePageSource, /Activity Log/);
@@ -642,7 +670,8 @@ test("offer letter APIs use admin or trainee scoped permissions", async () => {
     const start = source.indexOf(required);
     assert.notEqual(start, -1, `${required} should exist`);
     const block = source.slice(start, source.indexOf(");", start));
-    assert.match(block, /requireRole\(\['trainee_access'\]\)/);
+    assert.match(block, /requireAccessGroup\('trainee_offer_portal'\)/);
+    assert.doesNotMatch(block, /requireRole\(\['trainee_access'\]\)/);
     assert.match(block, /req\.adminUser\.id/);
     assert.doesNotMatch(block, /req\.body\.adminUserId|req\.body\.engagementId|req\.params\.adminUserId/);
   }
@@ -760,27 +789,65 @@ test("document template management is super admin only and renders plain-text pr
 test("trainee workspace APIs are scoped to authenticated trainee", async () => {
   const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
 
-  for (const route of [
-    'app.get("/api/trainee/me/engagement"',
-    'app.get("/api/trainee/me/lifecycle-events"',
-    'app.get("/api/trainee/me/documents"',
-    'app.post("/api/trainee/me/documents/:documentId/view"',
-    'app.get("/api/trainee/me/documents/:documentId/download"',
-    'app.post("/api/trainee/me/documents/:documentId/accept"',
-    'app.get("/api/trainee/me/activity-logs"',
-    'app.post("/api/trainee/me/activity-logs"',
-  ]) {
-    const start = source.indexOf(route);
-    assert.notEqual(start, -1, `${route} should exist`);
-    const end = source.indexOf('});', start);
-    const block = source.slice(start, end);
+  const routeExpectations = [
+    {
+      method: "get",
+      route: '"/api/trainee/me/engagement"',
+      access: /requireAnyAccessGroup\(\['trainee_offer_portal', 'trainee_workspace'\]\)/,
+    },
+    {
+      method: "get",
+      route: '"/api/trainee/me/lifecycle-events"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
+    {
+      method: "get",
+      route: '"/api/trainee/me/documents"',
+      access: /requireAccessGroup\('trainee_offer_portal'\)/,
+    },
+    {
+      method: "post",
+      route: '"/api/trainee/me/documents/:documentId/view"',
+      access: /requireAccessGroup\('trainee_offer_portal'\)/,
+    },
+    {
+      method: "get",
+      route: '"/api/trainee/me/documents/:documentId/download"',
+      access: /requireAccessGroup\('trainee_offer_portal'\)/,
+    },
+    {
+      method: "post",
+      route: '"/api/trainee/me/documents/:documentId/accept"',
+      access: /requireAccessGroup\('trainee_offer_portal'\)/,
+    },
+    {
+      method: "get",
+      route: '"/api/trainee/me/activity-logs"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
+    {
+      method: "post",
+      route: '"/api/trainee/me/activity-logs"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
+  ];
 
-    assert.match(block, /requireAuth, requireRole\(\['trainee_access'\]\)/);
+  for (const { method, route, access } of routeExpectations) {
+    const routeStart = source.indexOf(route);
+    assert.notEqual(routeStart, -1, `${route} should exist`);
+    const methodStart = source.lastIndexOf(`app.${method}(`, routeStart);
+    assert.notEqual(methodStart, -1, `app.${method} ${route} should exist`);
+    const end = source.indexOf('\n  app.', routeStart + 1);
+    const block = source.slice(methodStart, end === -1 ? source.length : end);
+
+    assert.match(block, /requireAuth/);
+    assert.match(block, access);
+    assert.doesNotMatch(block, /requireRole\(\['trainee_access'\]\)/);
     assert.match(block, /req\.adminUser\.id/);
     assert.doesNotMatch(block, /req\.params\.adminUserId|req\.body\.adminUserId|req\.body\.engagementId/);
   }
 
-  const postStart = source.indexOf('app.post("/api/trainee/me/activity-logs"');
+  const postStart = source.indexOf('"/api/trainee/me/activity-logs"');
   const postEnd = source.indexOf('  // Admin management routes', postStart);
   const postBlock = source.slice(postStart, postEnd);
 
@@ -789,11 +856,13 @@ test("trainee workspace APIs are scoped to authenticated trainee", async () => {
   assert.match(postBlock, /eventType: 'activity_log_submitted'/);
   assert.match(postBlock, /status: 'submitted'/);
 
-  const endStart = source.indexOf('app.post("/api/trainee/me/end-engagement"');
+  const endStart = source.indexOf('"/api/trainee/me/end-engagement"');
   const endEnd = source.indexOf('  // Admin management routes', endStart);
   const endBlock = source.slice(endStart, endEnd);
 
-  assert.match(endBlock, /requireAuth, requireRole\(\['trainee_access'\]\)/);
+  assert.match(endBlock, /requireAuth/);
+  assert.match(endBlock, /requireAnyAccessGroup\(\['trainee_offer_portal', 'trainee_workspace'\]\)/);
+  assert.doesNotMatch(endBlock, /requireRole\(\['trainee_access'\]\)/);
   assert.match(endBlock, /traineeEndEngagementPayloadSchema/);
   assert.match(endBlock, /selfOffboardTraineeEngagement/);
   assert.match(endBlock, /adminUserId: req\.adminUser\.id/);
@@ -802,8 +871,8 @@ test("trainee workspace APIs are scoped to authenticated trainee", async () => {
 
 test("trainee engagement empty state and lifecycle metadata are sanitized", async () => {
   const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
-  const engagementStart = source.indexOf('app.get("/api/trainee/me/engagement"');
-  const engagementEnd = source.indexOf('app.get("/api/trainee/me/lifecycle-events"', engagementStart);
+  const engagementStart = source.indexOf('"/api/trainee/me/engagement"');
+  const engagementEnd = source.indexOf('"/api/trainee/me/lifecycle-events"', engagementStart);
   const engagementBlock = source.slice(engagementStart, engagementEnd);
 
   assert.match(engagementBlock, /return res\.json\(null\)/);
