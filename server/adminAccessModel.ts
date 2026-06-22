@@ -22,7 +22,7 @@ export function deriveAccessGroupsFromLegacyRole(role: AdminRole): AdminAccessGr
     case "admin_support":
       return ["support_admin"];
     case "trainee_access":
-      return ["trainee_workspace"];
+      return ["trainee_offer_portal"];
   }
 }
 

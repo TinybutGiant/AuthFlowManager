@@ -18,8 +18,8 @@ export const ASSIGNABLE_ACCESS_GROUP_OPTIONS: Array<{
 ];
 
 export const DEFAULT_TRAINEE_ACCESS_GROUP = {
-  value: "trainee_workspace",
-  label: "Trainee Workspace",
+  value: "trainee_offer_portal",
+  label: "Trainee Offer Portal",
 } as const;
 
 export function deriveLegacyRoleFromIdentityAndAccessGroup(

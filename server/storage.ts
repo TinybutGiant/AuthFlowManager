@@ -262,6 +262,47 @@ export class DatabaseStorage implements IStorage {
     await this.createRoleDerivedAccessGrants(tx, adminUserId, role);
   }
 
+  private async createTraineeWorkspaceGrantForAcceptedOffer(
+    tx: Pick<typeof db, "insert">,
+    input: { adminUserId: number; engagementId: number; documentId: number },
+  ) {
+    await tx
+      .insert(adminUserAccessGrants)
+      .values({
+        adminUserId: input.adminUserId,
+        accessGroup: "trainee_workspace",
+        source: "offer_accepted",
+        metadata: {
+          documentId: input.documentId,
+          engagementId: input.engagementId,
+        },
+        grantedBy: input.adminUserId,
+      })
+      .onConflictDoNothing();
+  }
+
+  private async revokeActiveTraineeAccessGrants(
+    tx: Pick<typeof db, "update">,
+    adminUserId: number,
+    input: { revokedBy?: number | null; now?: Date } = {},
+  ) {
+    const now = input.now ?? new Date();
+    await tx
+      .update(adminUserAccessGrants)
+      .set({
+        revokedAt: now,
+        revokedBy: input.revokedBy ?? null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(adminUserAccessGrants.adminUserId, adminUserId),
+          inArray(adminUserAccessGrants.accessGroup, ["trainee_offer_portal", "trainee_workspace"]),
+          isNull(adminUserAccessGrants.revokedAt),
+        ),
+      );
+  }
+
   // User operations for JWT Auth
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
@@ -578,6 +619,8 @@ export class DatabaseStorage implements IStorage {
       }
 
       if (admin.role === 'trainee_access') {
+        await this.revokeActiveTraineeAccessGrants(tx, targetAdminId, { revokedBy: approvedBy });
+
         const cancelledEngagements = await tx
           .update(adminEngagements)
           .set({
@@ -1082,7 +1125,16 @@ export class DatabaseStorage implements IStorage {
           )
         );
 
-      if (!existing || existing.status === "accepted" || !["sent", "viewed"].includes(existing.status)) {
+      if (existing?.status === "accepted") {
+        await this.createTraineeWorkspaceGrantForAcceptedOffer(tx, {
+          adminUserId,
+          engagementId: existing.engagementId,
+          documentId: existing.id,
+        });
+        return existing;
+      }
+
+      if (!existing || !["sent", "viewed"].includes(existing.status)) {
         return existing;
       }
 
@@ -1126,6 +1178,12 @@ export class DatabaseStorage implements IStorage {
         actorAdminId: adminUserId,
         metadata: this.safeDocumentEventMetadata(document),
         notes: null,
+      });
+
+      await this.createTraineeWorkspaceGrantForAcceptedOffer(tx, {
+        adminUserId,
+        engagementId: document.engagementId,
+        documentId: document.id,
       });
 
       return document;
@@ -1349,6 +1407,8 @@ export class DatabaseStorage implements IStorage {
           .returning();
       }
 
+      await this.revokeActiveTraineeAccessGrants(tx, offboardingEngagement.adminUserId, { now });
+
       await tx.insert(adminLifecycleEvents).values({
         adminUserId: offboardingEngagement.adminUserId,
         engagementId: offboardingEngagement.id,
@@ -1479,6 +1539,11 @@ export class DatabaseStorage implements IStorage {
             )
           );
 
+        await this.revokeActiveTraineeAccessGrants(tx, adminUserId, {
+          revokedBy: adminUserId,
+          now,
+        });
+
         await tx.insert(adminLifecycleEvents).values({
           adminUserId,
           engagementId: engagement.id,
@@ -1578,6 +1643,11 @@ export class DatabaseStorage implements IStorage {
             eq(adminUsers.role, 'trainee_access')
           )
         );
+
+      await this.revokeActiveTraineeAccessGrants(tx, adminUserId, {
+        revokedBy: adminUserId,
+        now,
+      });
 
       await tx.insert(adminLifecycleEvents).values({
         adminUserId,

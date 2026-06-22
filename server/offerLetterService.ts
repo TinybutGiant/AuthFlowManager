@@ -586,7 +586,11 @@ export async function acceptOfferLetterForTrainee(input: {
     throw new OfferLetterError(404, "Offer letter document not found");
   }
   if (document.status === "accepted") {
-    return document;
+    return await input.storage.markOfferLetterAccepted(input.documentId, input.adminUserId, {
+      now: input.now ?? new Date(),
+      ip: input.ip ?? null,
+      userAgent: input.userAgent ?? null,
+    }) ?? document;
   }
   if (document.status === "voided") {
     throw new OfferLetterError(409, "This offer letter is no longer available");

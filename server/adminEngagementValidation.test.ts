@@ -349,7 +349,7 @@ test("Phase B legacy role mapping derives account type and access grants", () =>
   assert.equal(deriveAccountTypeFromLegacyRole("admin_support"), "admin_staff");
   assert.equal(deriveAccountTypeFromLegacyRole("super_admin"), "admin_staff");
 
-  assert.deepEqual(deriveAccessGroupsFromLegacyRole("trainee_access"), ["trainee_workspace"]);
+  assert.deepEqual(deriveAccessGroupsFromLegacyRole("trainee_access"), ["trainee_offer_portal"]);
   assert.deepEqual(deriveAccessGroupsFromLegacyRole("admin_finance"), ["finance_admin"]);
   assert.deepEqual(deriveAccessGroupsFromLegacyRole("admin_verifier"), ["verifier_admin"]);
   assert.deepEqual(deriveAccessGroupsFromLegacyRole("admin_support"), ["support_admin"]);
@@ -394,6 +394,23 @@ test("Phase B migration adds account type and role-derived access grants without
   assert.doesNotMatch(migration, /DROP COLUMN "role"|ALTER TYPE "admin_role"/);
 });
 
+test("Phase B.1 migration adds trainee offer portal and accepted-offer workspace grants", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0012_trainee_offer_portal_grants.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /'trainee_offer_portal'/);
+  assert.match(migration, /"admin_users"\."role" = 'trainee_access'/);
+  assert.match(migration, /"admin_users"\."status" = 'active'/);
+  assert.match(migration, /"admin_engagement_documents"\."status" = 'accepted'/);
+  assert.match(migration, /"admin_engagement_documents"\."accepted_at" IS NOT NULL/);
+  assert.match(migration, /'offer_accepted_backfill'/);
+  assert.match(migration, /"access_group" = 'trainee_workspace'/);
+  assert.match(migration, /"revoked_at" IS NULL/);
+  assert.match(migration, /intentionally not revoked/);
+});
+
 test("Phase B storage dual-writes account type and role-derived grants while preserving role auth", async () => {
   const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
@@ -412,6 +429,28 @@ test("Phase B storage dual-writes account type and role-derived grants while pre
   assert.doesNotMatch(routesSource, /requireAccessGroup|accessGroups\.includes/);
 });
 
+test("Phase B.1 offer acceptance grants trainee workspace without replacing role auth", async () => {
+  const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const offerLetterSource = await readFile(new URL("./offerLetterService.ts", import.meta.url), "utf8");
+
+  assert.match(storageSource, /createTraineeWorkspaceGrantForAcceptedOffer/);
+  assert.match(storageSource, /accessGroup: "trainee_workspace"/);
+  assert.match(storageSource, /source: "offer_accepted"/);
+  assert.match(storageSource, /documentId: document\.id/);
+  assert.match(storageSource, /engagementId: document\.engagementId/);
+  assert.match(storageSource, /existing\?\.status === "accepted"/);
+  assert.match(storageSource, /\.onConflictDoNothing\(\)/);
+  assert.match(storageSource, /revokeActiveTraineeAccessGrants/);
+  assert.match(routesSource, /hasAcceptedOfferForCurrentTrainee/);
+  assert.match(routesSource, /Offer acceptance is required to view trainee activity logs/);
+  assert.match(routesSource, /Offer acceptance is required before submitting activity logs/);
+  assert.match(routesSource, /engagement\.status !== 'active'/);
+  assert.match(offerLetterSource, /if \(document\.status === "accepted"\)/);
+  assert.match(offerLetterSource, /storage\.markOfferLetterAccepted\(input\.documentId, input\.adminUserId/);
+  assert.doesNotMatch(routesSource, /requireAccessGroup|accessGroups\.includes/);
+});
+
 test("create admin UI separates Identity Type, Access Groups, and Engagement fields", async () => {
   const source = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
   const identitySource = await readFile(new URL("../client/src/lib/adminIdentity.ts", import.meta.url), "utf8");
@@ -424,7 +463,7 @@ test("create admin UI separates Identity Type, Access Groups, and Engagement fie
     source.indexOf('{isTraineeIdentity &&')
   );
   const defaultAccessGroupSection = source.slice(
-    source.indexOf('Default Access Groups'),
+    source.indexOf('Initial Access'),
     source.indexOf('<h2 className="text-lg font-medium text-foreground">Engagement</h2>')
   );
   const workAuthorizationSection = source.slice(
@@ -441,9 +480,12 @@ test("create admin UI separates Identity Type, Access Groups, and Engagement fie
   assert.match(identitySource, /Finance Admin/);
   assert.match(identitySource, /Verifier Admin/);
   assert.match(identitySource, /Support Admin/);
-  assert.match(source, /Default Access Groups/);
-  assert.match(defaultAccessGroupSection, /Trainee Workspace/);
-  assert.match(defaultAccessGroupSection, /Trainee accounts receive limited Trainee Workspace access by default/);
+  assert.match(source, /Initial Access/);
+  assert.match(identitySource, /Trainee Offer Portal/);
+  assert.match(identitySource, /trainee_offer_portal/);
+  assert.match(defaultAccessGroupSection, /DEFAULT_TRAINEE_ACCESS_GROUP\.label/);
+  assert.match(defaultAccessGroupSection, /Trainee accounts can review and accept their offer before full workspace access is enabled/);
+  assert.match(defaultAccessGroupSection, /Trainee Workspace access activates after offer acceptance/);
   assert.match(source, /isTraineeIdentity &&/);
   assert.match(source, />Engagement</);
   assert.match(source, />Work Authorization</);
@@ -525,6 +567,9 @@ test("trainee login redirects to trainee workspace and app defines safe route", 
   assert.match(traineePageSource, /Current Engagement/);
   assert.match(traineePageSource, /Activity Log/);
   assert.match(traineePageSource, /Recent Activity Logs/);
+  assert.match(traineePageSource, /Please review and accept your offer letter to unlock the Trainee Workspace/);
+  assert.match(traineePageSource, /Your offer has been accepted\. Activity logs will be available when your engagement becomes active/);
+  assert.match(traineePageSource, /enabled: hasAcceptedOffer/);
   assert.match(traineePageSource, /This is not a payroll timesheet/);
   assert.match(traineePageSource, /Activity log submission is available only when your engagement is active/);
   assert.match(traineePageSource, /No activity logs submitted yet/);

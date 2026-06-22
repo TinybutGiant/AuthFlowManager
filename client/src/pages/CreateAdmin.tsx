@@ -348,9 +348,9 @@ export default function CreateAdmin() {
               {isTraineeIdentity && (
                 <section className="rounded-md border border-border p-5 space-y-3">
                   <div>
-                    <h2 className="text-lg font-medium text-foreground">Default Access Groups</h2>
+                    <h2 className="text-lg font-medium text-foreground">Initial Access</h2>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Trainee accounts receive limited Trainee Workspace access by default. Their dates, authorization, and lifecycle are managed through Engagement fields.
+                      Trainee accounts can review and accept their offer before full workspace access is enabled. Trainee Workspace access activates after offer acceptance.
                     </p>
                   </div>
                   <div

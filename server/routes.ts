@@ -276,6 +276,14 @@ function handleOfferLetterRouteError(res: any, error: unknown, fallbackMessage: 
   return res.status(500).json({ message: fallbackMessage });
 }
 
+async function hasAcceptedOfferForCurrentTrainee(adminUserId: number) {
+  const engagement = await storage.getCurrentTraineeEngagement(adminUserId);
+  if (!engagement) {
+    return false;
+  }
+
+  return await storage.hasAcceptedOfferLetterForEngagement(engagement.id);
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
@@ -424,6 +432,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/trainee/me/lifecycle-events", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
     try {
+      const hasAcceptedOffer = await hasAcceptedOfferForCurrentTrainee(req.adminUser.id);
+      if (!hasAcceptedOffer) {
+        return res.status(403).json({ message: "Offer acceptance is required to view trainee lifecycle events." });
+      }
+
       const events = await storage.listAdminLifecycleEvents(req.adminUser.id);
       res.json(events.slice(0, 50).map(sanitizeLifecycleEvent));
     } catch (error) {
@@ -488,6 +501,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/trainee/me/activity-logs", requireAuth, requireRole(['trainee_access']), async (req: any, res) => {
     try {
+      const hasAcceptedOffer = await hasAcceptedOfferForCurrentTrainee(req.adminUser.id);
+      if (!hasAcceptedOffer) {
+        return res.status(403).json({ message: "Offer acceptance is required to view trainee activity logs." });
+      }
+
       const logs = await storage.listAdminActivityLogs(req.adminUser.id);
       res.json(logs.map(sanitizeActivityLog));
     } catch (error) {
@@ -501,6 +519,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!engagement || engagement.status !== 'active') {
         return res.status(400).json({
           message: "Activity log submission is available only when your engagement is active.",
+        });
+      }
+      const hasAcceptedOffer = await storage.hasAcceptedOfferLetterForEngagement(engagement.id);
+      if (!hasAcceptedOffer) {
+        return res.status(400).json({
+          message: "Offer acceptance is required before submitting activity logs.",
         });
       }
 

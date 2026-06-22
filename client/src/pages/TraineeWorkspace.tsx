@@ -74,22 +74,23 @@ export default function TraineeWorkspace() {
     retry: false,
   });
 
-  const activityLogsQuery = useQuery<AdminActivityLog[]>({
-    queryKey: ["/api/trainee/me/activity-logs"],
-    retry: false,
-  });
-
   const documentsQuery = useQuery<TraineeDocument[]>({
     queryKey: ["/api/trainee/me/documents"],
     retry: false,
   });
 
   const engagement = engagementQuery.data;
-  const logs = activityLogsQuery.data ?? [];
   const documents = documentsQuery.data ?? [];
   const offerLetter = documents.find((document) => document.document_type === "offer_letter" && document.status !== "voided")
     ?? documents.find((document) => document.document_type === "offer_letter");
-  const canSubmitActivity = engagement?.status === "active";
+  const hasAcceptedOffer = offerLetter?.status === "accepted" || Boolean(offerLetter?.accepted_at);
+  const activityLogsQuery = useQuery<AdminActivityLog[]>({
+    queryKey: ["/api/trainee/me/activity-logs"],
+    retry: false,
+    enabled: hasAcceptedOffer,
+  });
+  const logs = hasAcceptedOffer ? activityLogsQuery.data ?? [] : [];
+  const canSubmitActivity = hasAcceptedOffer && engagement?.status === "active";
   const canEndEngagement = Boolean(engagement && !["ended", "cancelled"].includes(engagement.status));
 
   const createActivityLogMutation = useMutation({
@@ -179,6 +180,7 @@ export default function TraineeWorkspace() {
       queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/documents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/lifecycle-events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/engagement"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       toast({
         title: "Offer letter accepted",
         description: "Your acceptance has been recorded.",
@@ -224,7 +226,7 @@ export default function TraineeWorkspace() {
     }
   };
 
-  const workspaceError = engagementQuery.isError || activityLogsQuery.isError || documentsQuery.isError;
+  const workspaceError = engagementQuery.isError || documentsQuery.isError || (hasAcceptedOffer && activityLogsQuery.isError);
 
   return (
     <div className="space-y-8">
@@ -239,6 +241,22 @@ export default function TraineeWorkspace() {
         <Card className="border-destructive/40">
           <CardContent className="pt-6 text-destructive" data-testid="text-trainee-workspace-error">
             Could not load your trainee workspace.
+          </CardContent>
+        </Card>
+      )}
+
+      {!documentsQuery.isLoading && !hasAcceptedOffer && (
+        <Card className="border-primary/40">
+          <CardContent className="pt-6 text-sm text-muted-foreground" data-testid="text-offer-portal-state">
+            Please review and accept your offer letter to unlock the Trainee Workspace.
+          </CardContent>
+        </Card>
+      )}
+
+      {hasAcceptedOffer && engagement?.status !== "active" && (
+        <Card className="border-primary/40">
+          <CardContent className="pt-6 text-sm text-muted-foreground" data-testid="text-offer-accepted-pending-active">
+            Your offer has been accepted. Activity logs will be available when your engagement becomes active.
           </CardContent>
         </Card>
       )}
@@ -393,6 +411,7 @@ export default function TraineeWorkspace() {
         </Card>
       </div>
 
+      {hasAcceptedOffer && (
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <Card className="xl:col-span-1">
           <CardHeader>
@@ -525,6 +544,7 @@ export default function TraineeWorkspace() {
           </CardContent>
         </Card>
       </div>
+      )}
 
       {canEndEngagement && (
         <Card>
