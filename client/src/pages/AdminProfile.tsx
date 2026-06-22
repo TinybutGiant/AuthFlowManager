@@ -787,7 +787,9 @@ export default function AdminProfile() {
             {availableOfferTemplates.length > 0 && (
               <>
                 <div>
-                  <Label className="text-sm font-medium text-muted-foreground">Template</Label>
+                  <Label className="text-sm font-medium text-muted-foreground">
+                    Template <RequiredLabel />
+                  </Label>
                   <Select
                     value={selectedTemplateId}
                     onValueChange={(value) => {
@@ -813,7 +815,9 @@ export default function AdminProfile() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Engagement Title</Label>
+                    <Label className="text-sm font-medium text-muted-foreground">
+                      Engagement Title <RequiredLabel />
+                    </Label>
                     <Input
                       value={engagementTitle}
                       onChange={(event) => setEngagementTitle(event.target.value)}
@@ -833,7 +837,9 @@ export default function AdminProfile() {
                 </div>
 
                 <div>
-                  <Label className="text-sm font-medium text-muted-foreground">Compensation Text</Label>
+                  <Label className="text-sm font-medium text-muted-foreground">
+                    Compensation Text <RequiredLabel />
+                  </Label>
                   <Textarea
                     value={compensationText}
                     onChange={(event) => setCompensationText(event.target.value)}
@@ -876,7 +882,9 @@ export default function AdminProfile() {
             )}
 
             <div>
-              <Label className="text-sm font-medium text-muted-foreground">Final Title</Label>
+              <Label className="text-sm font-medium text-muted-foreground">
+                Final Title <RequiredLabel />
+              </Label>
               <Input
                 value={offerTitle}
                 onChange={(event) => setOfferTitle(event.target.value)}
@@ -885,7 +893,9 @@ export default function AdminProfile() {
               />
             </div>
             <div>
-              <Label className="text-sm font-medium text-muted-foreground">Final Body</Label>
+              <Label className="text-sm font-medium text-muted-foreground">
+                Final Body <RequiredLabel />
+              </Label>
               <Textarea
                 value={offerBody}
                 onChange={(event) => setOfferBody(event.target.value)}
@@ -938,4 +948,8 @@ export default function AdminProfile() {
 
 function Label({ children, className }: { children: React.ReactNode; className?: string }) {
   return <div className={className}>{children}</div>;
+}
+
+function RequiredLabel() {
+  return <span className="ml-1 text-xs font-medium text-destructive">Required</span>;
 }
