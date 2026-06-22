@@ -469,6 +469,44 @@ test("Phase C.1 access group middleware checks active server-side grants after a
   assert.match(storageSource, /isNull\(adminUserAccessGrants\.revokedAt\)/);
 });
 
+test("Phase C.2 admin operations use explicit access groups without global super admin implication", async () => {
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const jwtAuthSource = await readFile(new URL("./jwtAuth.ts", import.meta.url), "utf8");
+
+  const documentTemplateRoutePatterns = [
+    /app\.get\("\/api\/admin\/document-templates", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/,
+    /app\.get\("\/api\/admin\/document-templates\/:templateId", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/,
+    /app\.post\("\/api\/admin\/document-templates", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/,
+    /app\.patch\("\/api\/admin\/document-templates\/:templateId", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/,
+    /app\.post\("\/api\/admin\/document-templates\/:templateId\/archive", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/,
+  ];
+
+  for (const pattern of documentTemplateRoutePatterns) {
+    assert.match(routesSource, pattern);
+  }
+
+  assert.match(
+    routesSource,
+    /app\.post\("\/api\/admin\/engagements\/run-lifecycle-transitions", requireAuth, requireAnyAccessGroup\(\['super_admin', 'lifecycle_jobs'\]\)/,
+  );
+
+  assert.doesNotMatch(jwtAuthSource, /activeAccessGroups\.includes\("super_admin"\)[\s\S]*allowedAccessGroups\.includes/);
+  assert.doesNotMatch(routesSource, /requireAccessGroup\('document_templates'\)|requireAccessGroup\('lifecycle_jobs'\)/);
+
+  for (const forbidden of ['trainee_offer_portal', 'trainee_workspace', 'finance_admin', 'verifier_admin', 'support_admin']) {
+    const adminOperationsBlock = routesSource.slice(
+      routesSource.indexOf('"/api/admin/document-templates"'),
+      routesSource.indexOf('app.put("/api/admin/users/:id"', routesSource.indexOf('"/api/admin/document-templates"')),
+    );
+    assert.equal(adminOperationsBlock.includes(forbidden), false, `${forbidden} must not authorize Admin Operations routes`);
+  }
+
+  assert.match(routesSource, /app\.get\("\/api\/admin\/finance", requireAuth, requireRole\(\['super_admin', 'admin_finance'\]\)/);
+  assert.match(routesSource, /app\.get\("\/api\/admin\/verifier", requireAuth, requireRole\(\['super_admin', 'admin_verifier'\]\)/);
+  assert.match(routesSource, /app\.get\("\/api\/admin\/support", requireAuth, requireRole\(\['super_admin', 'admin_support'\]\)/);
+  assert.match(routesSource, /"\/api\/localguide\/admin\/cancellation-requests"[\s\S]*requireRole\(\["super_admin", "admin_finance"\]\)/);
+});
+
 test("create admin UI separates Identity Type, Access Groups, and Engagement fields", async () => {
   const source = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
   const identitySource = await readFile(new URL("../client/src/lib/adminIdentity.ts", import.meta.url), "utf8");
@@ -624,7 +662,6 @@ test("backend sensitive routes and engagement management APIs do not allow train
     /app\.patch\("\/api\/admin\/engagements\/:engagementId", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.post\("\/api\/admin\/engagements\/:engagementId\/events", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.get\("\/api\/admin\/engagements\/:engagementId\/activity-logs", requireAuth, requireRole\(\['super_admin'\]\)/,
-    /app\.post\("\/api\/admin\/engagements\/run-lifecycle-transitions", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.get\("\/api\/admin\/engagements\/:engagementId\/documents", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.post\("\/api\/admin\/engagements\/:engagementId\/documents", requireAuth, requireRole\(\['super_admin'\]\)/,
   ];
@@ -637,17 +674,16 @@ test("backend sensitive routes and engagement management APIs do not allow train
 test("offer letter APIs use admin or trainee scoped permissions", async () => {
   const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
 
-  for (const required of [
-    '"/api/admin/document-templates"',
-    '"/api/admin/document-templates/:templateId"',
-    '"/api/admin/document-templates/:templateId/archive"',
-    '"/api/admin/engagements/:engagementId/documents/preview-template"',
-  ]) {
-    const start = source.indexOf(required);
-    assert.notEqual(start, -1, `${required} should exist`);
-    const block = source.slice(start, source.indexOf(");", start));
-    assert.match(block, /requireRole\(\['super_admin'\]\)/);
-  }
+  assert.match(source, /app\.get\("\/api\/admin\/document-templates", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/);
+  assert.match(source, /app\.get\("\/api\/admin\/document-templates\/:templateId", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/);
+  assert.match(source, /app\.post\("\/api\/admin\/document-templates", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/);
+  assert.match(source, /app\.patch\("\/api\/admin\/document-templates\/:templateId", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/);
+  assert.match(source, /app\.post\("\/api\/admin\/document-templates\/:templateId\/archive", requireAuth, requireAnyAccessGroup\(\['super_admin', 'document_templates'\]\)/);
+
+  const previewStart = source.indexOf('"/api/admin/engagements/:engagementId/documents/preview-template"');
+  assert.notEqual(previewStart, -1, "template preview route should exist");
+  const previewBlock = source.slice(previewStart, source.indexOf(");", previewStart));
+  assert.match(previewBlock, /requireRole\(\['super_admin'\]\)/);
 
   for (const required of [
     '"/api/admin/engagements/:engagementId/documents/:documentId/regenerate-pdf"',
@@ -739,10 +775,11 @@ test("lifecycle jobs are exposed only through admin operations", async () => {
   const traineeSource = await readFile(new URL("../client/src/pages/TraineeWorkspace.tsx", import.meta.url), "utf8");
 
   assert.match(appSource, /path="\/admin-operations\/lifecycle-jobs"/);
-  assert.match(appSource, /allowedRoles={\["super_admin"\]}/);
+  assert.match(appSource, /allowedAccessGroups={\["super_admin", "lifecycle_jobs"\]}/);
   assert.match(sidebarSource, /title: "Admin Operations"/);
   assert.match(sidebarSource, /title: "Lifecycle Jobs"/);
   assert.match(sidebarSource, /href: "\/admin-operations\/lifecycle-jobs"/);
+  assert.match(sidebarSource, /accessGroups: \['super_admin', 'lifecycle_jobs'\]/);
   assert.match(sidebarSource, /title: "Document Templates"/);
   assert.match(sidebarSource, /href: "\/admin-operations\/document-templates"/);
   assert.match(lifecycleJobsSource, /\/api\/admin\/engagements\/run-lifecycle-transitions/);
@@ -752,7 +789,7 @@ test("lifecycle jobs are exposed only through admin operations", async () => {
   assert.doesNotMatch(traineeSource, /run-lifecycle-transitions|Run all due lifecycle transitions/);
 });
 
-test("document template management is super admin only and renders plain-text previews", async () => {
+test("document template management uses Admin Operations access group and renders plain-text previews", async () => {
   const appSource = await readFile(new URL("../client/src/App.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("../client/src/components/Sidebar.tsx", import.meta.url), "utf8");
   const documentTemplatesSource = await readFile(new URL("../client/src/pages/DocumentTemplates.tsx", import.meta.url), "utf8");
@@ -760,15 +797,19 @@ test("document template management is super admin only and renders plain-text pr
 
   assert.match(appSource, /path="\/admin-operations\/document-templates"/);
   assert.match(appSource, /<DocumentTemplates \/>/);
-  assert.match(appSource, /allowedRoles={\["super_admin"\]}/);
+  assert.match(appSource, /allowedAccessGroups={\["super_admin", "document_templates"\]}/);
+  assert.match(appSource, /path="\/admin-management\/profile\/:id"/);
+  assert.match(appSource, /path="\/admin-management\/profile\/:id"[\s\S]*allowedRoles={\["super_admin"\]}/);
 
   const adminOperationsStart = sidebarSource.indexOf('title: "Admin Operations"');
   const adminOperationsEnd = sidebarSource.indexOf('title: "Finance Management"', adminOperationsStart);
   const adminOperationsBlock = sidebarSource.slice(adminOperationsStart, adminOperationsEnd);
   assert.match(adminOperationsBlock, /title: "Document Templates"/);
   assert.match(adminOperationsBlock, /href: "\/admin-operations\/document-templates"/);
-  assert.match(adminOperationsBlock, /roles: \['super_admin'\]/);
-  assert.doesNotMatch(adminOperationsBlock, /trainee_access/);
+  assert.match(adminOperationsBlock, /accessGroups: \['super_admin', 'admin_operations', 'document_templates', 'lifecycle_jobs'\]/);
+  assert.match(adminOperationsBlock, /accessGroups: \['super_admin', 'document_templates'\]/);
+  assert.match(sidebarSource, /visibleChildren\.length === 0/);
+  assert.doesNotMatch(adminOperationsBlock, /roles: \['super_admin'\]|trainee_access|trainee_offer_portal|trainee_workspace|finance_admin|verifier_admin|support_admin/);
 
   assert.match(documentTemplatesSource, /\/api\/admin\/document-templates/);
   assert.match(documentTemplatesSource, /Edit \/ Create New Version/);

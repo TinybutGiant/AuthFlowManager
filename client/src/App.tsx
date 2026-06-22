@@ -153,7 +153,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-operations/lifecycle-jobs">
-            <ProtectedRoute allowedRoles={["super_admin"]}>
+            <ProtectedRoute allowedAccessGroups={["super_admin", "lifecycle_jobs"]}>
               <AdminLayout>
                 <LifecycleJobs />
               </AdminLayout>
@@ -161,7 +161,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-operations/document-templates">
-            <ProtectedRoute allowedRoles={["super_admin"]}>
+            <ProtectedRoute allowedAccessGroups={["super_admin", "document_templates"]}>
               <AdminLayout>
                 <DocumentTemplates />
               </AdminLayout>

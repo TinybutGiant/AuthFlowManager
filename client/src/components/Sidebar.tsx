@@ -92,19 +92,19 @@ const menuItems: MenuItem[] = [
   {
     title: "Admin Operations",
     icon: RefreshCw,
-    roles: ['super_admin'],
+    accessGroups: ['super_admin', 'admin_operations', 'document_templates', 'lifecycle_jobs'],
     children: [
       {
         title: "Lifecycle Jobs",
         href: "/admin-operations/lifecycle-jobs",
         icon: RefreshCw,
-        roles: ['super_admin'],
+        accessGroups: ['super_admin', 'lifecycle_jobs'],
       },
       {
         title: "Document Templates",
         href: "/admin-operations/document-templates",
         icon: FileText,
-        roles: ['super_admin'],
+        accessGroups: ['super_admin', 'document_templates'],
       },
     ],
   },
@@ -161,9 +161,10 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   };
 
   const renderMenuItem = (item: MenuItem) => {
-    if (!hasAccess(item)) return null;
-
     if (item.children) {
+      const visibleChildren = item.children.map(child => renderMenuItem(child)).filter(Boolean);
+      if (!hasAccess(item) || visibleChildren.length === 0) return null;
+
       const isExpanded = expandedSections.includes(item.title);
       return (
         <Collapsible key={item.title} open={isExpanded} onOpenChange={() => toggleSection(item.title)}>
@@ -181,11 +182,13 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="ml-6 mt-2 space-y-1">
-            {item.children.map(child => renderMenuItem(child))}
+            {visibleChildren}
           </CollapsibleContent>
         </Collapsible>
       );
     }
+
+    if (!hasAccess(item)) return null;
 
     return (
       <Link key={item.href} href={item.href!}>

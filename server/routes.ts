@@ -796,7 +796,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/document-templates", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+  app.get("/api/admin/document-templates", requireAuth, requireAnyAccessGroup(['super_admin', 'document_templates']), async (req: any, res) => {
     try {
       const documentType = req.query.documentType ? String(req.query.documentType) : undefined;
       if (documentType && documentType !== "offer_letter") {
@@ -811,7 +811,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/document-templates/:templateId", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+  app.get("/api/admin/document-templates/:templateId", requireAuth, requireAnyAccessGroup(['super_admin', 'document_templates']), async (req: any, res) => {
     try {
       const template = await storage.getAdminDocumentTemplate(parseInt(req.params.templateId));
       if (!template) {
@@ -825,7 +825,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/document-templates", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+  app.post("/api/admin/document-templates", requireAuth, requireAnyAccessGroup(['super_admin', 'document_templates']), async (req: any, res) => {
     try {
       const payload = documentTemplatePayloadSchema.parse(req.body);
       const template = await createDocumentTemplate({
@@ -846,7 +846,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/admin/document-templates/:templateId", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+  app.patch("/api/admin/document-templates/:templateId", requireAuth, requireAnyAccessGroup(['super_admin', 'document_templates']), async (req: any, res) => {
     try {
       const payload = documentTemplateUpdatePayloadSchema.parse(req.body);
       const template = await updateDocumentTemplate({
@@ -861,7 +861,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/document-templates/:templateId/archive", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+  app.post("/api/admin/document-templates/:templateId/archive", requireAuth, requireAnyAccessGroup(['super_admin', 'document_templates']), async (req: any, res) => {
     try {
       const template = await archiveDocumentTemplate({
         storage,
@@ -1095,7 +1095,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/admin/engagements/run-lifecycle-transitions", requireAuth, requireRole(['super_admin']), async (_req: any, res) => {
+  app.post("/api/admin/engagements/run-lifecycle-transitions", requireAuth, requireAnyAccessGroup(['super_admin', 'lifecycle_jobs']), async (_req: any, res) => {
     try {
       const result = await runEngagementLifecycleTransitions();
       res.json({
