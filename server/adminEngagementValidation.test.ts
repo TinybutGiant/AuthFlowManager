@@ -457,7 +457,25 @@ test("offer letter APIs use admin or trainee scoped permissions", async () => {
   const traineeSanitizerStart = source.indexOf("function sanitizeTraineeDocument");
   const traineeSanitizerEnd = source.indexOf("function getRequestIp", traineeSanitizerStart);
   const traineeSanitizerBlock = source.slice(traineeSanitizerStart, traineeSanitizerEnd);
-  assert.doesNotMatch(traineeSanitizerBlock, /mergeData|merge_data|templateTitle|template_body|templateBody/);
+  assert.doesNotMatch(
+    traineeSanitizerBlock,
+    /mergeData|merge_data|templateTitle|template_body|templateBody|offerReadiness|resumeReviewed|discussionCompleted/,
+  );
+});
+
+test("CPT offer readiness checklist remains admin UI only", async () => {
+  const adminProfileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const validationSource = await readFile(new URL("./adminEngagementValidation.ts", import.meta.url), "utf8");
+
+  assert.match(adminProfileSource, /Offer Readiness/);
+  assert.match(adminProfileSource, /Resume reviewed outside system/);
+  assert.match(adminProfileSource, /Zoom\/discussion completed/);
+  assert.match(adminProfileSource, /School\/CPT details confirmed/);
+  assert.match(adminProfileSource, /Responsibilities aligned with student background/);
+  assert.match(adminProfileSource, /Persist internally only after a safe admin-only metadata model exists/);
+  assert.doesNotMatch(routesSource + validationSource, /offerReadiness|resumeReviewed|discussionCompleted|schoolDetailsConfirmed|responsibilitiesAligned/);
+  assert.doesNotMatch(routesSource + validationSource, /resumeUpload|resumeParsing|rawResume|candidateLifecycle|rejectedCandidate/);
 });
 
 test("admin profile hides unsafe actions for accepted offer letters", async () => {

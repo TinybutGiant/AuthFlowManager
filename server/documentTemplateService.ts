@@ -22,9 +22,11 @@ export const OFFER_LETTER_TEMPLATE_VARIABLES = [
   "function_area",
   "compensation_text",
   "school_name",
+  "program_or_major",
   "work_location",
   "response_deadline",
   "responsibilities_text",
+  "training_alignment_text",
   "company_phone",
   "company_email",
   "signatory_name",
@@ -42,9 +44,11 @@ const MANUAL_VARIABLES = new Set<string>([
   "function_area",
   "compensation_text",
   "school_name",
+  "program_or_major",
   "work_location",
   "response_deadline",
   "responsibilities_text",
+  "training_alignment_text",
   "signatory_name",
   "signatory_title",
 ]);
@@ -65,9 +69,11 @@ export interface ManualOfferLetterMergeValues {
   functionArea?: string;
   compensationText?: string;
   schoolName?: string;
+  programOrMajor?: string;
   workLocation?: string;
   responseDeadline?: string;
   responsibilitiesText?: string;
+  trainingAlignmentText?: string;
   companyPhone?: string;
   companyEmail?: string;
   signatoryName?: string;
@@ -123,9 +129,11 @@ function toSnakeManualValues(values: ManualOfferLetterMergeValues) {
     function_area: trimOptional(values.functionArea),
     compensation_text: trimOptional(values.compensationText),
     school_name: trimOptional(values.schoolName),
+    program_or_major: trimOptional(values.programOrMajor),
     work_location: trimOptional(values.workLocation),
     response_deadline: trimOptional(values.responseDeadline),
     responsibilities_text: trimOptional(values.responsibilitiesText),
+    training_alignment_text: trimOptional(values.trainingAlignmentText),
     company_phone: trimOptional(values.companyPhone),
     company_email: trimOptional(values.companyEmail),
     signatory_name: trimOptional(values.signatoryName),
@@ -222,9 +230,12 @@ function buildMergeData(input: {
     function_area: manual.function_area,
     compensation_text: manual.compensation_text || "Unpaid internship position for academic practical training purposes.",
     school_name: manual.school_name,
+    program_or_major: manual.program_or_major,
     work_location: manual.work_location || "Remote",
     response_deadline: manual.response_deadline,
     responsibilities_text: manual.responsibilities_text || valueOrFallback(input.engagement.workScope, ""),
+    training_alignment_text: manual.training_alignment_text
+      || "The activities in this engagement are designed to provide supervised practical training aligned with the student's academic background and prior experience.",
     company_phone: manual.company_phone || process.env.COMPANY_PHONE?.trim() || "Not provided",
     company_email: manual.company_email || getCompanyEmail() || "Not provided",
     signatory_name: manual.signatory_name || (input.supervisor ? valueOrFallback(input.supervisor.name) : ""),

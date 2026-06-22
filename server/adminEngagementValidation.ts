@@ -216,6 +216,10 @@ const manualTemplateMergeValuesSchema = {
     (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
     z.string().trim().max(200).optional()
   ),
+  programOrMajor: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(300).optional()
+  ),
   workLocation: z.preprocess(
     (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
     z.string().trim().max(500).optional()
@@ -225,6 +229,10 @@ const manualTemplateMergeValuesSchema = {
     z.string().trim().max(200).optional()
   ),
   responsibilitiesText: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(8000).optional()
+  ),
+  trainingAlignmentText: z.preprocess(
     (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
     z.string().trim().max(8000).optional()
   ),

@@ -452,6 +452,20 @@ test("CPT seed migration creates active plain-text template without historical r
   assert.doesNotMatch(migration, /docusign|e-signature|resume upload|resume parsing/i);
 });
 
+test("CPT training alignment migration updates template without resume storage workflow", async () => {
+  const migration = await readFile(new URL("../migrations/0010_cpt_training_alignment_template.sql", import.meta.url), "utf8");
+
+  assert.match(migration, new RegExp(CPT_TEMPLATE_NAME));
+  assert.match(migration, /\{\{program_or_major\}\}/);
+  assert.match(migration, /\{\{training_alignment_text\}\}/);
+  assert.match(migration, /practical training related to your academic background/);
+  assert.match(migration, /prior experience, academic training, and supervised learning objectives/);
+  assert.match(migration, /"version" = "version" \+ 1/);
+  assert.match(migration, /WHERE "document_type" = 'offer_letter'/);
+  assert.doesNotMatch(migration, /resume upload|resume parsing|candidate lifecycle|rejected candidate|raw resume/i);
+  assert.doesNotMatch(migration, /docusign|e-signature|gmail|scanned copy/i);
+});
+
 test("CPT template preview applies manual fields and safe defaults", async () => {
   const store = new MemoryOfferLetterStorage();
   const trainee = store.seedAdmin({ name: "CPT Trainee", email: "cpt@example.edu" });
@@ -467,9 +481,11 @@ test("CPT template preview applies manual fields and safe defaults", async () =>
     titleTemplate: "Offer of Internship for {{engagement_title}}",
     bodyTemplate: [
       "School: {{school_name}}",
+      "Program: {{program_or_major}}",
       "Location: {{work_location}}",
       "Deadline: {{response_deadline}}",
       "Responsibilities: {{responsibilities_text}}",
+      "Alignment: {{training_alignment_text}}",
       "Compensation: {{compensation_text}}",
       "Supervisor: {{supervisor_name}} ({{supervisor_email}})",
       "Signatory: {{signatory_name}}, {{signatory_title}}",
@@ -485,23 +501,31 @@ test("CPT template preview applies manual fields and safe defaults", async () =>
     manualValues: {
       engagementTitle: "Product Operations Intern",
       schoolName: "Example University",
+      programOrMajor: "Information Systems",
       responseDeadline: "July 15, 2026",
     },
   });
 
   assert.equal(preview.title, "Offer of Internship for Product Operations Intern");
   assert.equal(preview.mergeData.school_name, "Example University");
+  assert.equal(preview.mergeData.program_or_major, "Information Systems");
   assert.equal(preview.mergeData.work_location, "Remote");
   assert.equal(preview.mergeData.response_deadline, "July 15, 2026");
   assert.equal(preview.mergeData.responsibilities_text, "Build internal workflow documentation and supervised prototypes.");
+  assert.equal(
+    preview.mergeData.training_alignment_text,
+    "The activities in this engagement are designed to provide supervised practical training aligned with the student's academic background and prior experience.",
+  );
   assert.equal(preview.mergeData.compensation_text, "Unpaid internship position for academic practical training purposes.");
   assert.equal(preview.mergeData.signatory_name, "CPT Supervisor");
   assert.equal(preview.mergeData.signatory_title, "Founder & Manager");
   assert.equal(preview.mergeData.company_phone, "Not provided");
   assert.equal(preview.mergeData.company_email, "Not provided");
   assert.match(preview.body, /School: Example University/);
+  assert.match(preview.body, /Program: Information Systems/);
   assert.match(preview.body, /Location: Remote/);
   assert.match(preview.body, /Responsibilities: Build internal workflow documentation/);
+  assert.match(preview.body, /Alignment: The activities in this engagement are designed/);
 });
 
 test("CPT template preview blocks unresolved required manual fields with controlled errors", async () => {
@@ -511,7 +535,7 @@ test("CPT template preview blocks unresolved required manual fields with control
   const template = store.seedTemplate({
     name: CPT_TEMPLATE_NAME,
     titleTemplate: "{{engagement_title}}",
-    bodyTemplate: "{{school_name}}\n{{response_deadline}}\n{{responsibilities_text}}\n{{work_location}}\n{{compensation_text}}\n{{signatory_name}}\n{{signatory_title}}",
+    bodyTemplate: "{{school_name}}\n{{program_or_major}}\n{{response_deadline}}\n{{responsibilities_text}}\n{{training_alignment_text}}\n{{work_location}}\n{{compensation_text}}\n{{signatory_name}}\n{{signatory_title}}",
   });
 
   await assert.rejects(
@@ -522,6 +546,7 @@ test("CPT template preview blocks unresolved required manual fields with control
       manualValues: {
         engagementTitle: "CPT Intern",
         responsibilitiesText: "Training activities.",
+        trainingAlignmentText: "Training aligned with academic background.",
         workLocation: "Remote",
         compensationText: "Unpaid internship position for academic practical training purposes.",
         signatoryName: "Admin Signatory",
@@ -534,6 +559,7 @@ test("CPT template preview blocks unresolved required manual fields with control
       error.message === "Template variables are missing required values." &&
       Array.isArray(error.details.missing_variables) &&
       error.details.missing_variables.includes("school_name") &&
+      error.details.missing_variables.includes("program_or_major") &&
       error.details.missing_variables.includes("response_deadline")
     ),
   );
@@ -550,7 +576,15 @@ test("CPT template document creation snapshots merge data and final body", async
     name: CPT_TEMPLATE_NAME,
     version: 2,
     titleTemplate: "Offer of Internship for {{engagement_title}}",
-    bodyTemplate: "School: {{school_name}}\nResponsibilities: {{responsibilities_text}}\nDeadline: {{response_deadline}}\n{{signatory_name}}\n{{signatory_title}}",
+    bodyTemplate: [
+      "School: {{school_name}}",
+      "Program: {{program_or_major}}",
+      "Responsibilities: {{responsibilities_text}}",
+      "Alignment: {{training_alignment_text}}",
+      "Deadline: {{response_deadline}}",
+      "{{signatory_name}}",
+      "{{signatory_title}}",
+    ].join("\n"),
   });
   const objectStorage = createPrivateObjectStore();
   const generatedAt = new Date("2026-05-05T00:00:00Z");
@@ -564,11 +598,12 @@ test("CPT template document creation snapshots merge data and final body", async
     manualValues: {
       engagementTitle: "CPT Product Intern",
       schoolName: "Example University",
+      programOrMajor: "Computer Science",
       responseDeadline: "July 15, 2026",
+      trainingAlignmentText: "This training aligns with coursework in software systems and product operations.",
       signatoryName: "Admin Signatory",
       signatoryTitle: "Program Manager",
     },
-    body: "Final CPT body approved by admin.",
     now: generatedAt,
   });
 
@@ -576,9 +611,15 @@ test("CPT template document creation snapshots merge data and final body", async
   assert.equal(document.templateId, template.id);
   assert.equal(document.templateVersion, 2);
   assert.equal(document.templateNameSnapshot, CPT_TEMPLATE_NAME);
-  assert.equal(document.body, "Final CPT body approved by admin.");
+  assert.match(document.body, /Program: Computer Science/);
+  assert.match(document.body, /Alignment: This training aligns with coursework/);
   assert.equal(document.mergeData.school_name, "Example University");
+  assert.equal(document.mergeData.program_or_major, "Computer Science");
   assert.equal(document.mergeData.responsibilities_text, "Original supervised training responsibilities.");
+  assert.equal(
+    document.mergeData.training_alignment_text,
+    "This training aligns with coursework in software systems and product operations.",
+  );
 
   store.engagements.set(engagement.id, {
     ...engagement,
@@ -594,8 +635,9 @@ test("CPT template document creation snapshots merge data and final body", async
   });
 
   assert.equal(regenerated.fileSha256, originalHash);
-  assert.equal(regenerated.body, "Final CPT body approved by admin.");
+  assert.match(regenerated.body, /Alignment: This training aligns with coursework/);
   assert.equal(regenerated.mergeData.responsibilities_text, "Original supervised training responsibilities.");
+  assert.equal(regenerated.mergeData.training_alignment_text, "This training aligns with coursework in software systems and product operations.");
 });
 
 test("template offer creation stores template and merge snapshots with frozen final body", async () => {

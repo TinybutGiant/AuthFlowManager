@@ -34,6 +34,8 @@ interface OfferTemplatePreviewResponse {
 const CPT_TEMPLATE_NAME = "CPT Internship Offer Letter";
 const DEFAULT_CPT_COMPENSATION_TEXT = "Unpaid internship position for academic practical training purposes.";
 const DEFAULT_CPT_SIGNATORY_TITLE = "Founder & Manager";
+const DEFAULT_TRAINING_ALIGNMENT_TEXT =
+  "The activities in this engagement are designed to provide supervised practical training aligned with the student's academic background and prior experience.";
 
 export default function AdminProfile() {
   const params = useParams();
@@ -46,13 +48,21 @@ export default function AdminProfile() {
   const [functionArea, setFunctionArea] = useState("");
   const [compensationText, setCompensationText] = useState("");
   const [schoolName, setSchoolName] = useState("");
+  const [programOrMajor, setProgramOrMajor] = useState("");
   const [workLocation, setWorkLocation] = useState("");
   const [responseDeadline, setResponseDeadline] = useState("");
   const [responsibilitiesText, setResponsibilitiesText] = useState("");
+  const [trainingAlignmentText, setTrainingAlignmentText] = useState("");
   const [companyPhone, setCompanyPhone] = useState("");
   const [companyEmail, setCompanyEmail] = useState("");
   const [signatoryName, setSignatoryName] = useState("");
   const [signatoryTitle, setSignatoryTitle] = useState("");
+  const [offerReadiness, setOfferReadiness] = useState({
+    resumeReviewed: false,
+    discussionCompleted: false,
+    schoolDetailsConfirmed: false,
+    responsibilitiesAligned: false,
+  });
   const [offerTitle, setOfferTitle] = useState("");
   const [offerBody, setOfferBody] = useState("");
   const [templatePreviewError, setTemplatePreviewError] = useState<string | null>(null);
@@ -142,18 +152,27 @@ export default function AdminProfile() {
 
   const resetCptFields = () => {
     setSchoolName("");
+    setProgramOrMajor("");
     setWorkLocation("");
     setResponseDeadline("");
     setResponsibilitiesText("");
+    setTrainingAlignmentText("");
     setCompanyPhone("");
     setCompanyEmail("");
     setSignatoryName("");
     setSignatoryTitle("");
+    setOfferReadiness({
+      resumeReviewed: false,
+      discussionCompleted: false,
+      schoolDetailsConfirmed: false,
+      responsibilitiesAligned: false,
+    });
   };
 
   const applyCptDefaults = (engagement: AdminEngagement) => {
     setWorkLocation((value) => value || "Remote");
     setResponsibilitiesText((value) => value || engagement.workScope || "");
+    setTrainingAlignmentText((value) => value || DEFAULT_TRAINING_ALIGNMENT_TEXT);
     setCompensationText((value) => value || DEFAULT_CPT_COMPENSATION_TEXT);
     setSignatoryTitle((value) => value || DEFAULT_CPT_SIGNATORY_TITLE);
   };
@@ -195,9 +214,11 @@ export default function AdminProfile() {
           functionArea,
           compensationText,
           schoolName,
+          programOrMajor,
           workLocation,
           responseDeadline,
           responsibilitiesText,
+          trainingAlignmentText,
           companyPhone,
           companyEmail,
           signatoryName,
@@ -232,9 +253,11 @@ export default function AdminProfile() {
             functionArea,
             compensationText,
             schoolName,
+            programOrMajor,
             workLocation,
             responseDeadline,
             responsibilitiesText,
+            trainingAlignmentText,
             companyPhone,
             companyEmail,
             signatoryName,
@@ -923,6 +946,60 @@ export default function AdminProfile() {
                     <div className="mb-3">
                       <p className="text-sm font-medium text-foreground">CPT Details</p>
                     </div>
+                    <div className="mb-4 rounded-md border border-border bg-muted/20 p-3">
+                      <p className="mb-2 text-sm font-medium text-foreground">Offer Readiness</p>
+                      {/* TODO: Persist internally only after a safe admin-only metadata model exists. */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={offerReadiness.resumeReviewed}
+                            onChange={(event) => setOfferReadiness((value) => ({
+                              ...value,
+                              resumeReviewed: event.target.checked,
+                            }))}
+                            data-testid="checkbox-offer-readiness-resume-reviewed"
+                          />
+                          Resume reviewed outside system
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={offerReadiness.discussionCompleted}
+                            onChange={(event) => setOfferReadiness((value) => ({
+                              ...value,
+                              discussionCompleted: event.target.checked,
+                            }))}
+                            data-testid="checkbox-offer-readiness-discussion-completed"
+                          />
+                          Zoom/discussion completed
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={offerReadiness.schoolDetailsConfirmed}
+                            onChange={(event) => setOfferReadiness((value) => ({
+                              ...value,
+                              schoolDetailsConfirmed: event.target.checked,
+                            }))}
+                            data-testid="checkbox-offer-readiness-school-confirmed"
+                          />
+                          School/CPT details confirmed
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={offerReadiness.responsibilitiesAligned}
+                            onChange={(event) => setOfferReadiness((value) => ({
+                              ...value,
+                              responsibilitiesAligned: event.target.checked,
+                            }))}
+                            data-testid="checkbox-offer-readiness-responsibilities-aligned"
+                          />
+                          Responsibilities aligned with student background
+                        </label>
+                      </div>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
                         <Label className="text-sm font-medium text-muted-foreground">
@@ -933,6 +1010,17 @@ export default function AdminProfile() {
                           onChange={(event) => setSchoolName(event.target.value)}
                           maxLength={200}
                           data-testid="input-offer-school-name"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">
+                          Program or Major <RequiredLabel />
+                        </Label>
+                        <Input
+                          value={programOrMajor}
+                          onChange={(event) => setProgramOrMajor(event.target.value)}
+                          maxLength={300}
+                          data-testid="input-offer-program-or-major"
                         />
                       </div>
                       <div>
@@ -1009,6 +1097,18 @@ export default function AdminProfile() {
                         className="min-h-24"
                         maxLength={8000}
                         data-testid="textarea-offer-responsibilities-text"
+                      />
+                    </div>
+                    <div className="mt-3">
+                      <Label className="text-sm font-medium text-muted-foreground">
+                        Training Alignment Text <RequiredLabel />
+                      </Label>
+                      <Textarea
+                        value={trainingAlignmentText}
+                        onChange={(event) => setTrainingAlignmentText(event.target.value)}
+                        className="min-h-24"
+                        maxLength={8000}
+                        data-testid="textarea-offer-training-alignment-text"
                       />
                     </div>
                   </div>
