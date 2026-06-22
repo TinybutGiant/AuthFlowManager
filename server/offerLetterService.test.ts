@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -18,6 +19,8 @@ import {
   DocumentTemplateError,
   previewOfferLetterTemplate,
 } from "./documentTemplateService";
+
+const CPT_TEMPLATE_NAME = "CPT Internship Offer Letter";
 
 class MemoryOfferLetterStorage {
   admins = new Map<number, any>();
@@ -428,6 +431,171 @@ test("template preview derives safe variables and applies manual merge values", 
   assert.equal(preview.mergeData.engagement_title, "Operations Trainee");
   assert.equal(preview.mergeData.function_area, "Operations");
   assert.equal(preview.mergeData.compensation_text, "This trainee engagement is unpaid.");
+});
+
+test("CPT seed migration creates active plain-text template without historical return instructions", async () => {
+  const migration = await readFile(new URL("../migrations/0009_cpt_offer_letter_template.sql", import.meta.url), "utf8");
+
+  assert.match(migration, new RegExp(CPT_TEMPLATE_NAME));
+  assert.match(migration, /'active'/);
+  assert.match(migration, /'plain_text'/);
+  assert.match(migration, /valid F-1 Curricular Practical Training \(CPT\) authorization/);
+  assert.match(migration, /begin on \{\{start_date\}\} and end on \{\{end_date\}\}/);
+  assert.match(migration, /\{\{expected_hours_per_week\}\} hours per week/);
+  assert.match(migration, /\{\{work_location\}\}/);
+  assert.match(migration, /\{\{supervisor_name\}\} \(\{\{supervisor_email\}\}\)/);
+  assert.match(migration, /\{\{responsibilities_text\}\}/);
+  assert.match(migration, /Confidentiality and Intellectual Property/);
+  assert.match(migration, /Trainee Workspace/);
+  assert.doesNotMatch(migration, /gmail/i);
+  assert.doesNotMatch(migration, /scanned copy/i);
+  assert.doesNotMatch(migration, /docusign|e-signature|resume upload|resume parsing/i);
+});
+
+test("CPT template preview applies manual fields and safe defaults", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "CPT Trainee", email: "cpt@example.edu" });
+  const supervisor = store.seedAdmin({ name: "CPT Supervisor", email: "supervisor@example.com", role: "admin_support" });
+  const engagement = store.seedEngagement(trainee.id, {
+    supervisorAdminId: supervisor.id,
+    workAuthorizationType: "cpt",
+    workScope: "Build internal workflow documentation and supervised prototypes.",
+    expectedHoursPerWeek: 21,
+  });
+  const template = store.seedTemplate({
+    name: CPT_TEMPLATE_NAME,
+    titleTemplate: "Offer of Internship for {{engagement_title}}",
+    bodyTemplate: [
+      "School: {{school_name}}",
+      "Location: {{work_location}}",
+      "Deadline: {{response_deadline}}",
+      "Responsibilities: {{responsibilities_text}}",
+      "Compensation: {{compensation_text}}",
+      "Supervisor: {{supervisor_name}} ({{supervisor_email}})",
+      "Signatory: {{signatory_name}}, {{signatory_title}}",
+      "Phone: {{company_phone}}",
+      "Email: {{company_email}}",
+    ].join("\n"),
+  });
+
+  const preview = await previewOfferLetterTemplate({
+    storage: store as any,
+    engagementId: engagement.id,
+    templateId: template.id,
+    manualValues: {
+      engagementTitle: "Product Operations Intern",
+      schoolName: "Example University",
+      responseDeadline: "July 15, 2026",
+    },
+  });
+
+  assert.equal(preview.title, "Offer of Internship for Product Operations Intern");
+  assert.equal(preview.mergeData.school_name, "Example University");
+  assert.equal(preview.mergeData.work_location, "Remote");
+  assert.equal(preview.mergeData.response_deadline, "July 15, 2026");
+  assert.equal(preview.mergeData.responsibilities_text, "Build internal workflow documentation and supervised prototypes.");
+  assert.equal(preview.mergeData.compensation_text, "Unpaid internship position for academic practical training purposes.");
+  assert.equal(preview.mergeData.signatory_name, "CPT Supervisor");
+  assert.equal(preview.mergeData.signatory_title, "Founder & Manager");
+  assert.equal(preview.mergeData.company_phone, "Not provided");
+  assert.equal(preview.mergeData.company_email, "Not provided");
+  assert.match(preview.body, /School: Example University/);
+  assert.match(preview.body, /Location: Remote/);
+  assert.match(preview.body, /Responsibilities: Build internal workflow documentation/);
+});
+
+test("CPT template preview blocks unresolved required manual fields with controlled errors", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin();
+  const engagement = store.seedEngagement(trainee.id);
+  const template = store.seedTemplate({
+    name: CPT_TEMPLATE_NAME,
+    titleTemplate: "{{engagement_title}}",
+    bodyTemplate: "{{school_name}}\n{{response_deadline}}\n{{responsibilities_text}}\n{{work_location}}\n{{compensation_text}}\n{{signatory_name}}\n{{signatory_title}}",
+  });
+
+  await assert.rejects(
+    previewOfferLetterTemplate({
+      storage: store as any,
+      engagementId: engagement.id,
+      templateId: template.id,
+      manualValues: {
+        engagementTitle: "CPT Intern",
+        responsibilitiesText: "Training activities.",
+        workLocation: "Remote",
+        compensationText: "Unpaid internship position for academic practical training purposes.",
+        signatoryName: "Admin Signatory",
+        signatoryTitle: "Founder & Manager",
+      },
+    }),
+    (error: any) => (
+      error instanceof DocumentTemplateError &&
+      error.statusCode === 400 &&
+      error.message === "Template variables are missing required values." &&
+      Array.isArray(error.details.missing_variables) &&
+      error.details.missing_variables.includes("school_name") &&
+      error.details.missing_variables.includes("response_deadline")
+    ),
+  );
+});
+
+test("CPT template document creation snapshots merge data and final body", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "Snapshot CPT", email: "snapshot-cpt@example.edu" });
+  const engagement = store.seedEngagement(trainee.id, {
+    workAuthorizationType: "cpt",
+    workScope: "Original supervised training responsibilities.",
+  });
+  const template = store.seedTemplate({
+    name: CPT_TEMPLATE_NAME,
+    version: 2,
+    titleTemplate: "Offer of Internship for {{engagement_title}}",
+    bodyTemplate: "School: {{school_name}}\nResponsibilities: {{responsibilities_text}}\nDeadline: {{response_deadline}}\n{{signatory_name}}\n{{signatory_title}}",
+  });
+  const objectStorage = createPrivateObjectStore();
+  const generatedAt = new Date("2026-05-05T00:00:00Z");
+
+  const document = await createOfferLetterDocumentFromTemplate({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    actorAdminId: 99,
+    templateId: template.id,
+    manualValues: {
+      engagementTitle: "CPT Product Intern",
+      schoolName: "Example University",
+      responseDeadline: "July 15, 2026",
+      signatoryName: "Admin Signatory",
+      signatoryTitle: "Program Manager",
+    },
+    body: "Final CPT body approved by admin.",
+    now: generatedAt,
+  });
+
+  const originalHash = document.fileSha256;
+  assert.equal(document.templateId, template.id);
+  assert.equal(document.templateVersion, 2);
+  assert.equal(document.templateNameSnapshot, CPT_TEMPLATE_NAME);
+  assert.equal(document.body, "Final CPT body approved by admin.");
+  assert.equal(document.mergeData.school_name, "Example University");
+  assert.equal(document.mergeData.responsibilities_text, "Original supervised training responsibilities.");
+
+  store.engagements.set(engagement.id, {
+    ...engagement,
+    workScope: "Changed live responsibilities.",
+  });
+  const regenerated = await regenerateOfferLetterPdf({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    documentId: document.id,
+    actorAdminId: 99,
+    now: generatedAt,
+  });
+
+  assert.equal(regenerated.fileSha256, originalHash);
+  assert.equal(regenerated.body, "Final CPT body approved by admin.");
+  assert.equal(regenerated.mergeData.responsibilities_text, "Original supervised training responsibilities.");
 });
 
 test("template offer creation stores template and merge snapshots with frozen final body", async () => {

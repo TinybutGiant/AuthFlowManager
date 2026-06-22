@@ -31,6 +31,10 @@ interface OfferTemplatePreviewResponse {
   missing_variables: string[];
 }
 
+const CPT_TEMPLATE_NAME = "CPT Internship Offer Letter";
+const DEFAULT_CPT_COMPENSATION_TEXT = "Unpaid internship position for academic practical training purposes.";
+const DEFAULT_CPT_SIGNATORY_TITLE = "Founder & Manager";
+
 export default function AdminProfile() {
   const params = useParams();
   const adminId = params.id ? parseInt(params.id) : undefined;
@@ -41,6 +45,14 @@ export default function AdminProfile() {
   const [engagementTitle, setEngagementTitle] = useState("");
   const [functionArea, setFunctionArea] = useState("");
   const [compensationText, setCompensationText] = useState("");
+  const [schoolName, setSchoolName] = useState("");
+  const [workLocation, setWorkLocation] = useState("");
+  const [responseDeadline, setResponseDeadline] = useState("");
+  const [responsibilitiesText, setResponsibilitiesText] = useState("");
+  const [companyPhone, setCompanyPhone] = useState("");
+  const [companyEmail, setCompanyEmail] = useState("");
+  const [signatoryName, setSignatoryName] = useState("");
+  const [signatoryTitle, setSignatoryTitle] = useState("");
   const [offerTitle, setOfferTitle] = useState("");
   const [offerBody, setOfferBody] = useState("");
   const [templatePreviewError, setTemplatePreviewError] = useState<string | null>(null);
@@ -76,6 +88,8 @@ export default function AdminProfile() {
       if (a.status === b.status) return a.name.localeCompare(b.name);
       return a.status === "active" ? -1 : 1;
     });
+  const selectedTemplate = availableOfferTemplates.find((template) => String(template.id) === selectedTemplateId);
+  const isCptTemplateSelected = selectedTemplate?.name === CPT_TEMPLATE_NAME;
 
   const engagementDocumentQueryKey = [
     "/api/admin/users",
@@ -126,11 +140,35 @@ export default function AdminProfile() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "lifecycle-events"] });
   };
 
+  const resetCptFields = () => {
+    setSchoolName("");
+    setWorkLocation("");
+    setResponseDeadline("");
+    setResponsibilitiesText("");
+    setCompanyPhone("");
+    setCompanyEmail("");
+    setSignatoryName("");
+    setSignatoryTitle("");
+  };
+
+  const applyCptDefaults = (engagement: AdminEngagement) => {
+    setWorkLocation((value) => value || "Remote");
+    setResponsibilitiesText((value) => value || engagement.workScope || "");
+    setCompensationText((value) => value || DEFAULT_CPT_COMPENSATION_TEXT);
+    setSignatoryTitle((value) => value || DEFAULT_CPT_SIGNATORY_TITLE);
+  };
+
   useEffect(() => {
     if (!createOfferEngagement || selectedTemplateId || availableOfferTemplates.length === 0) {
       return;
     }
-    setSelectedTemplateId(String(availableOfferTemplates[0].id));
+    const template = availableOfferTemplates[0];
+    setSelectedTemplateId(String(template.id));
+    if (template.name === CPT_TEMPLATE_NAME) {
+      applyCptDefaults(createOfferEngagement);
+    } else {
+      resetCptFields();
+    }
   }, [availableOfferTemplates, createOfferEngagement, selectedTemplateId]);
 
   const templateErrorDetails = (error: unknown) => {
@@ -156,6 +194,14 @@ export default function AdminProfile() {
           engagementTitle,
           functionArea,
           compensationText,
+          schoolName,
+          workLocation,
+          responseDeadline,
+          responsibilitiesText,
+          companyPhone,
+          companyEmail,
+          signatoryName,
+          signatoryTitle,
         },
       );
       return response.json() as Promise<OfferTemplatePreviewResponse>;
@@ -185,6 +231,14 @@ export default function AdminProfile() {
             engagementTitle,
             functionArea,
             compensationText,
+            schoolName,
+            workLocation,
+            responseDeadline,
+            responsibilitiesText,
+            companyPhone,
+            companyEmail,
+            signatoryName,
+            signatoryTitle,
             title: offerTitle,
             body: offerBody,
           }
@@ -202,6 +256,7 @@ export default function AdminProfile() {
       setEngagementTitle("");
       setFunctionArea("");
       setCompensationText("");
+      resetCptFields();
       setOfferTitle("");
       setOfferBody("");
       setTemplatePreviewError(null);
@@ -299,6 +354,7 @@ export default function AdminProfile() {
     setEngagementTitle(`${admin?.name ?? "Trainee"} Trainee Engagement`);
     setFunctionArea("");
     setCompensationText("");
+    resetCptFields();
     setTemplatePreviewError(null);
     setTemplatePreviewMissingVariables([]);
     if (availableOfferTemplates.length > 0) {
@@ -805,6 +861,12 @@ export default function AdminProfile() {
                       setOfferBody("");
                       setTemplatePreviewError(null);
                       setTemplatePreviewMissingVariables([]);
+                      const template = availableOfferTemplates.find((item) => String(item.id) === value);
+                      if (template?.name === CPT_TEMPLATE_NAME && createOfferEngagement) {
+                        applyCptDefaults(createOfferEngagement);
+                      } else {
+                        resetCptFields();
+                      }
                     }}
                   >
                     <SelectTrigger data-testid="select-offer-letter-template">
@@ -855,6 +917,102 @@ export default function AdminProfile() {
                     data-testid="textarea-offer-compensation-text"
                   />
                 </div>
+
+                {isCptTemplateSelected && (
+                  <div className="rounded-md border border-border p-4">
+                    <div className="mb-3">
+                      <p className="text-sm font-medium text-foreground">CPT Details</p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">
+                          School Name <RequiredLabel />
+                        </Label>
+                        <Input
+                          value={schoolName}
+                          onChange={(event) => setSchoolName(event.target.value)}
+                          maxLength={200}
+                          data-testid="input-offer-school-name"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">
+                          Work Location <RequiredLabel />
+                        </Label>
+                        <Input
+                          value={workLocation}
+                          onChange={(event) => setWorkLocation(event.target.value)}
+                          maxLength={500}
+                          data-testid="input-offer-work-location"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">
+                          Response Deadline <RequiredLabel />
+                        </Label>
+                        <Input
+                          value={responseDeadline}
+                          onChange={(event) => setResponseDeadline(event.target.value)}
+                          maxLength={200}
+                          placeholder="e.g. July 15, 2026"
+                          data-testid="input-offer-response-deadline"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">
+                          Signatory Name <RequiredLabel />
+                        </Label>
+                        <Input
+                          value={signatoryName}
+                          onChange={(event) => setSignatoryName(event.target.value)}
+                          maxLength={200}
+                          data-testid="input-offer-signatory-name"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">
+                          Signatory Title <RequiredLabel />
+                        </Label>
+                        <Input
+                          value={signatoryTitle}
+                          onChange={(event) => setSignatoryTitle(event.target.value)}
+                          maxLength={200}
+                          data-testid="input-offer-signatory-title"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">Company Email</Label>
+                        <Input
+                          value={companyEmail}
+                          onChange={(event) => setCompanyEmail(event.target.value)}
+                          maxLength={320}
+                          data-testid="input-offer-company-email"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">Company Phone</Label>
+                        <Input
+                          value={companyPhone}
+                          onChange={(event) => setCompanyPhone(event.target.value)}
+                          maxLength={100}
+                          data-testid="input-offer-company-phone"
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <Label className="text-sm font-medium text-muted-foreground">
+                        Responsibilities Text <RequiredLabel />
+                      </Label>
+                      <Textarea
+                        value={responsibilitiesText}
+                        onChange={(event) => setResponsibilitiesText(event.target.value)}
+                        className="min-h-24"
+                        maxLength={8000}
+                        data-testid="textarea-offer-responsibilities-text"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-3">
                   <Button

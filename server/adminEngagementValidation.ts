@@ -212,6 +212,38 @@ const manualTemplateMergeValuesSchema = {
     (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
     z.string().trim().max(4000).optional()
   ),
+  schoolName: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(200).optional()
+  ),
+  workLocation: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(500).optional()
+  ),
+  responseDeadline: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(200).optional()
+  ),
+  responsibilitiesText: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(8000).optional()
+  ),
+  companyPhone: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(100).optional()
+  ),
+  companyEmail: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().email().max(320).optional()
+  ),
+  signatoryName: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(200).optional()
+  ),
+  signatoryTitle: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(200).optional()
+  ),
 };
 
 const directOfferLetterPayloadSchema = z.object({

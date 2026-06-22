@@ -21,6 +21,14 @@ export const OFFER_LETTER_TEMPLATE_VARIABLES = [
   "engagement_title",
   "function_area",
   "compensation_text",
+  "school_name",
+  "work_location",
+  "response_deadline",
+  "responsibilities_text",
+  "company_phone",
+  "company_email",
+  "signatory_name",
+  "signatory_title",
   "company_name",
 ] as const;
 
@@ -33,6 +41,12 @@ const MANUAL_VARIABLES = new Set<string>([
   "engagement_title",
   "function_area",
   "compensation_text",
+  "school_name",
+  "work_location",
+  "response_deadline",
+  "responsibilities_text",
+  "signatory_name",
+  "signatory_title",
 ]);
 
 export class DocumentTemplateError extends Error {
@@ -50,6 +64,14 @@ export interface ManualOfferLetterMergeValues {
   engagementTitle?: string;
   functionArea?: string;
   compensationText?: string;
+  schoolName?: string;
+  workLocation?: string;
+  responseDeadline?: string;
+  responsibilitiesText?: string;
+  companyPhone?: string;
+  companyEmail?: string;
+  signatoryName?: string;
+  signatoryTitle?: string;
 }
 
 export interface OfferLetterTemplatePreview {
@@ -86,11 +108,28 @@ function getCompanyName() {
   return process.env.COMPANY_NAME?.trim() || "Yaotu";
 }
 
+function getCompanyEmail() {
+  const value = process.env.COMPANY_EMAIL
+    || process.env.MAIL_FROM
+    || process.env.MAILGUN_FROM
+    || "";
+  const match = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0] ?? "";
+}
+
 function toSnakeManualValues(values: ManualOfferLetterMergeValues) {
   return {
     engagement_title: trimOptional(values.engagementTitle),
     function_area: trimOptional(values.functionArea),
     compensation_text: trimOptional(values.compensationText),
+    school_name: trimOptional(values.schoolName),
+    work_location: trimOptional(values.workLocation),
+    response_deadline: trimOptional(values.responseDeadline),
+    responsibilities_text: trimOptional(values.responsibilitiesText),
+    company_phone: trimOptional(values.companyPhone),
+    company_email: trimOptional(values.companyEmail),
+    signatory_name: trimOptional(values.signatoryName),
+    signatory_title: trimOptional(values.signatoryTitle),
   };
 }
 
@@ -181,7 +220,15 @@ function buildMergeData(input: {
     supervisor_email: input.supervisor ? valueOrFallback(input.supervisor.email) : "Not set",
     engagement_title: manual.engagement_title,
     function_area: manual.function_area,
-    compensation_text: manual.compensation_text,
+    compensation_text: manual.compensation_text || "Unpaid internship position for academic practical training purposes.",
+    school_name: manual.school_name,
+    work_location: manual.work_location || "Remote",
+    response_deadline: manual.response_deadline,
+    responsibilities_text: manual.responsibilities_text || valueOrFallback(input.engagement.workScope, ""),
+    company_phone: manual.company_phone || process.env.COMPANY_PHONE?.trim() || "Not provided",
+    company_email: manual.company_email || getCompanyEmail() || "Not provided",
+    signatory_name: manual.signatory_name || (input.supervisor ? valueOrFallback(input.supervisor.name) : ""),
+    signatory_title: manual.signatory_title || process.env.COMPANY_SIGNATORY_TITLE?.trim() || "Founder & Manager",
     company_name: getCompanyName(),
   };
 }
