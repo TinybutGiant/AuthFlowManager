@@ -68,6 +68,7 @@ export default function AdminProfile() {
   const [templatePreviewError, setTemplatePreviewError] = useState<string | null>(null);
   const [templatePreviewMissingVariables, setTemplatePreviewMissingVariables] = useState<string[]>([]);
   const [previewDocument, setPreviewDocument] = useState<AdminEngagementDocument | null>(null);
+  const [viewOfferTemplate, setViewOfferTemplate] = useState<AdminDocumentTemplate | null>(null);
 
   const { data: admin, isLoading } = useQuery<AdminUser>({
     queryKey: ["/api/admin/users", adminId],
@@ -862,47 +863,59 @@ export default function AdminProfile() {
       </div>
 
       <Dialog open={Boolean(createOfferEngagement)} onOpenChange={(open) => !open && setCreateOfferEngagement(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
           <DialogHeader>
             <DialogTitle>Create Offer Letter</DialogTitle>
             <DialogDescription>
               Merge a plain-text template, review the final body, and create a private PDF artifact.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="min-h-0 space-y-4 overflow-y-auto pb-1 pl-1 pr-2 pt-1">
             {availableOfferTemplates.length > 0 && (
               <>
-                <div>
-                  <Label className="text-sm font-medium text-muted-foreground">
-                    Template <RequiredLabel />
-                  </Label>
-                  <Select
-                    value={selectedTemplateId}
-                    onValueChange={(value) => {
-                      setSelectedTemplateId(value);
-                      setOfferTitle("");
-                      setOfferBody("");
-                      setTemplatePreviewError(null);
-                      setTemplatePreviewMissingVariables([]);
-                      const template = availableOfferTemplates.find((item) => String(item.id) === value);
-                      if (template?.name === CPT_TEMPLATE_NAME && createOfferEngagement) {
-                        applyCptDefaults(createOfferEngagement);
-                      } else {
-                        resetCptFields();
-                      }
-                    }}
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto] md:items-end">
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">
+                      Template <RequiredLabel />
+                    </Label>
+                    <Select
+                      value={selectedTemplateId}
+                      onValueChange={(value) => {
+                        setSelectedTemplateId(value);
+                        setOfferTitle("");
+                        setOfferBody("");
+                        setTemplatePreviewError(null);
+                        setTemplatePreviewMissingVariables([]);
+                        const template = availableOfferTemplates.find((item) => String(item.id) === value);
+                        if (template?.name === CPT_TEMPLATE_NAME && createOfferEngagement) {
+                          applyCptDefaults(createOfferEngagement);
+                        } else {
+                          resetCptFields();
+                        }
+                      }}
+                    >
+                      <SelectTrigger data-testid="select-offer-letter-template">
+                        <SelectValue placeholder="Select template" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableOfferTemplates.map((template) => (
+                          <SelectItem key={template.id} value={String(template.id)}>
+                            {template.name} v{template.version} ({template.status})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => selectedTemplate && setViewOfferTemplate(selectedTemplate)}
+                    disabled={!selectedTemplate}
+                    data-testid="button-view-offer-template"
                   >
-                    <SelectTrigger data-testid="select-offer-letter-template">
-                      <SelectValue placeholder="Select template" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableOfferTemplates.map((template) => (
-                        <SelectItem key={template.id} value={String(template.id)}>
-                          {template.name} v{template.version} ({template.status})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    <FileText className="h-4 w-4 mr-2" />
+                    View Template
+                  </Button>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1131,6 +1144,9 @@ export default function AdminProfile() {
                     </p>
                   )}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  View Template shows the raw reusable template. Preview Template shows the final merged offer draft for this engagement.
+                </p>
 
                 {templatePreviewError && (
                   <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
@@ -1170,7 +1186,7 @@ export default function AdminProfile() {
               />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="border-t pt-4">
             <Button
               variant="outline"
               onClick={() => setCreateOfferEngagement(null)}
@@ -1191,6 +1207,59 @@ export default function AdminProfile() {
               {createOfferLetterMutation.isPending ? "Creating..." : "Create Offer Letter"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(viewOfferTemplate)} onOpenChange={(open) => !open && setViewOfferTemplate(null)}>
+        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-2xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>{viewOfferTemplate?.name ?? "Offer Letter Template"}</DialogTitle>
+            <DialogDescription>
+              Raw reusable template with variables. Preview Template uses current engagement details to create the merged offer draft.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 space-y-4 overflow-y-auto pb-1 pl-1 pr-2 pt-1">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Status</p>
+                <Badge variant={viewOfferTemplate?.status === "active" ? "default" : "secondary"}>
+                  {viewOfferTemplate?.status}
+                </Badge>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Version</p>
+                <p>v{viewOfferTemplate?.version}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Format</p>
+                <p>{viewOfferTemplate?.content_format}</p>
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-sm font-medium text-muted-foreground">Title Template</p>
+              <pre className="whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-3 text-sm">
+                {viewOfferTemplate?.title_template}
+              </pre>
+            </div>
+            <div>
+              <p className="mb-1 text-sm font-medium text-muted-foreground">Body Template</p>
+              <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-3 text-sm leading-6">
+                {viewOfferTemplate?.body_template}
+              </pre>
+            </div>
+            <div>
+              <p className="mb-1 text-sm font-medium text-muted-foreground">Allowed Variables</p>
+              <div className="flex flex-wrap gap-2">
+                {viewOfferTemplate?.allowed_variables?.length ? (
+                  viewOfferTemplate.allowed_variables.map((variable) => (
+                    <Badge key={variable} variant="outline">{variable}</Badge>
+                  ))
+                ) : (
+                  <span className="text-sm text-muted-foreground">No variables declared.</span>
+                )}
+              </div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

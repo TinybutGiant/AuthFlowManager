@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  FileText,
   GraduationCap,
   RefreshCw,
 } from "lucide-react";
@@ -96,6 +97,12 @@ const menuItems: MenuItem[] = [
         title: "Lifecycle Jobs",
         href: "/admin-operations/lifecycle-jobs",
         icon: RefreshCw,
+        roles: ['super_admin'],
+      },
+      {
+        title: "Document Templates",
+        href: "/admin-operations/document-templates",
+        icon: FileText,
         roles: ['super_admin'],
       },
     ],

@@ -18,6 +18,7 @@ import {
   createDocumentTemplate,
   DocumentTemplateError,
   previewOfferLetterTemplate,
+  updateDocumentTemplate,
 } from "./documentTemplateService";
 
 const CPT_TEMPLATE_NAME = "CPT Internship Offer Letter";
@@ -391,6 +392,38 @@ test("document template create rejects unsupported variables", async () => {
       error.details.unknown_variables.includes("execute_javascript")
     ),
   );
+});
+
+test("active document template edits create a new version and archive the old version", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const activeTemplate = store.seedTemplate({
+    name: "Versioned Offer Template",
+    status: "active",
+    version: 2,
+    titleTemplate: "Original {{trainee_name}}",
+    bodyTemplate: "Original body {{compensation_text}}",
+  });
+
+  const nextTemplate = await updateDocumentTemplate({
+    storage: store as any,
+    templateId: activeTemplate.id,
+    actorAdminId: 123,
+    updates: {
+      name: "Versioned Offer Template",
+      titleTemplate: "Updated {{trainee_name}}",
+      bodyTemplate: "Updated body {{compensation_text}}",
+      status: "active",
+    },
+  });
+
+  const archivedTemplate = store.templates.get(activeTemplate.id);
+  assert.notEqual(nextTemplate.id, activeTemplate.id);
+  assert.equal(nextTemplate.version, 3);
+  assert.equal(nextTemplate.status, "active");
+  assert.equal(nextTemplate.createdBy, 123);
+  assert.equal(nextTemplate.titleTemplate, "Updated {{trainee_name}}");
+  assert.equal(archivedTemplate.status, "archived");
+  assert.ok(archivedTemplate.archivedAt);
 });
 
 test("template preview derives safe variables and applies manual merge values", async () => {

@@ -521,11 +521,47 @@ test("lifecycle jobs are exposed only through admin operations", async () => {
   assert.match(sidebarSource, /title: "Admin Operations"/);
   assert.match(sidebarSource, /title: "Lifecycle Jobs"/);
   assert.match(sidebarSource, /href: "\/admin-operations\/lifecycle-jobs"/);
+  assert.match(sidebarSource, /title: "Document Templates"/);
+  assert.match(sidebarSource, /href: "\/admin-operations\/document-templates"/);
   assert.match(lifecycleJobsSource, /\/api\/admin\/engagements\/run-lifecycle-transitions/);
   assert.match(lifecycleJobsSource, /Run all due lifecycle transitions/);
   assert.match(lifecycleJobsSource, /Checks all due trainee engagements, not only one user/);
   assert.doesNotMatch(profileSource, /run-lifecycle-transitions|Run all due lifecycle transitions/);
   assert.doesNotMatch(traineeSource, /run-lifecycle-transitions|Run all due lifecycle transitions/);
+});
+
+test("document template management is super admin only and renders plain-text previews", async () => {
+  const appSource = await readFile(new URL("../client/src/App.tsx", import.meta.url), "utf8");
+  const sidebarSource = await readFile(new URL("../client/src/components/Sidebar.tsx", import.meta.url), "utf8");
+  const documentTemplatesSource = await readFile(new URL("../client/src/pages/DocumentTemplates.tsx", import.meta.url), "utf8");
+  const adminProfileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+
+  assert.match(appSource, /path="\/admin-operations\/document-templates"/);
+  assert.match(appSource, /<DocumentTemplates \/>/);
+  assert.match(appSource, /allowedRoles={\["super_admin"\]}/);
+
+  const adminOperationsStart = sidebarSource.indexOf('title: "Admin Operations"');
+  const adminOperationsEnd = sidebarSource.indexOf('title: "Finance Management"', adminOperationsStart);
+  const adminOperationsBlock = sidebarSource.slice(adminOperationsStart, adminOperationsEnd);
+  assert.match(adminOperationsBlock, /title: "Document Templates"/);
+  assert.match(adminOperationsBlock, /href: "\/admin-operations\/document-templates"/);
+  assert.match(adminOperationsBlock, /roles: \['super_admin'\]/);
+  assert.doesNotMatch(adminOperationsBlock, /trainee_access/);
+
+  assert.match(documentTemplatesSource, /\/api\/admin\/document-templates/);
+  assert.match(documentTemplatesSource, /Edit \/ Create New Version/);
+  assert.match(documentTemplatesSource, /Duplicate Template/);
+  assert.match(documentTemplatesSource, /Archive Document Template/);
+  assert.match(documentTemplatesSource, /Raw Template/);
+  assert.match(documentTemplatesSource, /Sample Merged Preview/);
+  assert.match(documentTemplatesSource, /TemplateBodyBlock/);
+  assert.match(documentTemplatesSource, /whitespace-pre-wrap/);
+  assert.doesNotMatch(documentTemplatesSource, /dangerouslySetInnerHTML|innerHTML|ReactMarkdown|marked|markdown-to-jsx/i);
+
+  assert.match(adminProfileSource, /button-view-offer-template/);
+  assert.match(adminProfileSource, /View Template shows the raw reusable template/);
+  assert.match(adminProfileSource, /Preview Template shows the final merged offer draft/);
+  assert.match(adminProfileSource, /template\.status !== "archived"/);
 });
 
 test("trainee workspace APIs are scoped to authenticated trainee", async () => {

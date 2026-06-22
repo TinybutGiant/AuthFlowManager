@@ -349,6 +349,7 @@ export async function createDocumentTemplate(input: {
 export async function updateDocumentTemplate(input: {
   storage: IStorage;
   templateId: number;
+  actorAdminId?: number;
   updates: Partial<{
     documentType: "offer_letter";
     name: string;
@@ -363,6 +364,35 @@ export async function updateDocumentTemplate(input: {
   const existing = await input.storage.getAdminDocumentTemplate(input.templateId);
   if (!existing) {
     throw new DocumentTemplateError(404, "Document template not found.");
+  }
+
+  if (existing.status === "active" && input.updates.status !== "archived") {
+    const nextTitleTemplate = input.updates.titleTemplate?.trim() ?? existing.titleTemplate;
+    const nextBodyTemplate = input.updates.bodyTemplate?.trim() ?? existing.bodyTemplate;
+    const allowedVariables = input.updates.allowedVariables !== undefined
+      ? normalizeAllowedVariables(nextTitleTemplate, nextBodyTemplate, input.updates.allowedVariables)
+      : normalizeAllowedVariables(nextTitleTemplate, nextBodyTemplate, existing.allowedVariables as string[]);
+
+    const created = await input.storage.createAdminDocumentTemplate({
+      documentType: input.updates.documentType ?? (existing.documentType as "offer_letter"),
+      name: input.updates.name?.trim() ?? existing.name,
+      description: input.updates.description !== undefined ? input.updates.description : existing.description,
+      status: "active",
+      version: existing.version + 1,
+      titleTemplate: nextTitleTemplate,
+      bodyTemplate: nextBodyTemplate,
+      contentFormat: input.updates.contentFormat ?? (existing.contentFormat as "plain_text"),
+      allowedVariables,
+      createdBy: input.actorAdminId ?? existing.createdBy,
+      archivedAt: null,
+    });
+
+    await input.storage.updateAdminDocumentTemplate(input.templateId, {
+      status: "archived",
+      archivedAt: existing.archivedAt ?? new Date(),
+    });
+
+    return created;
   }
 
   const nextTitleTemplate = input.updates.titleTemplate?.trim() ?? existing.titleTemplate;
@@ -396,9 +426,19 @@ export async function archiveDocumentTemplate(input: {
   storage: IStorage;
   templateId: number;
 }) {
-  return updateDocumentTemplate({
-    storage: input.storage,
-    templateId: input.templateId,
-    updates: { status: "archived" },
+  const existing = await input.storage.getAdminDocumentTemplate(input.templateId);
+  if (!existing) {
+    throw new DocumentTemplateError(404, "Document template not found.");
+  }
+
+  const updated = await input.storage.updateAdminDocumentTemplate(input.templateId, {
+    status: "archived",
+    archivedAt: existing.archivedAt ?? new Date(),
   });
+
+  if (!updated) {
+    throw new DocumentTemplateError(404, "Document template not found.");
+  }
+
+  return updated;
 }

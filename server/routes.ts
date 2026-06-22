@@ -761,6 +761,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/document-templates/:templateId", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const template = await storage.getAdminDocumentTemplate(parseInt(req.params.templateId));
+      if (!template) {
+        return res.status(404).json({ message: "Document template not found" });
+      }
+
+      res.json(sanitizeAdminDocumentTemplate(template));
+    } catch (error) {
+      console.error("[document-template route] Failed to fetch document template", error);
+      res.status(500).json({ message: "Failed to fetch document template" });
+    }
+  });
+
   app.post("/api/admin/document-templates", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const payload = documentTemplatePayloadSchema.parse(req.body);
@@ -788,6 +802,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const template = await updateDocumentTemplate({
         storage,
         templateId: parseInt(req.params.templateId),
+        actorAdminId: req.adminUser.id,
         updates: payload,
       });
       res.json(sanitizeAdminDocumentTemplate(template));
