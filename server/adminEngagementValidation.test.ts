@@ -5,9 +5,12 @@ import test from "node:test";
 import {
   accessRoleSchema,
   adminUserUpdateSchema,
+  documentTemplatePayloadSchema,
+  documentTemplateUpdatePayloadSchema,
   engagementPayloadSchema,
   offerLetterPayloadSchema,
   lifecycleEventPayloadSchema,
+  templatePreviewPayloadSchema,
   traineeActivityLogPayloadSchema,
   traineeEndEngagementPayloadSchema,
   validateActivityDateWithinEngagement,
@@ -110,11 +113,21 @@ test("lifecycle event payload is append-only metadata and cannot carry permissio
   }).success, false);
 });
 
-test("offer letter validation only accepts minimal plain text payload", () => {
+test("offer letter validation accepts direct body and template create payloads only", () => {
   assert.equal(offerLetterPayloadSchema.safeParse({
     documentType: "offer_letter",
     title: "Offer Letter",
     body: "Please review this offer letter.",
+  }).success, true);
+
+  assert.equal(offerLetterPayloadSchema.safeParse({
+    documentType: "offer_letter",
+    templateId: 1,
+    engagementTitle: "Operations Trainee",
+    functionArea: "Operations",
+    compensationText: "This trainee engagement is unpaid.",
+    title: "Final title",
+    body: "Final body",
   }).success, true);
 
   assert.equal(offerLetterPayloadSchema.safeParse({
@@ -135,6 +148,51 @@ test("offer letter validation only accepts minimal plain text payload", () => {
     adminUserId: 1,
     engagementId: 2,
     fileKey: "unsafe",
+  }).success, false);
+});
+
+test("document template validation is plain-text and strict", () => {
+  assert.equal(documentTemplatePayloadSchema.safeParse({
+    documentType: "offer_letter",
+    name: "Default Offer",
+    status: "active",
+    titleTemplate: "{{trainee_name}} Offer Letter",
+    bodyTemplate: "Dear {{trainee_name}}",
+    contentFormat: "plain_text",
+    allowedVariables: ["trainee_name"],
+  }).success, true);
+
+  assert.equal(documentTemplatePayloadSchema.safeParse({
+    documentType: "offer_letter",
+    name: "HTML Offer",
+    titleTemplate: "<h1>{{trainee_name}}</h1>",
+    bodyTemplate: "<script>alert(1)</script>",
+    contentFormat: "html",
+  }).success, false);
+
+  assert.equal(documentTemplatePayloadSchema.safeParse({
+    documentType: "offer_letter",
+    name: "Unsafe",
+    titleTemplate: "{{trainee_name}}",
+    bodyTemplate: "Body",
+    status: "active",
+    createdBy: 1,
+  }).success, false);
+
+  assert.equal(documentTemplateUpdatePayloadSchema.safeParse({
+    bodyTemplate: "Updated {{trainee_name}}",
+  }).success, true);
+  assert.equal(documentTemplateUpdatePayloadSchema.safeParse({}).success, false);
+
+  assert.equal(templatePreviewPayloadSchema.safeParse({
+    templateId: 1,
+    engagementTitle: "Research Trainee",
+    functionArea: "Research",
+    compensationText: "Compensation text",
+  }).success, true);
+  assert.equal(templatePreviewPayloadSchema.safeParse({
+    templateId: 1,
+    engagementId: 2,
   }).success, false);
 });
 
@@ -359,6 +417,18 @@ test("offer letter APIs use admin or trainee scoped permissions", async () => {
   const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
 
   for (const required of [
+    '"/api/admin/document-templates"',
+    '"/api/admin/document-templates/:templateId"',
+    '"/api/admin/document-templates/:templateId/archive"',
+    '"/api/admin/engagements/:engagementId/documents/preview-template"',
+  ]) {
+    const start = source.indexOf(required);
+    assert.notEqual(start, -1, `${required} should exist`);
+    const block = source.slice(start, source.indexOf(");", start));
+    assert.match(block, /requireRole\(\['super_admin'\]\)/);
+  }
+
+  for (const required of [
     '"/api/admin/engagements/:engagementId/documents/:documentId/regenerate-pdf"',
     '"/api/admin/engagements/:engagementId/documents/:documentId/send"',
     '"/api/admin/engagements/:engagementId/documents/:documentId/download"',
@@ -383,6 +453,11 @@ test("offer letter APIs use admin or trainee scoped permissions", async () => {
     assert.match(block, /req\.adminUser\.id/);
     assert.doesNotMatch(block, /req\.body\.adminUserId|req\.body\.engagementId|req\.params\.adminUserId/);
   }
+
+  const traineeSanitizerStart = source.indexOf("function sanitizeTraineeDocument");
+  const traineeSanitizerEnd = source.indexOf("function getRequestIp", traineeSanitizerStart);
+  const traineeSanitizerBlock = source.slice(traineeSanitizerStart, traineeSanitizerEnd);
+  assert.doesNotMatch(traineeSanitizerBlock, /mergeData|merge_data|templateTitle|template_body|templateBody/);
 });
 
 test("admin profile hides unsafe actions for accepted offer letters", async () => {

@@ -5,6 +5,7 @@ const REQUIRED_TABLES = [
   "admin_lifecycle_events",
   "admin_activity_logs",
   "admin_engagement_documents",
+  "admin_document_templates",
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -16,6 +17,17 @@ const REQUIRED_COLUMNS = [
   ["admin_engagement_documents", "file_sha256"],
   ["admin_engagement_documents", "file_size_bytes"],
   ["admin_engagement_documents", "accepted_by"],
+  ["admin_engagement_documents", "template_id"],
+  ["admin_engagement_documents", "template_version"],
+  ["admin_engagement_documents", "template_name_snapshot"],
+  ["admin_engagement_documents", "template_title_snapshot"],
+  ["admin_engagement_documents", "template_body_snapshot"],
+  ["admin_engagement_documents", "merge_data"],
+  ["admin_engagement_documents", "content_format"],
+  ["admin_document_templates", "title_template"],
+  ["admin_document_templates", "body_template"],
+  ["admin_document_templates", "allowed_variables"],
+  ["admin_document_templates", "content_format"],
 ] as const;
 
 const REQUIRED_LIFECYCLE_EVENT_TYPES = [

@@ -6,6 +6,7 @@ import {
   adminLifecycleEvents,
   adminActivityLogs,
   adminEngagementDocuments,
+  adminDocumentTemplates,
   type User,
   type InsertUser,
   type AdminUser,
@@ -20,6 +21,8 @@ import {
   type InsertAdminActivityLog,
   type AdminEngagementDocument,
   type InsertAdminEngagementDocument,
+  type AdminDocumentTemplate,
+  type InsertAdminDocumentTemplate,
   type AdminRole,
   type AdminStatus,
   type ApprovalStatus,
@@ -119,6 +122,10 @@ export interface IStorage {
   ): Promise<AdminActivityLog>;
   listAdminEngagementDocuments(engagementId: number): Promise<AdminEngagementDocument[]>;
   listTraineeEngagementDocuments(adminUserId: number): Promise<AdminEngagementDocument[]>;
+  listAdminDocumentTemplates(filters?: { documentType?: string }): Promise<AdminDocumentTemplate[]>;
+  getAdminDocumentTemplate(id: number): Promise<AdminDocumentTemplate | undefined>;
+  createAdminDocumentTemplate(template: InsertAdminDocumentTemplate): Promise<AdminDocumentTemplate>;
+  updateAdminDocumentTemplate(id: number, updates: Partial<AdminDocumentTemplate>): Promise<AdminDocumentTemplate | undefined>;
   getAdminEngagementDocument(id: number): Promise<AdminEngagementDocument | undefined>;
   getAdminEngagementDocumentForEngagement(
     engagementId: number,
@@ -717,6 +724,49 @@ export class DatabaseStorage implements IStorage {
 
       return newActivityLog;
     });
+  }
+
+  async listAdminDocumentTemplates(filters?: { documentType?: string }): Promise<AdminDocumentTemplate[]> {
+    if (filters?.documentType) {
+      return await db
+        .select()
+        .from(adminDocumentTemplates)
+        .where(eq(adminDocumentTemplates.documentType, filters.documentType))
+        .orderBy(desc(adminDocumentTemplates.updatedAt), desc(adminDocumentTemplates.createdAt));
+    }
+
+    return await db
+      .select()
+      .from(adminDocumentTemplates)
+      .orderBy(desc(adminDocumentTemplates.updatedAt), desc(adminDocumentTemplates.createdAt));
+  }
+
+  async getAdminDocumentTemplate(id: number): Promise<AdminDocumentTemplate | undefined> {
+    const [template] = await db
+      .select()
+      .from(adminDocumentTemplates)
+      .where(eq(adminDocumentTemplates.id, id));
+    return template;
+  }
+
+  async createAdminDocumentTemplate(template: InsertAdminDocumentTemplate): Promise<AdminDocumentTemplate> {
+    const [created] = await db
+      .insert(adminDocumentTemplates)
+      .values(template)
+      .returning();
+    return created;
+  }
+
+  async updateAdminDocumentTemplate(
+    id: number,
+    updates: Partial<AdminDocumentTemplate>
+  ): Promise<AdminDocumentTemplate | undefined> {
+    const [template] = await db
+      .update(adminDocumentTemplates)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(adminDocumentTemplates.id, id))
+      .returning();
+    return template;
   }
 
   async listAdminEngagementDocuments(engagementId: number): Promise<AdminEngagementDocument[]> {

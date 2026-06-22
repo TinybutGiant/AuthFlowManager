@@ -7,7 +7,12 @@ import type {
 } from "@shared/schema";
 import type { IStorage } from "./storage";
 import { getAdminAppOrigin } from "./passwordSetup";
-import { renderOfferLetterPdfBuffer } from "./pdf/renderOfferLetterPdf";
+import {
+  buildLegacyOfferLetterPdfContext,
+  buildSnapshotOfferLetterPdfContext,
+  OfferLetterSnapshotDataError,
+  renderOfferLetterPdfBuffer,
+} from "./pdf/renderOfferLetterPdf";
 import {
   getPrivateObjectBuffer,
   isPrivateObjectStorageConfigured,
@@ -17,9 +22,15 @@ import {
   type PutPrivateObjectInput,
 } from "./lib/privateR2Storage";
 import { sendOfferLetterReadyEmail } from "./email";
+import {
+  previewOfferLetterTemplate,
+  type ManualOfferLetterMergeValues,
+} from "./documentTemplateService";
 
 const PRIVATE_STORAGE_NOT_CONFIGURED_MESSAGE = "Private offer letter storage is not configured.";
 const PREPARE_OFFER_LETTER_ERROR_MESSAGE = "Could not prepare the offer letter document.";
+const OFFER_LETTER_SNAPSHOT_INCOMPLETE_MESSAGE =
+  "Offer letter snapshot is incomplete. Please create a new offer letter version.";
 const OFFER_LETTER_ARTIFACT_UNAVAILABLE_MESSAGE =
   "Document artifact is not available. Please try again or regenerate the offer letter.";
 
@@ -82,6 +93,10 @@ function safeLifecycleMetadata(document: AdminEngagementDocument, extra: Record<
   };
 }
 
+function hasMergeSnapshot(document: Pick<AdminEngagementDocument, "mergeData">) {
+  return Boolean(document.mergeData);
+}
+
 async function getEngagementContext(
   serviceStorage: IStorage,
   engagementId: number
@@ -123,18 +138,23 @@ export async function generateOfferLetterPdfArtifact(input: {
   }
   assertPrivateStorageConfigured(objectStorage);
 
-  const { engagement, trainee, supervisor } = await getEngagementContext(input.storage, input.document.engagementId);
   const now = input.now ?? new Date();
   let pdf: Buffer;
   try {
+    const context = hasMergeSnapshot(input.document)
+      ? buildSnapshotOfferLetterPdfContext(input.document.mergeData)
+      : buildLegacyOfferLetterPdfContext(
+          await getEngagementContext(input.storage, input.document.engagementId),
+        );
     pdf = await renderOfferLetterPdfBuffer({
       document: input.document,
-      engagement,
-      trainee,
-      supervisor,
+      context,
       generatedAt: now,
     });
   } catch (error) {
+    if (error instanceof OfferLetterSnapshotDataError) {
+      throw new OfferLetterError(409, OFFER_LETTER_SNAPSHOT_INCOMPLETE_MESSAGE);
+    }
     logOfferLetterStorageError("Failed to render offer letter PDF artifact.", error);
     throw new OfferLetterError(503, PREPARE_OFFER_LETTER_ERROR_MESSAGE);
   }
@@ -191,8 +211,97 @@ export async function createOfferLetterDocument(input: {
   body: string;
   now?: Date;
 }): Promise<AdminEngagementDocument> {
+  return createFrozenOfferLetterDocument({
+    storage: input.storage,
+    objectStorage: input.objectStorage,
+    engagementId: input.engagementId,
+    actorAdminId: input.actorAdminId,
+    title: input.title,
+    body: input.body,
+    now: input.now,
+  });
+}
+
+export async function createOfferLetterDocumentFromTemplate(input: {
+  storage: IStorage;
+  objectStorage?: OfferLetterObjectStorage;
+  engagementId: number;
+  actorAdminId: number;
+  templateId: number;
+  manualValues: ManualOfferLetterMergeValues;
+  title?: string;
+  body?: string;
+  now?: Date;
+}): Promise<AdminEngagementDocument> {
+  const preview = await previewOfferLetterTemplate({
+    storage: input.storage,
+    engagementId: input.engagementId,
+    templateId: input.templateId,
+    manualValues: input.manualValues,
+  });
+
+  return createFrozenOfferLetterDocument({
+    storage: input.storage,
+    objectStorage: input.objectStorage,
+    engagementId: input.engagementId,
+    actorAdminId: input.actorAdminId,
+    title: input.title ?? preview.title,
+    body: input.body ?? preview.body,
+    templateSnapshot: {
+      templateId: preview.template.id,
+      templateVersion: preview.template.version,
+      templateNameSnapshot: preview.template.name,
+      templateTitleSnapshot: preview.template.titleTemplate,
+      templateBodySnapshot: preview.template.bodyTemplate,
+      mergeData: preview.mergeData,
+      contentFormat: preview.template.contentFormat,
+    },
+    now: input.now,
+  });
+}
+
+interface OfferLetterTemplateSnapshotInput {
+  templateId: number;
+  templateVersion: number;
+  templateNameSnapshot: string;
+  templateTitleSnapshot: string;
+  templateBodySnapshot: string;
+  mergeData: unknown;
+  contentFormat: string;
+}
+
+function assertFinalOfferLetterContent(title: string, body: string) {
+  if (!title.trim() || title.length > 200) {
+    throw new OfferLetterError(400, "Title is required and must be 200 characters or fewer");
+  }
+  if (!body.trim() || body.length > 20000) {
+    throw new OfferLetterError(400, "Body is required and must be 20000 characters or fewer");
+  }
+}
+
+async function createFrozenOfferLetterDocument(input: {
+  storage: IStorage;
+  objectStorage?: OfferLetterObjectStorage;
+  engagementId: number;
+  actorAdminId: number;
+  title: string;
+  body: string;
+  templateSnapshot?: OfferLetterTemplateSnapshotInput;
+  now?: Date;
+}): Promise<AdminEngagementDocument> {
   const objectStorage = input.objectStorage ?? defaultOfferLetterObjectStorage;
   assertPrivateStorageConfigured(objectStorage);
+  assertFinalOfferLetterContent(input.title, input.body);
+  if (input.templateSnapshot) {
+    try {
+      buildSnapshotOfferLetterPdfContext(input.templateSnapshot.mergeData);
+    } catch (error) {
+      if (error instanceof OfferLetterSnapshotDataError) {
+        throw new OfferLetterError(409, OFFER_LETTER_SNAPSHOT_INCOMPLETE_MESSAGE);
+      }
+      throw error;
+    }
+  }
 
   const { engagement } = await getEngagementContext(input.storage, input.engagementId);
   const documents = await input.storage.listAdminEngagementDocuments(input.engagementId);
@@ -215,6 +324,13 @@ export async function createOfferLetterDocument(input: {
     title: input.title.trim(),
     body: input.body.trim(),
     version: nextVersion,
+    templateId: input.templateSnapshot?.templateId ?? null,
+    templateVersion: input.templateSnapshot?.templateVersion ?? null,
+    templateNameSnapshot: input.templateSnapshot?.templateNameSnapshot ?? null,
+    templateTitleSnapshot: input.templateSnapshot?.templateTitleSnapshot ?? null,
+    templateBodySnapshot: input.templateSnapshot?.templateBodySnapshot ?? null,
+    mergeData: input.templateSnapshot?.mergeData ?? null,
+    contentFormat: input.templateSnapshot?.contentFormat ?? "plain_text",
     fileContentType: "application/pdf",
     createdBy: input.actorAdminId,
   };

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   acceptOfferLetterForTrainee,
   createOfferLetterDocument,
+  createOfferLetterDocumentFromTemplate,
   getOfferLetterDownload,
   OfferLetterError,
   regenerateOfferLetterPdf,
@@ -12,11 +13,17 @@ import {
   voidOfferLetterDocument,
   type OfferLetterObjectStorage,
 } from "./offerLetterService";
+import {
+  createDocumentTemplate,
+  DocumentTemplateError,
+  previewOfferLetterTemplate,
+} from "./documentTemplateService";
 
 class MemoryOfferLetterStorage {
   admins = new Map<number, any>();
   engagements = new Map<number, any>();
   documents = new Map<number, any>();
+  templates = new Map<number, any>();
   events: any[] = [];
 
   seedAdmin(overrides: Record<string, any> = {}) {
@@ -64,6 +71,13 @@ class MemoryOfferLetterStorage {
       title: "Offer Letter",
       body: "Please review this offer letter.",
       version: 1,
+      templateId: null,
+      templateVersion: null,
+      templateNameSnapshot: null,
+      templateTitleSnapshot: null,
+      templateBodySnapshot: null,
+      mergeData: null,
+      contentFormat: "plain_text",
       fileKey: "engagement-documents/1/1/v1/offer-letter.pdf",
       fileSha256: "hash",
       fileContentType: "application/pdf",
@@ -86,6 +100,29 @@ class MemoryOfferLetterStorage {
     return document;
   }
 
+  seedTemplate(overrides: Record<string, any> = {}) {
+    const now = new Date("2026-05-01T00:00:00Z");
+    const template = {
+      id: this.templates.size + 1,
+      documentType: "offer_letter",
+      name: `Offer Template ${this.templates.size + 1}`,
+      description: null,
+      status: "active",
+      version: 1,
+      titleTemplate: "{{trainee_name}} Offer Letter",
+      bodyTemplate: "Dear {{trainee_name}},\n\n{{compensation_text}}",
+      contentFormat: "plain_text",
+      allowedVariables: ["trainee_name", "compensation_text"],
+      createdBy: 99,
+      archivedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    };
+    this.templates.set(template.id, template);
+    return template;
+  }
+
   async getAdminEngagement(id: number) {
     return this.engagements.get(id);
   }
@@ -96,6 +133,37 @@ class MemoryOfferLetterStorage {
 
   async listAdminEngagementDocuments(engagementId: number) {
     return [...this.documents.values()].filter((document) => document.engagementId === engagementId);
+  }
+
+  async listAdminDocumentTemplates(filters?: { documentType?: string }) {
+    return [...this.templates.values()].filter((template) => (
+      !filters?.documentType || template.documentType === filters.documentType
+    ));
+  }
+
+  async getAdminDocumentTemplate(id: number) {
+    return this.templates.get(id);
+  }
+
+  async createAdminDocumentTemplate(templateInput: any) {
+    const now = new Date("2026-05-03T00:00:00Z");
+    const template = {
+      id: this.templates.size + 1,
+      archivedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      ...templateInput,
+    };
+    this.templates.set(template.id, template);
+    return template;
+  }
+
+  async updateAdminDocumentTemplate(id: number, updates: Record<string, any>) {
+    const existing = this.templates.get(id);
+    if (!existing) return undefined;
+    const template = { ...existing, ...updates, updatedAt: new Date("2026-05-04T00:00:00Z") };
+    this.templates.set(id, template);
+    return template;
   }
 
   async listTraineeEngagementDocuments(adminUserId: number) {
@@ -297,6 +365,267 @@ test("super admin flow creates a private offer letter artifact for a trainee eng
     store.events.map((event) => event.eventType),
     ["offer_letter_created", "offer_letter_pdf_generated"],
   );
+});
+
+test("document template create rejects unsupported variables", async () => {
+  const store = new MemoryOfferLetterStorage();
+
+  await assert.rejects(
+    createDocumentTemplate({
+      storage: store as any,
+      actorAdminId: 99,
+      documentType: "offer_letter",
+      name: "Unsafe Template",
+      status: "active",
+      titleTemplate: "{{trainee_name}} Offer Letter",
+      bodyTemplate: "Hello {{execute_javascript}}",
+      contentFormat: "plain_text",
+    }),
+    (error: any) => (
+      error instanceof DocumentTemplateError &&
+      error.statusCode === 400 &&
+      Array.isArray(error.details.unknown_variables) &&
+      error.details.unknown_variables.includes("execute_javascript")
+    ),
+  );
+});
+
+test("template preview derives safe variables and applies manual merge values", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "Trainee User", email: "trainee@example.com" });
+  const supervisor = store.seedAdmin({ name: "Supervisor User", email: "supervisor@example.com", role: "admin_support" });
+  const engagement = store.seedEngagement(trainee.id, {
+    supervisorAdminId: supervisor.id,
+    workAuthorizationType: "cpt",
+    workScope: "Shadow support workflows",
+  });
+  const template = store.seedTemplate({
+    titleTemplate: "{{trainee_name}} - {{engagement_title}}",
+    bodyTemplate: [
+      "{{trainee_email}}",
+      "{{function_area}}",
+      "{{supervisor_name}} <{{supervisor_email}}>",
+      "{{work_authorization_type}}",
+      "{{compensation_text}}",
+    ].join("\n"),
+  });
+
+  const preview = await previewOfferLetterTemplate({
+    storage: store as any,
+    engagementId: engagement.id,
+    templateId: template.id,
+    manualValues: {
+      engagementTitle: "Operations Trainee",
+      functionArea: "Operations",
+      compensationText: "This trainee engagement is unpaid.",
+    },
+  });
+
+  assert.equal(preview.title, "Trainee User - Operations Trainee");
+  assert.match(preview.body, /trainee@example\.com/);
+  assert.match(preview.body, /Supervisor User <supervisor@example\.com>/);
+  assert.match(preview.body, /cpt/);
+  assert.equal(preview.mergeData.engagement_title, "Operations Trainee");
+  assert.equal(preview.mergeData.function_area, "Operations");
+  assert.equal(preview.mergeData.compensation_text, "This trainee engagement is unpaid.");
+});
+
+test("template offer creation stores template and merge snapshots with frozen final body", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "Snapshot Trainee", email: "snapshot@example.com" });
+  const engagement = store.seedEngagement(trainee.id);
+  const template = store.seedTemplate({
+    name: "Snapshot Template",
+    version: 3,
+    titleTemplate: "{{trainee_name}} / {{engagement_title}}",
+    bodyTemplate: "Dear {{trainee_name}},\n\n{{compensation_text}}",
+  });
+
+  const document = await createOfferLetterDocumentFromTemplate({
+    storage: store as any,
+    objectStorage: createPrivateObjectStore(),
+    engagementId: engagement.id,
+    actorAdminId: 99,
+    templateId: template.id,
+    manualValues: {
+      engagementTitle: "Research Trainee",
+      compensationText: "Compensation will be handled separately.",
+    },
+    body: "Final edited body.",
+    now: new Date("2026-05-05T00:00:00Z"),
+  });
+
+  assert.equal(document.templateId, template.id);
+  assert.equal(document.templateVersion, 3);
+  assert.equal(document.templateNameSnapshot, "Snapshot Template");
+  assert.equal(document.templateTitleSnapshot, template.titleTemplate);
+  assert.equal(document.templateBodySnapshot, template.bodyTemplate);
+  assert.equal(document.title, "Snapshot Trainee / Research Trainee");
+  assert.equal(document.body, "Final edited body.");
+  assert.equal(document.mergeData.compensation_text, "Compensation will be handled separately.");
+  assert.ok(document.fileSha256);
+});
+
+test("PDF regeneration for template documents uses merge snapshot instead of changed live data", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "Original Trainee", email: "original@example.com" });
+  const supervisor = store.seedAdmin({ name: "Original Supervisor", email: "original-supervisor@example.com", role: "admin_support" });
+  const engagement = store.seedEngagement(trainee.id, {
+    supervisorAdminId: supervisor.id,
+    startDate: "2026-06-01",
+    endDate: "2026-08-31",
+  });
+  const template = store.seedTemplate({
+    titleTemplate: "{{trainee_name}} Offer",
+    bodyTemplate: "Supervisor: {{supervisor_name}}\n{{compensation_text}}",
+  });
+  const objectStorage = createPrivateObjectStore();
+  const generatedAt = new Date("2026-05-05T00:00:00Z");
+
+  const document = await createOfferLetterDocumentFromTemplate({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    actorAdminId: 99,
+    templateId: template.id,
+    manualValues: {
+      compensationText: "No compensation is provided.",
+    },
+    now: generatedAt,
+  });
+  const firstHash = document.fileSha256;
+
+  store.admins.set(trainee.id, { ...trainee, name: "Changed Trainee", email: "changed@example.com" });
+  store.admins.set(supervisor.id, { ...supervisor, name: "Changed Supervisor", email: "changed-supervisor@example.com" });
+  store.engagements.set(engagement.id, { ...engagement, startDate: "2027-01-01", endDate: "2027-12-31" });
+
+  const regenerated = await regenerateOfferLetterPdf({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    documentId: document.id,
+    actorAdminId: 99,
+    now: generatedAt,
+  });
+
+  assert.equal(regenerated.fileSha256, firstHash);
+});
+
+test("snapshot PDF regeneration fails safely when required merge data is incomplete", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "Live Trainee", email: "live@example.com" });
+  const engagement = store.seedEngagement(trainee.id);
+  const document = store.seedDocument({
+    engagementId: engagement.id,
+    status: "draft",
+    mergeData: {
+      trainee_name: "Snapshot Trainee",
+    },
+  });
+  const objectStorage = createPrivateObjectStore();
+  let liveContextRead = false;
+  store.getAdminEngagement = async () => {
+    liveContextRead = true;
+    throw new Error("live engagement context should not be read for snapshot PDFs");
+  };
+
+  await assert.rejects(
+    regenerateOfferLetterPdf({
+      storage: store as any,
+      objectStorage,
+      engagementId: engagement.id,
+      documentId: document.id,
+      actorAdminId: 99,
+    }),
+    (error: any) => (
+      error instanceof OfferLetterError &&
+      error.statusCode === 409 &&
+      error.message === "Offer letter snapshot is incomplete. Please create a new offer letter version."
+    ),
+  );
+
+  assert.equal(liveContextRead, false);
+  assert.equal(objectStorage.putCount, 0);
+  assert.equal(store.documents.get(document.id).fileSha256, "hash");
+});
+
+test("template updates after create do not affect frozen document body or regenerated snapshot PDF", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "Frozen Trainee", email: "frozen@example.com" });
+  const engagement = store.seedEngagement(trainee.id);
+  const template = store.seedTemplate({
+    titleTemplate: "{{trainee_name}} Offer",
+    bodyTemplate: "Original template body.\n{{compensation_text}}",
+  });
+  const objectStorage = createPrivateObjectStore();
+  const generatedAt = new Date("2026-05-05T00:00:00Z");
+
+  const document = await createOfferLetterDocumentFromTemplate({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    actorAdminId: 99,
+    templateId: template.id,
+    manualValues: {
+      compensationText: "Frozen compensation text.",
+    },
+    now: generatedAt,
+  });
+  const originalHash = document.fileSha256;
+  const originalTitle = document.title;
+  const originalBody = document.body;
+
+  await store.updateAdminDocumentTemplate(template.id, {
+    titleTemplate: "Changed {{trainee_name}}",
+    bodyTemplate: "Changed template body.",
+    version: 2,
+  });
+
+  const regenerated = await regenerateOfferLetterPdf({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    documentId: document.id,
+    actorAdminId: 99,
+    now: generatedAt,
+  });
+
+  assert.equal(regenerated.title, originalTitle);
+  assert.equal(regenerated.body, originalBody);
+  assert.equal(regenerated.templateTitleSnapshot, template.titleTemplate);
+  assert.equal(regenerated.templateBodySnapshot, template.bodyTemplate);
+  assert.equal(regenerated.fileSha256, originalHash);
+});
+
+test("legacy direct body PDF regeneration keeps existing live context fallback", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({ name: "Legacy Trainee", email: "legacy@example.com" });
+  const engagement = store.seedEngagement(trainee.id);
+  const document = store.seedDocument({
+    engagementId: engagement.id,
+    status: "draft",
+    mergeData: null,
+  });
+  const objectStorage = createPrivateObjectStore();
+  let liveContextRead = false;
+  const originalGetAdminEngagement = store.getAdminEngagement.bind(store);
+  store.getAdminEngagement = async (id: number) => {
+    liveContextRead = true;
+    return originalGetAdminEngagement(id);
+  };
+
+  const regenerated = await regenerateOfferLetterPdf({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    documentId: document.id,
+    actorAdminId: 99,
+    now: new Date("2026-05-05T00:00:00Z"),
+  });
+
+  assert.equal(liveContextRead, true);
+  assert.ok(regenerated.fileSha256);
+  assert.equal(objectStorage.putCount, 1);
 });
 
 test("offer letter creation rejects non-trainee engagements", async () => {

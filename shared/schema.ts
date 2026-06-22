@@ -140,6 +140,23 @@ export const adminActivityLogs = pgTable("admin_activity_logs", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const adminDocumentTemplates = pgTable("admin_document_templates", {
+  id: serial("id").primaryKey(),
+  documentType: text("document_type").notNull().default("offer_letter"),
+  name: text("name").notNull(),
+  description: text("description"),
+  status: text("status").notNull().default("draft"),
+  version: integer("version").notNull().default(1),
+  titleTemplate: text("title_template").notNull(),
+  bodyTemplate: text("body_template").notNull(),
+  contentFormat: text("content_format").notNull().default("plain_text"),
+  allowedVariables: jsonb("allowed_variables").notNull().default(sql`'[]'::jsonb`),
+  createdBy: integer("created_by").references(() => adminUsers.id),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const adminEngagementDocuments = pgTable("admin_engagement_documents", {
   id: serial("id").primaryKey(),
   engagementId: integer("engagement_id").notNull().references(() => adminEngagements.id),
@@ -149,6 +166,13 @@ export const adminEngagementDocuments = pgTable("admin_engagement_documents", {
   title: text("title").notNull(),
   body: text("body").notNull(),
   version: integer("version").notNull().default(1),
+  templateId: integer("template_id").references(() => adminDocumentTemplates.id),
+  templateVersion: integer("template_version"),
+  templateNameSnapshot: text("template_name_snapshot"),
+  templateTitleSnapshot: text("template_title_snapshot"),
+  templateBodySnapshot: text("template_body_snapshot"),
+  mergeData: jsonb("merge_data"),
+  contentFormat: text("content_format").notNull().default("plain_text"),
   fileKey: text("file_key"),
   fileSha256: text("file_sha256"),
   fileContentType: text("file_content_type").default("application/pdf"),
@@ -258,6 +282,15 @@ export const adminActivityLogsRelations = relations(adminActivityLogs, ({ one })
   }),
 }));
 
+export const adminDocumentTemplatesRelations = relations(adminDocumentTemplates, ({ one, many }) => ({
+  creator: one(adminUsers, {
+    fields: [adminDocumentTemplates.createdBy],
+    references: [adminUsers.id],
+    relationName: "documentTemplateCreator",
+  }),
+  documents: many(adminEngagementDocuments, { relationName: "documentTemplateDocuments" }),
+}));
+
 export const adminEngagementDocumentsRelations = relations(adminEngagementDocuments, ({ one }) => ({
   engagement: one(adminEngagements, {
     fields: [adminEngagementDocuments.engagementId],
@@ -283,6 +316,11 @@ export const adminEngagementDocumentsRelations = relations(adminEngagementDocume
     fields: [adminEngagementDocuments.acceptedBy],
     references: [adminUsers.id],
     relationName: "engagementDocumentAccepter",
+  }),
+  template: one(adminDocumentTemplates, {
+    fields: [adminEngagementDocuments.templateId],
+    references: [adminDocumentTemplates.id],
+    relationName: "documentTemplateDocuments",
   }),
 }));
 
@@ -317,6 +355,12 @@ export const insertAdminActivityLogSchema = createInsertSchema(adminActivityLogs
   updatedAt: true,
 });
 
+export const insertAdminDocumentTemplateSchema = createInsertSchema(adminDocumentTemplates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertAdminEngagementDocumentSchema = createInsertSchema(adminEngagementDocuments).omit({
   id: true,
   createdAt: true,
@@ -334,6 +378,8 @@ export type AdminLifecycleEvent = typeof adminLifecycleEvents.$inferSelect;
 export type InsertAdminLifecycleEvent = z.infer<typeof insertAdminLifecycleEventSchema>;
 export type AdminActivityLog = typeof adminActivityLogs.$inferSelect;
 export type InsertAdminActivityLog = z.infer<typeof insertAdminActivityLogSchema>;
+export type AdminDocumentTemplate = typeof adminDocumentTemplates.$inferSelect;
+export type InsertAdminDocumentTemplate = z.infer<typeof insertAdminDocumentTemplateSchema>;
 export type AdminEngagementDocument = typeof adminEngagementDocuments.$inferSelect;
 export type InsertAdminEngagementDocument = z.infer<typeof insertAdminEngagementDocumentSchema>;
 
@@ -390,3 +436,5 @@ export type AdminEngagementDocumentStatus =
   | 'accepted'
   | 'declined'
   | 'voided';
+export type AdminDocumentTemplateStatus = 'draft' | 'active' | 'archived';
+export type AdminDocumentContentFormat = 'plain_text';

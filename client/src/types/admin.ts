@@ -73,6 +73,8 @@ export type AdminActivityType =
 export type AdminActivityLogStatus = 'submitted' | 'reviewed';
 export type AdminEngagementDocumentType = 'offer_letter';
 export type AdminEngagementDocumentStatus = 'draft' | 'sent' | 'viewed' | 'accepted' | 'declined' | 'voided';
+export type AdminDocumentTemplateStatus = 'draft' | 'active' | 'archived';
+export type AdminDocumentContentFormat = 'plain_text';
 
 export interface AdminEngagement {
   id: number;
@@ -144,6 +146,10 @@ export interface AdminEngagementDocument {
   title: string;
   body: string;
   version: number;
+  template_id?: number | null;
+  template_version?: number | null;
+  template_name_snapshot?: string | null;
+  content_format: AdminDocumentContentFormat;
   file_sha256?: string | null;
   file_content_type?: string | null;
   file_size_bytes?: number | null;
@@ -155,6 +161,22 @@ export interface AdminEngagementDocument {
   voided_at?: string | null;
   voided_by?: number | null;
   created_by?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminDocumentTemplate {
+  id: number;
+  document_type: AdminEngagementDocumentType;
+  name: string;
+  description?: string | null;
+  status: AdminDocumentTemplateStatus;
+  version: number;
+  title_template: string;
+  body_template: string;
+  content_format: AdminDocumentContentFormat;
+  allowed_variables: string[];
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
 }

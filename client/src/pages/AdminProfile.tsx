@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,10 +15,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowLeftRight, Delete, CheckCircle, Download, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
-import { AdminEngagement, AdminEngagementDocument, AdminLifecycleEvent, AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
-import { apiRequest, getApiErrorMessage, tokenManager } from "@/lib/queryClient";
+import { AdminDocumentTemplate, AdminEngagement, AdminEngagementDocument, AdminLifecycleEvent, AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
+import { ApiError, apiRequest, getApiErrorMessage, tokenManager } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+
+interface OfferTemplatePreviewResponse {
+  template_id: number;
+  template_version: number;
+  title: string;
+  body: string;
+  merge_data: Record<string, string>;
+  used_variables: string[];
+  missing_variables: string[];
+}
 
 export default function AdminProfile() {
   const params = useParams();
@@ -26,8 +37,14 @@ export default function AdminProfile() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [createOfferEngagement, setCreateOfferEngagement] = useState<AdminEngagement | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [engagementTitle, setEngagementTitle] = useState("");
+  const [functionArea, setFunctionArea] = useState("");
+  const [compensationText, setCompensationText] = useState("");
   const [offerTitle, setOfferTitle] = useState("");
   const [offerBody, setOfferBody] = useState("");
+  const [templatePreviewError, setTemplatePreviewError] = useState<string | null>(null);
+  const [templatePreviewMissingVariables, setTemplatePreviewMissingVariables] = useState<string[]>([]);
   const [previewDocument, setPreviewDocument] = useState<AdminEngagementDocument | null>(null);
 
   const { data: admin, isLoading } = useQuery<AdminUser>({
@@ -47,6 +64,18 @@ export default function AdminProfile() {
     enabled: !!adminId,
     retry: false,
   });
+
+  const { data: documentTemplates = [] } = useQuery<AdminDocumentTemplate[]>({
+    queryKey: ["/api/admin/document-templates?documentType=offer_letter"],
+    retry: false,
+  });
+
+  const availableOfferTemplates = documentTemplates
+    .filter((template) => template.document_type === "offer_letter" && template.status !== "archived")
+    .sort((a, b) => {
+      if (a.status === b.status) return a.name.localeCompare(b.name);
+      return a.status === "active" ? -1 : 1;
+    });
 
   const engagementDocumentQueryKey = [
     "/api/admin/users",
@@ -97,22 +126,86 @@ export default function AdminProfile() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "lifecycle-events"] });
   };
 
+  useEffect(() => {
+    if (!createOfferEngagement || selectedTemplateId || availableOfferTemplates.length === 0) {
+      return;
+    }
+    setSelectedTemplateId(String(availableOfferTemplates[0].id));
+  }, [availableOfferTemplates, createOfferEngagement, selectedTemplateId]);
+
+  const templateErrorDetails = (error: unknown) => {
+    if (error instanceof ApiError && error.body && typeof error.body === "object") {
+      const body = error.body as { missing_variables?: unknown; unknown_variables?: unknown };
+      const missing = Array.isArray(body.missing_variables) ? body.missing_variables.map(String) : [];
+      const unknown = Array.isArray(body.unknown_variables) ? body.unknown_variables.map(String) : [];
+      return { missing, unknown };
+    }
+    return { missing: [], unknown: [] };
+  };
+
+  const previewOfferTemplateMutation = useMutation({
+    mutationFn: async () => {
+      if (!createOfferEngagement || !selectedTemplateId) {
+        throw new Error("Select a template first");
+      }
+      const response = await apiRequest(
+        "POST",
+        `/api/admin/engagements/${createOfferEngagement.id}/documents/preview-template`,
+        {
+          templateId: Number(selectedTemplateId),
+          engagementTitle,
+          functionArea,
+          compensationText,
+        },
+      );
+      return response.json() as Promise<OfferTemplatePreviewResponse>;
+    },
+    onSuccess: (preview) => {
+      setOfferTitle(preview.title);
+      setOfferBody(preview.body);
+      setTemplatePreviewError(null);
+      setTemplatePreviewMissingVariables(preview.missing_variables ?? []);
+    },
+    onError: (error) => {
+      const details = templateErrorDetails(error);
+      setTemplatePreviewMissingVariables(details.missing);
+      setTemplatePreviewError(getApiErrorMessage(error, "Could not preview this template."));
+    },
+  });
+
   const createOfferLetterMutation = useMutation({
     mutationFn: async () => {
       if (!createOfferEngagement) {
         throw new Error("No engagement selected");
       }
-      const response = await apiRequest("POST", `/api/admin/engagements/${createOfferEngagement.id}/documents`, {
-        documentType: "offer_letter",
-        title: offerTitle,
-        body: offerBody,
-      });
+      const payload = selectedTemplateId
+        ? {
+            documentType: "offer_letter",
+            templateId: Number(selectedTemplateId),
+            engagementTitle,
+            functionArea,
+            compensationText,
+            title: offerTitle,
+            body: offerBody,
+          }
+        : {
+            documentType: "offer_letter",
+            title: offerTitle,
+            body: offerBody,
+          };
+      const response = await apiRequest("POST", `/api/admin/engagements/${createOfferEngagement.id}/documents`, payload);
       return response.json() as Promise<AdminEngagementDocument>;
     },
     onSuccess: () => {
       setCreateOfferEngagement(null);
+      setSelectedTemplateId("");
+      setEngagementTitle("");
+      setFunctionArea("");
+      setCompensationText("");
       setOfferTitle("");
       setOfferBody("");
+      setTemplatePreviewError(null);
+      setTemplatePreviewMissingVariables([]);
       invalidateOfferLetterQueries();
       toast({
         title: "Offer letter created",
@@ -202,6 +295,17 @@ export default function AdminProfile() {
 
   const openCreateOfferLetter = (engagement: AdminEngagement) => {
     setCreateOfferEngagement(engagement);
+    setSelectedTemplateId(availableOfferTemplates[0] ? String(availableOfferTemplates[0].id) : "");
+    setEngagementTitle(`${admin?.name ?? "Trainee"} Trainee Engagement`);
+    setFunctionArea("");
+    setCompensationText("");
+    setTemplatePreviewError(null);
+    setTemplatePreviewMissingVariables([]);
+    if (availableOfferTemplates.length > 0) {
+      setOfferTitle("");
+      setOfferBody("");
+      return;
+    }
     setOfferTitle(`${admin?.name ?? "Trainee"} Offer Letter`);
     setOfferBody(
       [
@@ -591,6 +695,15 @@ export default function AdminProfile() {
                                       <span className="text-muted-foreground">Title: </span>
                                       <span>{offerLetter.title}</span>
                                     </div>
+                                    {offerLetter.template_name_snapshot && (
+                                      <div>
+                                        <span className="text-muted-foreground">Template: </span>
+                                        <span>
+                                          {offerLetter.template_name_snapshot}
+                                          {offerLetter.template_version ? ` v${offerLetter.template_version}` : ""}
+                                        </span>
+                                      </div>
+                                    )}
                                     <div>
                                       <span className="text-muted-foreground">Sent: </span>
                                       <span>{formatTimestamp(offerLetter.sent_at)}</span>
@@ -667,12 +780,103 @@ export default function AdminProfile() {
           <DialogHeader>
             <DialogTitle>Create Offer Letter</DialogTitle>
             <DialogDescription>
-              Create a private PDF artifact and make it ready to send from the admin profile.
+              Merge a plain-text template, review the final body, and create a private PDF artifact.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {availableOfferTemplates.length > 0 && (
+              <>
+                <div>
+                  <Label className="text-sm font-medium text-muted-foreground">Template</Label>
+                  <Select
+                    value={selectedTemplateId}
+                    onValueChange={(value) => {
+                      setSelectedTemplateId(value);
+                      setOfferTitle("");
+                      setOfferBody("");
+                      setTemplatePreviewError(null);
+                      setTemplatePreviewMissingVariables([]);
+                    }}
+                  >
+                    <SelectTrigger data-testid="select-offer-letter-template">
+                      <SelectValue placeholder="Select template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableOfferTemplates.map((template) => (
+                        <SelectItem key={template.id} value={String(template.id)}>
+                          {template.name} v{template.version} ({template.status})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Engagement Title</Label>
+                    <Input
+                      value={engagementTitle}
+                      onChange={(event) => setEngagementTitle(event.target.value)}
+                      maxLength={200}
+                      data-testid="input-offer-engagement-title"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Function Area</Label>
+                    <Input
+                      value={functionArea}
+                      onChange={(event) => setFunctionArea(event.target.value)}
+                      maxLength={200}
+                      data-testid="input-offer-function-area"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-sm font-medium text-muted-foreground">Compensation Text</Label>
+                  <Textarea
+                    value={compensationText}
+                    onChange={(event) => setCompensationText(event.target.value)}
+                    className="min-h-24"
+                    maxLength={4000}
+                    data-testid="textarea-offer-compensation-text"
+                  />
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => previewOfferTemplateMutation.mutate()}
+                    disabled={!selectedTemplateId || previewOfferTemplateMutation.isPending}
+                    data-testid="button-preview-offer-template"
+                  >
+                    <Eye className="h-4 w-4 mr-2" />
+                    {previewOfferTemplateMutation.isPending ? "Previewing..." : "Preview Template"}
+                  </Button>
+                  {templatePreviewMissingVariables.length > 0 && (
+                    <p className="text-sm text-destructive">
+                      Missing: {templatePreviewMissingVariables.join(", ")}
+                    </p>
+                  )}
+                </div>
+
+                {templatePreviewError && (
+                  <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                    {templatePreviewError}
+                  </p>
+                )}
+              </>
+            )}
+
+            {availableOfferTemplates.length === 0 && (
+              <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                No offer letter templates are available. This will use the legacy direct body mode.
+              </p>
+            )}
+
             <div>
-              <Label className="text-sm font-medium text-muted-foreground">Title</Label>
+              <Label className="text-sm font-medium text-muted-foreground">Final Title</Label>
               <Input
                 value={offerTitle}
                 onChange={(event) => setOfferTitle(event.target.value)}
@@ -681,7 +885,7 @@ export default function AdminProfile() {
               />
             </div>
             <div>
-              <Label className="text-sm font-medium text-muted-foreground">Body</Label>
+              <Label className="text-sm font-medium text-muted-foreground">Final Body</Label>
               <Textarea
                 value={offerBody}
                 onChange={(event) => setOfferBody(event.target.value)}
@@ -701,7 +905,12 @@ export default function AdminProfile() {
             </Button>
             <Button
               onClick={() => createOfferLetterMutation.mutate()}
-              disabled={createOfferLetterMutation.isPending || !offerTitle.trim() || !offerBody.trim()}
+              disabled={
+                createOfferLetterMutation.isPending ||
+                previewOfferTemplateMutation.isPending ||
+                !offerTitle.trim() ||
+                !offerBody.trim()
+              }
               data-testid="button-submit-offer-letter"
             >
               {createOfferLetterMutation.isPending ? "Creating..." : "Create Offer Letter"}

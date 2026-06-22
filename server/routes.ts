@@ -31,10 +31,13 @@ import {
 import {
   accessRoleSchema,
   adminUserUpdateSchema,
+  documentTemplatePayloadSchema,
+  documentTemplateUpdatePayloadSchema,
   engagementPayloadSchema,
   engagementTypeSchema,
   offerLetterPayloadSchema,
   lifecycleEventPayloadSchema,
+  templatePreviewPayloadSchema,
   traineeActivityLogPayloadSchema,
   traineeEndEngagementPayloadSchema,
   updateEngagementPayloadSchema,
@@ -45,6 +48,7 @@ import {
 import {
   acceptOfferLetterForTrainee,
   createOfferLetterDocument,
+  createOfferLetterDocumentFromTemplate,
   getOfferLetterDownload,
   OfferLetterError,
   regenerateOfferLetterPdf,
@@ -52,6 +56,13 @@ import {
   viewOfferLetterForTrainee,
   voidOfferLetterDocument,
 } from './offerLetterService';
+import {
+  archiveDocumentTemplate,
+  createDocumentTemplate,
+  DocumentTemplateError,
+  previewOfferLetterTemplate,
+  updateDocumentTemplate,
+} from './documentTemplateService';
 
 // Login/Register schemas
 const loginSchema = z.object({
@@ -170,6 +181,10 @@ function sanitizeAdminEngagementDocument(document: any) {
     title: document.title,
     body: document.body,
     version: document.version,
+    template_id: document.templateId,
+    template_version: document.templateVersion,
+    template_name_snapshot: document.templateNameSnapshot,
+    content_format: document.contentFormat,
     file_sha256: document.fileSha256,
     file_content_type: document.fileContentType,
     file_size_bytes: document.fileSizeBytes,
@@ -183,6 +198,24 @@ function sanitizeAdminEngagementDocument(document: any) {
     created_by: document.createdBy,
     created_at: document.createdAt,
     updated_at: document.updatedAt,
+  };
+}
+
+function sanitizeAdminDocumentTemplate(template: any) {
+  return {
+    id: template.id,
+    document_type: template.documentType,
+    name: template.name,
+    description: template.description,
+    status: template.status,
+    version: template.version,
+    title_template: template.titleTemplate,
+    body_template: template.bodyTemplate,
+    content_format: template.contentFormat,
+    allowed_variables: Array.isArray(template.allowedVariables) ? template.allowedVariables : [],
+    archived_at: template.archivedAt,
+    created_at: template.createdAt,
+    updated_at: template.updatedAt,
   };
 }
 
@@ -219,6 +252,9 @@ function sendOfferLetterPdf(res: any, result: Awaited<ReturnType<typeof getOffer
 function handleOfferLetterRouteError(res: any, error: unknown, fallbackMessage: string) {
   if (error instanceof OfferLetterError) {
     return res.status(error.statusCode).json({ message: error.message });
+  }
+  if (error instanceof DocumentTemplateError) {
+    return res.status(error.statusCode).json({ message: error.message, ...error.details });
   }
   if (error instanceof z.ZodError) {
     return res.status(400).json({ message: fallbackMessage });
@@ -710,6 +746,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/document-templates", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const documentType = req.query.documentType ? String(req.query.documentType) : undefined;
+      if (documentType && documentType !== "offer_letter") {
+        return res.status(400).json({ message: "Unsupported document template type" });
+      }
+
+      const templates = await storage.listAdminDocumentTemplates({ documentType });
+      res.json(templates.map(sanitizeAdminDocumentTemplate));
+    } catch (error) {
+      console.error("[document-template route] Failed to fetch document templates", error);
+      res.status(500).json({ message: "Failed to fetch document templates" });
+    }
+  });
+
+  app.post("/api/admin/document-templates", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const payload = documentTemplatePayloadSchema.parse(req.body);
+      const template = await createDocumentTemplate({
+        storage,
+        actorAdminId: req.adminUser.id,
+        documentType: payload.documentType,
+        name: payload.name,
+        description: payload.description,
+        status: payload.status,
+        titleTemplate: payload.titleTemplate,
+        bodyTemplate: payload.bodyTemplate,
+        contentFormat: payload.contentFormat,
+        allowedVariables: payload.allowedVariables,
+      });
+      res.status(201).json(sanitizeAdminDocumentTemplate(template));
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to create document template");
+    }
+  });
+
+  app.patch("/api/admin/document-templates/:templateId", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const payload = documentTemplateUpdatePayloadSchema.parse(req.body);
+      const template = await updateDocumentTemplate({
+        storage,
+        templateId: parseInt(req.params.templateId),
+        updates: payload,
+      });
+      res.json(sanitizeAdminDocumentTemplate(template));
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to update document template");
+    }
+  });
+
+  app.post("/api/admin/document-templates/:templateId/archive", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const template = await archiveDocumentTemplate({
+        storage,
+        templateId: parseInt(req.params.templateId),
+      });
+      res.json(sanitizeAdminDocumentTemplate(template));
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to archive document template");
+    }
+  });
+
   app.get("/api/admin/engagements/:engagementId/documents", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const engagementId = parseInt(req.params.engagementId);
@@ -725,17 +823,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/admin/engagements/:engagementId/documents/preview-template", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
+    try {
+      const engagementId = parseInt(req.params.engagementId);
+      const payload = templatePreviewPayloadSchema.parse(req.body);
+      const preview = await previewOfferLetterTemplate({
+        storage,
+        engagementId,
+        templateId: payload.templateId,
+        manualValues: {
+          engagementTitle: payload.engagementTitle,
+          functionArea: payload.functionArea,
+          compensationText: payload.compensationText,
+        },
+      });
+
+      res.json({
+        template_id: preview.template.id,
+        template_version: preview.template.version,
+        title: preview.title,
+        body: preview.body,
+        merge_data: preview.mergeData,
+        used_variables: preview.usedVariables,
+        missing_variables: preview.missingVariables,
+      });
+    } catch (error) {
+      handleOfferLetterRouteError(res, error, "Failed to preview offer letter template");
+    }
+  });
+
   app.post("/api/admin/engagements/:engagementId/documents", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const engagementId = parseInt(req.params.engagementId);
       const payload = offerLetterPayloadSchema.parse(req.body);
-      const document = await createOfferLetterDocument({
-        storage,
-        engagementId,
-        actorAdminId: req.adminUser.id,
-        title: payload.title,
-        body: payload.body,
-      });
+      const document = "templateId" in payload
+        ? await createOfferLetterDocumentFromTemplate({
+            storage,
+            engagementId,
+            actorAdminId: req.adminUser.id,
+            templateId: payload.templateId,
+            manualValues: {
+              engagementTitle: payload.engagementTitle,
+              functionArea: payload.functionArea,
+              compensationText: payload.compensationText,
+            },
+            title: payload.title,
+            body: payload.body,
+          })
+        : await createOfferLetterDocument({
+            storage,
+            engagementId,
+            actorAdminId: req.adminUser.id,
+            title: payload.title,
+            body: payload.body,
+          });
 
       res.status(201).json(sanitizeAdminEngagementDocument(document));
     } catch (error) {

@@ -47,6 +47,8 @@ export const lifecycleEventTypeSchema = z.enum([
 ]);
 
 export const engagementDocumentTypeSchema = z.enum(['offer_letter']);
+export const documentTemplateStatusSchema = z.enum(['draft', 'active', 'archived']);
+export const documentContentFormatSchema = z.enum(['plain_text']);
 export const engagementDocumentStatusSchema = z.enum([
   'draft',
   'sent',
@@ -197,10 +199,80 @@ export const traineeEndEngagementPayloadSchema = z.object({
   ),
 }).strict();
 
-export const offerLetterPayloadSchema = z.object({
+const manualTemplateMergeValuesSchema = {
+  engagementTitle: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(200).optional()
+  ),
+  functionArea: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(200).optional()
+  ),
+  compensationText: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().max(4000).optional()
+  ),
+};
+
+const directOfferLetterPayloadSchema = z.object({
   documentType: engagementDocumentTypeSchema.default('offer_letter'),
   title: z.string().trim().min(1, "Title is required").max(200),
   body: z.string().trim().min(1, "Body is required").max(20000),
+}).strict();
+
+const templateOfferLetterPayloadSchema = z.object({
+  documentType: engagementDocumentTypeSchema.default('offer_letter'),
+  templateId: z.coerce.number().int().positive(),
+  ...manualTemplateMergeValuesSchema,
+  title: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().min(1).max(200).optional()
+  ),
+  body: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().min(1).max(20000).optional()
+  ),
+}).strict();
+
+export const offerLetterPayloadSchema = z.union([
+  directOfferLetterPayloadSchema,
+  templateOfferLetterPayloadSchema,
+]);
+
+export const documentTemplatePayloadSchema = z.object({
+  documentType: engagementDocumentTypeSchema.default('offer_letter'),
+  name: z.string().trim().min(1, "Name is required").max(200),
+  description: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? null : value,
+    z.string().trim().max(1000).nullable().optional()
+  ),
+  status: documentTemplateStatusSchema.default('draft'),
+  titleTemplate: z.string().trim().min(1, "Title template is required").max(200),
+  bodyTemplate: z.string().trim().min(1, "Body template is required").max(20000),
+  contentFormat: documentContentFormatSchema.default('plain_text'),
+  allowedVariables: z.array(z.string().trim().min(1).max(100)).optional(),
+}).strict();
+
+export const documentTemplateUpdatePayloadSchema = z.object({
+  documentType: engagementDocumentTypeSchema.optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  description: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? null : value,
+    z.string().trim().max(1000).nullable().optional()
+  ),
+  status: documentTemplateStatusSchema.optional(),
+  titleTemplate: z.string().trim().min(1).max(200).optional(),
+  bodyTemplate: z.string().trim().min(1).max(20000).optional(),
+  contentFormat: documentContentFormatSchema.optional(),
+  allowedVariables: z.array(z.string().trim().min(1).max(100)).optional(),
+}).strict().refine(
+  (value) => Object.keys(value).length > 0,
+  "At least one template field is required",
+);
+
+export const templatePreviewPayloadSchema = z.object({
+  templateId: z.coerce.number().int().positive(),
+  ...manualTemplateMergeValuesSchema,
 }).strict();
 
 export function validateActivityDateWithinEngagement(

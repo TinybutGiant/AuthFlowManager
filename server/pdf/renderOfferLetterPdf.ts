@@ -1,11 +1,44 @@
 import PDFDocument from "pdfkit";
 import type { AdminEngagement, AdminEngagementDocument, AdminUser } from "@shared/schema";
 
+export const REQUIRED_SNAPSHOT_PDF_MERGE_KEYS = [
+  "trainee_name",
+  "trainee_email",
+  "engagement_type",
+  "schedule_text",
+  "start_date",
+  "end_date",
+  "expected_hours_per_week",
+  "work_scope",
+  "work_authorization_type",
+  "supervisor_name",
+  "supervisor_email",
+  "company_name",
+] as const;
+
+export class OfferLetterSnapshotDataError extends Error {
+  constructor(public readonly missingKeys: string[]) {
+    super("Offer letter snapshot is incomplete.");
+    this.name = "OfferLetterSnapshotDataError";
+  }
+}
+
+export interface OfferLetterPdfContext {
+  traineeName: string;
+  traineeEmail: string;
+  engagementType: string;
+  scheduleText: string;
+  startDate: string;
+  endDate: string;
+  expectedHoursPerWeek: string;
+  workAuthorizationType: string;
+  supervisorName: string;
+  supervisorEmail: string;
+}
+
 export interface OfferLetterPdfInput {
   document: Pick<AdminEngagementDocument, "title" | "body" | "version">;
-  engagement: AdminEngagement;
-  trainee: AdminUser;
-  supervisor?: AdminUser | null;
+  context: OfferLetterPdfContext;
   generatedAt?: Date;
 }
 
@@ -29,6 +62,56 @@ function valueOrFallback(value: string | number | null | undefined) {
 function addLabelValue(doc: PDFKit.PDFDocument, label: string, value: string) {
   doc.font("Helvetica-Bold").text(`${label}: `, { continued: true });
   doc.font("Helvetica").text(value);
+}
+
+function mergeValue(mergeData: unknown, key: string): string | null {
+  if (!mergeData || typeof mergeData !== "object" || Array.isArray(mergeData)) {
+    return null;
+  }
+  const value = (mergeData as Record<string, unknown>)[key];
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return null;
+  }
+  return String(value);
+}
+
+export function buildLegacyOfferLetterPdfContext(input: {
+  engagement: AdminEngagement;
+  trainee: AdminUser;
+  supervisor?: AdminUser | null;
+}): OfferLetterPdfContext {
+  return {
+    traineeName: input.trainee.name,
+    traineeEmail: input.trainee.email,
+    engagementType: valueOrFallback(input.engagement.engagementType),
+    scheduleText: valueOrFallback(input.engagement.scheduleType),
+    startDate: dateOnly(input.engagement.startDate),
+    endDate: dateOnly(input.engagement.endDate),
+    expectedHoursPerWeek: valueOrFallback(input.engagement.expectedHoursPerWeek),
+    workAuthorizationType: valueOrFallback(input.engagement.workAuthorizationType),
+    supervisorName: input.supervisor ? input.supervisor.name : "Not set",
+    supervisorEmail: input.supervisor ? input.supervisor.email : "Not set",
+  };
+}
+
+export function buildSnapshotOfferLetterPdfContext(mergeData: unknown): OfferLetterPdfContext {
+  const missingKeys = REQUIRED_SNAPSHOT_PDF_MERGE_KEYS.filter((key) => !mergeValue(mergeData, key));
+  if (missingKeys.length > 0) {
+    throw new OfferLetterSnapshotDataError(missingKeys);
+  }
+
+  return {
+    traineeName: mergeValue(mergeData, "trainee_name")!,
+    traineeEmail: mergeValue(mergeData, "trainee_email")!,
+    engagementType: mergeValue(mergeData, "engagement_type")!,
+    scheduleText: mergeValue(mergeData, "schedule_text")!,
+    startDate: mergeValue(mergeData, "start_date")!,
+    endDate: mergeValue(mergeData, "end_date")!,
+    expectedHoursPerWeek: mergeValue(mergeData, "expected_hours_per_week")!,
+    workAuthorizationType: mergeValue(mergeData, "work_authorization_type")!,
+    supervisorName: mergeValue(mergeData, "supervisor_name")!,
+    supervisorEmail: mergeValue(mergeData, "supervisor_email")!,
+  };
 }
 
 export async function renderOfferLetterPdfBuffer(input: OfferLetterPdfInput): Promise<Buffer> {
@@ -63,19 +146,24 @@ export async function renderOfferLetterPdfBuffer(input: OfferLetterPdfInput): Pr
   doc.font("Helvetica-Bold").fontSize(12).text("Trainee");
   doc.moveDown(0.25);
   doc.fontSize(10);
-  addLabelValue(doc, "Name", input.trainee.name);
-  addLabelValue(doc, "Email", input.trainee.email);
+  addLabelValue(doc, "Name", input.context.traineeName);
+  addLabelValue(doc, "Email", input.context.traineeEmail);
   doc.moveDown();
 
   doc.font("Helvetica-Bold").fontSize(12).text("Engagement");
   doc.moveDown(0.25);
   doc.fontSize(10);
-  addLabelValue(doc, "Type", valueOrFallback(input.engagement.engagementType));
-  addLabelValue(doc, "Schedule", valueOrFallback(input.engagement.scheduleType));
-  addLabelValue(doc, "Start Date", dateOnly(input.engagement.startDate));
-  addLabelValue(doc, "End Date", dateOnly(input.engagement.endDate));
-  addLabelValue(doc, "Expected Hours Per Week", valueOrFallback(input.engagement.expectedHoursPerWeek));
-  addLabelValue(doc, "Supervisor", input.supervisor ? `${input.supervisor.name} (${input.supervisor.email})` : "Not set");
+  addLabelValue(doc, "Type", input.context.engagementType);
+  addLabelValue(doc, "Schedule", input.context.scheduleText);
+  addLabelValue(doc, "Start Date", input.context.startDate);
+  addLabelValue(doc, "End Date", input.context.endDate);
+  addLabelValue(doc, "Expected Hours Per Week", input.context.expectedHoursPerWeek);
+  addLabelValue(doc, "Work Authorization", input.context.workAuthorizationType);
+  addLabelValue(
+    doc,
+    "Supervisor",
+    `${input.context.supervisorName} (${input.context.supervisorEmail})`,
+  );
   doc.moveDown();
 
   doc.font("Helvetica-Bold").fontSize(12).text("Offer Letter");
