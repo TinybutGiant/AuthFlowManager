@@ -18,6 +18,7 @@ import PendingRequests from "@/pages/PendingRequests";
 import AdminManagement from "@/pages/AdminManagement";
 import CreateAdmin from "@/pages/CreateAdmin";
 import AdminProfile from "@/pages/AdminProfile";
+import OfferLetterBuilderPage from "@/pages/OfferLetterBuilderPage";
 import ChangeRole from "@/pages/ChangeRole";
 import DeleteAdmin from "@/pages/DeleteAdmin";
 import FinanceManagement from "@/pages/FinanceManagement";
@@ -124,6 +125,14 @@ function Router() {
             <ProtectedRoute allowedRoles={["super_admin"]}>
               <AdminLayout>
                 <CreateAdmin />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
+          <Route path="/admin-management/profile/:id/offer-letter/new">
+            <ProtectedRoute allowedRoles={["super_admin"]}>
+              <AdminLayout>
+                <OfferLetterBuilderPage />
               </AdminLayout>
             </ProtectedRoute>
           </Route>

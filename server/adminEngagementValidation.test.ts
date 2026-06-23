@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -22,6 +22,12 @@ import {
   validateTraineeEngagement,
 } from "./adminEngagementValidation";
 import { deriveLegacyRoleFromIdentityAndAccessGroup } from "../client/src/lib/adminIdentity";
+import {
+  buildOfferLetterPreviewModel,
+  emptyOfferLetterManualFields,
+  tokenizeOfferLetterTemplateText,
+  variableLabel,
+} from "../client/src/components/offerLetter/offerLetterPreviewMapper";
 import { z } from "zod";
 
 test("access role rejects engagement identity and lifecycle values", () => {
@@ -200,6 +206,55 @@ test("document template validation is plain-text and strict", () => {
     templateId: 1,
     engagementId: 2,
   }).success, false);
+});
+
+test("offer letter preview mapper highlights unresolved variables without evaluating template text", () => {
+  const tokens = tokenizeOfferLetterTemplateText(
+    "Dear {{school_name}}, <script>alert('x')</script>",
+    new Set(["school_name"]),
+  );
+
+  const variableToken = tokens.find((token) => token.type === "variable");
+  assert.equal(variableToken?.text, "{{school_name}}");
+  assert.equal(variableToken?.missing, true);
+  assert.equal(
+    tokens.some((token) => token.type === "text" && token.text.includes("<script>alert('x')</script>")),
+    true,
+  );
+});
+
+test("offer letter preview mapper maps missing fields to readable sections", () => {
+  const template = {
+    id: 1,
+    document_type: "offer_letter",
+    name: "CPT Internship Offer Letter",
+    description: null,
+    status: "active",
+    version: 1,
+    title_template: "{{trainee_name}} Offer Letter",
+    body_template: "School: {{school_name}}\nProgram: {{program_or_major}}\n{{responsibilities_text}}",
+    content_format: "plain_text",
+    allowed_variables: ["school_name", "program_or_major", "responsibilities_text"],
+    created_at: "2026-06-23",
+    updated_at: "2026-06-23",
+  } as const;
+
+  const model = buildOfferLetterPreviewModel({
+    template: template as any,
+    values: emptyOfferLetterManualFields(),
+    serverMissingVariables: ["school_name", "program_or_major"],
+  });
+
+  assert.equal(variableLabel("school_name"), "School Name");
+  assert.deepEqual(
+    model.missingFields.map((field) => `${field.sectionTitle}:${field.label}`),
+    [
+      "Candidate / School:Program or Major",
+      "Training Alignment:Responsibilities",
+      "Candidate / School:School Name",
+    ],
+  );
+  assert.equal(model.previewIsValid, false);
 });
 
 test("trainee end engagement validation only accepts optional reason", () => {
@@ -722,18 +777,66 @@ test("offer letter APIs use admin or trainee scoped permissions", async () => {
 });
 
 test("CPT offer readiness checklist remains admin UI only", async () => {
-  const adminProfileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const builderSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterBuilder.tsx", import.meta.url), "utf8");
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
   const validationSource = await readFile(new URL("./adminEngagementValidation.ts", import.meta.url), "utf8");
 
-  assert.match(adminProfileSource, /Offer Readiness/);
-  assert.match(adminProfileSource, /Resume reviewed outside system/);
-  assert.match(adminProfileSource, /Zoom\/discussion completed/);
-  assert.match(adminProfileSource, /School\/CPT details confirmed/);
-  assert.match(adminProfileSource, /Responsibilities aligned with student background/);
-  assert.match(adminProfileSource, /Persist internally only after a safe admin-only metadata model exists/);
+  assert.match(builderSource, /Offer Readiness/);
+  assert.match(builderSource, /Resume reviewed outside system/);
+  assert.match(builderSource, /Zoom\/discussion completed/);
+  assert.match(builderSource, /School\/CPT details confirmed/);
+  assert.match(builderSource, /Responsibilities aligned with student background/);
+  assert.match(builderSource, /Admin-only checklist/);
+  assert.match(builderSource, /This is not submitted, stored, exposed to trainee, or included in PDF/);
+  const fieldPayloadStart = builderSource.indexOf("function fieldPayload");
+  const fieldPayloadEnd = builderSource.indexOf("function focusField", fieldPayloadStart);
+  const fieldPayloadBlock = builderSource.slice(fieldPayloadStart, fieldPayloadEnd);
+  assert.doesNotMatch(fieldPayloadBlock, /offerReadiness|resumeReviewed|discussionCompleted|schoolDetailsConfirmed|responsibilitiesAligned/);
   assert.doesNotMatch(routesSource + validationSource, /offerReadiness|resumeReviewed|discussionCompleted|schoolDetailsConfirmed|responsibilitiesAligned/);
   assert.doesNotMatch(routesSource + validationSource, /resumeUpload|resumeParsing|rawResume|candidateLifecycle|rejectedCandidate/);
+});
+
+test("offer letter builder replaces old modal with document-first safe preview", async () => {
+  const adminProfileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const builderSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterBuilder.tsx", import.meta.url), "utf8");
+  const previewSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterDocumentPreview.tsx", import.meta.url), "utf8");
+  const mapperSource = await readFile(new URL("../client/src/components/offerLetter/offerLetterPreviewMapper.ts", import.meta.url), "utf8");
+
+  assert.match(adminProfileSource, /setLocation\(`\/admin-management\/profile\/\$\{adminId\}\/offer-letter\/new\?engagementId=\$\{engagement\.id\}`\)/);
+  assert.doesNotMatch(adminProfileSource, /Create Offer Letter|Final Title|Final Body|textarea-offer-letter-body|button-preview-offer-template/);
+
+  assert.match(builderSource, /Offer Letter Builder/);
+  assert.match(builderSource, /Missing Required Fields/);
+  assert.match(builderSource, /Document Preview/);
+  assert.match(builderSource, /Refresh Preview/);
+  assert.match(builderSource, /setTimeout\(\(\) =>/);
+  assert.match(builderSource, /documents\/preview-template/);
+  assert.match(builderSource, /documentType: "offer_letter"/);
+  assert.match(builderSource, /templateId: selectedTemplate\.id/);
+  assert.match(builderSource, /disabled=\{createDisabled\}/);
+  const createPayloadStart = builderSource.indexOf('documentType: "offer_letter"');
+  const createPayloadEnd = builderSource.indexOf(');', createPayloadStart);
+  const createPayloadBlock = builderSource.slice(createPayloadStart, createPayloadEnd);
+  assert.doesNotMatch(createPayloadBlock, /title:\s*|body:\s*|offerReadiness|resumeReviewed|discussionCompleted/);
+
+  assert.match(previewSource, /whitespace-pre-wrap/);
+  assert.match(previewSource, /TokenizedText/);
+  assert.match(previewSource, /data-variable/);
+  assert.match(previewSource, /data-missing/);
+  assert.doesNotMatch(previewSource, /dangerouslySetInnerHTML|innerHTML|ReactMarkdown|marked|markdown-to-jsx/i);
+
+  assert.match(mapperSource, /VARIABLE_PATTERN/);
+  assert.match(mapperSource, /tokenizeOfferLetterTemplateText/);
+  assert.match(mapperSource, /serverPreview/);
+  assert.doesNotMatch(mapperSource, /eval\(|new Function|dangerouslySetInnerHTML|innerHTML|marked|Markdown/i);
+});
+
+test("no migration was added for document-first offer letter builder", async () => {
+  const migrationNames = await readdir(new URL("../migrations", import.meta.url));
+  assert.equal(
+    migrationNames.some((name) => /offer_letter_builder|document_first|phase_3b_4/i.test(name)),
+    false,
+  );
 });
 
 test("admin profile hides unsafe actions for accepted offer letters", async () => {
@@ -794,10 +897,13 @@ test("document template management uses Admin Operations access group and render
   const sidebarSource = await readFile(new URL("../client/src/components/Sidebar.tsx", import.meta.url), "utf8");
   const documentTemplatesSource = await readFile(new URL("../client/src/pages/DocumentTemplates.tsx", import.meta.url), "utf8");
   const adminProfileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const builderSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterBuilder.tsx", import.meta.url), "utf8");
 
   assert.match(appSource, /path="\/admin-operations\/document-templates"/);
   assert.match(appSource, /<DocumentTemplates \/>/);
   assert.match(appSource, /allowedAccessGroups={\["super_admin", "document_templates"\]}/);
+  assert.match(appSource, /path="\/admin-management\/profile\/:id\/offer-letter\/new"/);
+  assert.match(appSource, /<OfferLetterBuilderPage \/>/);
   assert.match(appSource, /path="\/admin-management\/profile\/:id"/);
   assert.match(appSource, /path="\/admin-management\/profile\/:id"[\s\S]*allowedRoles={\["super_admin"\]}/);
 
@@ -821,10 +927,12 @@ test("document template management uses Admin Operations access group and render
   assert.match(documentTemplatesSource, /whitespace-pre-wrap/);
   assert.doesNotMatch(documentTemplatesSource, /dangerouslySetInnerHTML|innerHTML|ReactMarkdown|marked|markdown-to-jsx/i);
 
-  assert.match(adminProfileSource, /button-view-offer-template/);
-  assert.match(adminProfileSource, /View Template shows the raw reusable template/);
-  assert.match(adminProfileSource, /Preview Template shows the final merged offer draft/);
-  assert.match(adminProfileSource, /template\.status !== "archived"/);
+  assert.match(adminProfileSource, /offer-letter\/new\?engagementId=/);
+  assert.doesNotMatch(adminProfileSource, /Create Offer Letter|Final Title|Final Body|button-view-offer-template|Preview Template/);
+  assert.match(builderSource, /View Raw Template/);
+  assert.match(builderSource, /Raw Template is the reusable plain-text template with variables/);
+  assert.match(builderSource, /Document Preview is the final merged offer draft/);
+  assert.match(builderSource, /template\.status !== "archived"/);
 });
 
 test("trainee workspace APIs are scoped to authenticated trainee", async () => {
