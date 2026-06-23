@@ -1,5 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { spawn } from "child_process";
+import type { Server } from "http";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { assertAdminSchemaReady, SchemaNotReadyError } from "./schemaHealth";
@@ -8,12 +9,101 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+const DEFAULT_PORT = 5001;
+const DEV_PORT_FALLBACK_ATTEMPTS = 20;
+
 function shouldOpenBrowser() {
   return (
     process.env.NODE_ENV === "development" &&
     process.env.NO_BROWSER !== "1" &&
     process.env.BROWSER !== "none"
   );
+}
+
+function getBrowserHost(host: string) {
+  return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+}
+
+function parsePort(value: string | undefined, fallback: number) {
+  if (!value) return fallback;
+
+  const port = Number.parseInt(value, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`Invalid PORT value: ${value}`);
+  }
+  return port;
+}
+
+function isAddressInUse(error: unknown) {
+  return (error as NodeJS.ErrnoException).code === "EADDRINUSE";
+}
+
+function listenOnce(server: Server, port: number, host: string) {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      server.off("error", onError);
+      server.off("listening", onListening);
+    };
+    const onError = (error: NodeJS.ErrnoException) => {
+      cleanup();
+      reject(error);
+    };
+    const onListening = () => {
+      cleanup();
+      resolve();
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+
+    try {
+      server.listen(port, host);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
+async function listenWithPortFallback(server: Server, startPort: number, host: string) {
+  const maxAttempts =
+    process.env.NODE_ENV === "development" ? DEV_PORT_FALLBACK_ATTEMPTS : 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const port = startPort + attempt;
+    if (port > 65535) {
+      break;
+    }
+
+    try {
+      await listenOnce(server, port, host);
+      return port;
+    } catch (error) {
+      const canRetry = isAddressInUse(error) && attempt < maxAttempts - 1;
+      if (!canRetry) {
+        throw error;
+      }
+      log(`port ${port} is in use, trying ${port + 1}`);
+    }
+  }
+
+  throw new Error(`No available port found starting from ${startPort}`);
+}
+
+function hasConfiguredAppOrigin() {
+  return Boolean(
+    process.env.ADMIN_APP_ORIGIN?.trim() ||
+      process.env.APP_ORIGIN?.trim() ||
+      process.env.PUBLIC_WEB_URL?.trim() ||
+      process.env.BASE_URL?.trim(),
+  );
+}
+
+function syncDevelopmentAppOrigin(host: string, port: number) {
+  if (process.env.NODE_ENV !== "development" || hasConfiguredAppOrigin()) {
+    return;
+  }
+  process.env.APP_ORIGIN = `http://${getBrowserHost(host)}:${port}`;
 }
 
 function openBrowser(url: string) {
@@ -102,18 +192,17 @@ app.use((req, res, next) => {
 
   // Use PORT from environment (Render assigns dynamically) or default to 5001 for development
   // In production, PORT is provided by Render and should not be hardcoded
-  const port = parseInt(process.env.PORT || '5001', 10);
+  const port = parsePort(process.env.PORT, DEFAULT_PORT);
   
   if (process.env.NODE_ENV === 'production' && !process.env.PORT) {
     console.warn('Warning: PORT not set in production environment');
   }
   // Always bind to 0.0.0.0 in production for proper deployment
   const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : (process.env.HOST || "0.0.0.0");
-  server.listen(port, host, () => {
-    log(`serving on port ${port} and host ${host}`);
-    if (shouldOpenBrowser()) {
-      const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
-      openBrowser(`http://${browserHost}:${port}`);
-    }
-  });
+  const actualPort = await listenWithPortFallback(server, port, host);
+  syncDevelopmentAppOrigin(host, actualPort);
+  log(`serving on port ${actualPort} and host ${host}`);
+  if (shouldOpenBrowser()) {
+    openBrowser(`http://${getBrowserHost(host)}:${actualPort}`);
+  }
 })();
