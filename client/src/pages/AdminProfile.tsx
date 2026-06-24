@@ -466,7 +466,9 @@ export default function AdminProfile() {
                                         {offerLetter.has_pdf && <Badge variant="outline">PDF ready</Badge>}
                                       </div>
                                     ) : (
-                                      <p className="mt-1 text-sm text-muted-foreground">No offer letter has been created.</p>
+                                      <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                        No offer letter has been created for this trainee yet.
+                                      </p>
                                     )}
                                   </div>
                                   <div className="flex flex-wrap gap-2">
@@ -478,7 +480,7 @@ export default function AdminProfile() {
                                         data-testid={`button-create-offer-letter-${engagement.id}`}
                                       >
                                         <FileText className="h-4 w-4 mr-2" />
-                                        Create
+                                        Create Offer Letter
                                       </Button>
                                     )}
                                     {offerLetter && (

@@ -14,6 +14,10 @@ interface OfferLetterEmailInput {
   title: string;
 }
 
+interface TraineeOfferSetupEmailInput extends OfferLetterEmailInput {
+  setupUrl: string;
+}
+
 const ROLE_DISPLAY_NAMES: Record<AdminRole, string> = {
   super_admin: "Super Admin",
   admin_finance: "Finance Admin",
@@ -146,5 +150,41 @@ export async function sendOfferLetterReadyEmail(input: OfferLetterEmailInput): P
     html,
     logLabel: "Offer letter",
     developmentFallbackUrl: input.workspaceUrl,
+  });
+}
+
+export async function sendTraineeOfferSetupEmail(input: TraineeOfferSetupEmailInput): Promise<boolean> {
+  const escapedName = escapeHtml(input.name);
+  const escapedSetupUrl = escapeHtml(input.setupUrl);
+  const escapedWorkspaceUrl = escapeHtml(input.workspaceUrl);
+  const escapedTitle = escapeHtml(input.title);
+  const subject = "Your Yaotu trainee offer letter is ready for review";
+  const text = [
+    `Hello ${input.name},`,
+    "",
+    `Your trainee offer letter "${input.title}" is ready for review.`,
+    "Please set up your account, log in to the Trainee Workspace, and review and accept the offer letter.",
+    "",
+    `Set up your account: ${input.setupUrl}`,
+    `Trainee Workspace: ${input.workspaceUrl}`,
+  ].join("\n");
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <p>Hello ${escapedName},</p>
+      <p>Your trainee offer letter <strong>${escapedTitle}</strong> is ready for review.</p>
+      <p>Please set up your account, log in to the Trainee Workspace, and review and accept the offer letter.</p>
+      <p><a href="${escapedSetupUrl}">Set up your account</a></p>
+      <p><a href="${escapedWorkspaceUrl}">Open Trainee Workspace</a></p>
+      <p>This one-time setup link expires in 24 hours.</p>
+    </div>
+  `;
+
+  return sendMailgunMessage({
+    to: input.to,
+    subject,
+    text,
+    html,
+    logLabel: "Trainee offer setup",
+    developmentFallbackUrl: input.setupUrl,
   });
 }

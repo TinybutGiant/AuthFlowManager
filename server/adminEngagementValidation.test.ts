@@ -595,16 +595,21 @@ test("create admin UI separates Identity Type, Access Groups, and Engagement fie
   assert.match(identitySource, /Trainee Offer Portal/);
   assert.match(identitySource, /trainee_offer_portal/);
   assert.match(defaultAccessGroupSection, /DEFAULT_TRAINEE_ACCESS_GROUP\.label/);
-  assert.match(defaultAccessGroupSection, /Trainee accounts can review and accept their offer before full workspace access is enabled/);
-  assert.match(defaultAccessGroupSection, /Trainee Workspace access activates after offer acceptance/);
+  assert.match(defaultAccessGroupSection, /Auto-assigned for trainee accounts/);
+  assert.match(defaultAccessGroupSection, /Trainee Workspace access is granted only after the offer letter is accepted/);
+  assert.match(defaultAccessGroupSection, /This access group is assigned automatically and cannot be changed during trainee creation/);
+  assert.match(defaultAccessGroupSection, /<Badge/);
+  assert.doesNotMatch(defaultAccessGroupSection, /<Button|onClick|Switch|Checkbox|Toggle/);
   assert.match(source, /isTraineeIdentity &&/);
   assert.match(source, />Engagement</);
   assert.match(source, />Work Authorization</);
   assert.match(source, /End date is required for Trainee/);
   assert.match(source, /Trainee identity is for temporary interns or trainees/);
   assert.match(source, /Engagement tracks start\/end dates, supervisor, work scope/);
-  assert.match(source, /\? "Create Trainee User"/);
-  assert.match(source, /: "Create Admin"/);
+  assert.match(source, /payload\.deferSetupEmail = true/);
+  assert.match(source, /fromCreate=1/);
+  assert.match(source, /\? "Continue to Offer Letter"/);
+  assert.match(source, /: "Create Admin User"/);
   assert.match(source, /data-testid="select-supervisor-admin"/);
   assert.doesNotMatch(source, /data-testid="input-supervisor-admin-id"/);
   assert.doesNotMatch(source, />Access Role</);
@@ -803,11 +808,14 @@ test("offer letter builder replaces old modal with document-first safe preview",
   const mapperSource = await readFile(new URL("../client/src/components/offerLetter/offerLetterPreviewMapper.ts", import.meta.url), "utf8");
 
   assert.match(adminProfileSource, /setLocation\(`\/admin-management\/profile\/\$\{adminId\}\/offer-letter\/new\?engagementId=\$\{engagement\.id\}`\)/);
-  assert.doesNotMatch(adminProfileSource, /Create Offer Letter|Final Title|Final Body|textarea-offer-letter-body|button-preview-offer-template/);
+  assert.doesNotMatch(adminProfileSource, /Final Title|Final Body|textarea-offer-letter-body|button-preview-offer-template/);
 
   assert.match(builderSource, /Offer Letter Builder/);
   assert.match(builderSource, /Missing Required Fields/);
   assert.match(builderSource, /Document Preview/);
+  assert.match(builderSource, /fromCreate/);
+  assert.match(builderSource, /Step 2 of 2: Create the offer letter for this trainee engagement/);
+  assert.match(builderSource, /Skip for Now/);
   assert.match(builderSource, /Refresh Preview/);
   assert.match(builderSource, /setTimeout\(\(\) =>/);
   assert.match(builderSource, /documents\/preview-template/);
@@ -928,7 +936,7 @@ test("document template management uses Admin Operations access group and render
   assert.doesNotMatch(documentTemplatesSource, /dangerouslySetInnerHTML|innerHTML|ReactMarkdown|marked|markdown-to-jsx/i);
 
   assert.match(adminProfileSource, /offer-letter\/new\?engagementId=/);
-  assert.doesNotMatch(adminProfileSource, /Create Offer Letter|Final Title|Final Body|button-view-offer-template|Preview Template/);
+  assert.doesNotMatch(adminProfileSource, /Final Title|Final Body|button-view-offer-template|Preview Template/);
   assert.match(builderSource, /View Raw Template/);
   assert.match(builderSource, /Raw Template is the reusable plain-text template with variables/);
   assert.match(builderSource, /Document Preview is the final merged offer draft/);
@@ -1045,7 +1053,77 @@ test("create admin route directly creates active setup account instead of pendin
 
   assert.match(createRouteBlock, /createAdminAccountForPasswordSetup/);
   assert.match(createRouteBlock, /sendAdminPasswordSetupEmail/);
+  assert.match(createRouteBlock, /deferSetupEmail/);
+  assert.match(createRouteBlock, /setupEmailDeferred/);
+  assert.match(createRouteBlock, /admin: await serializeAdminUser\(delivery\.admin\)/);
+  assert.match(createRouteBlock, /engagement: delivery\.engagement \?\? null/);
   assert.match(createRouteBlock, /Admin was created and activated, but password setup email failed/);
+  assert.match(createRouteBlock, /if \(!setupEmailDeferred\)/);
+  assert.match(createRouteBlock, /eventType: 'invitation_sent'/);
   assert.doesNotMatch(createRouteBlock, /createPendingAdminAccount/);
   assert.doesNotMatch(createRouteBlock, /createAdminUserWithApprovalAndEngagement/);
+});
+
+test("create admin duplicate email uses safe 409 response and field-level UI error", async () => {
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const createSource = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
+  const routeStart = routesSource.indexOf('app.post("/api/admin/users"');
+  const routeEnd = routesSource.indexOf('app.get("/api/admin/users/:id/engagements"', routeStart);
+  const createRouteBlock = routesSource.slice(routeStart, routeEnd);
+  const duplicateResponseStart = createRouteBlock.indexOf("if (isAdminEmailUniqueViolation(error))");
+  const duplicateResponseBlock = createRouteBlock.slice(
+    duplicateResponseStart,
+    createRouteBlock.indexOf("console.error", duplicateResponseStart),
+  );
+  const duplicateUiStart = createSource.indexOf("if (isDuplicateEmailError(error))");
+  const duplicateUiBlock = createSource.slice(
+    duplicateUiStart,
+    createSource.indexOf('title: "Error"', duplicateUiStart),
+  );
+
+  assert.notEqual(duplicateResponseStart, -1);
+  assert.match(routesSource, /function isAdminEmailUniqueViolation/);
+  assert.match(routesSource, /errorField\(error, "code"\) !== "23505"/);
+  assert.match(routesSource, /admin_users_email/);
+  assert.match(duplicateResponseBlock, /status\(409\)\.json/);
+  assert.match(duplicateResponseBlock, /message: "An admin user with this email already exists\."/);
+  assert.match(duplicateResponseBlock, /code: "ADMIN_EMAIL_EXISTS"/);
+  assert.match(duplicateResponseBlock, /field: "email"/);
+  assert.match(createRouteBlock, /res\.status\(400\)\.json\(\{ message: "Failed to create admin user" \}\)/);
+
+  assert.notEqual(duplicateUiStart, -1);
+  assert.match(createSource, /body\.code === "ADMIN_EMAIL_EXISTS" \|\| body\.field === "email"/);
+  assert.match(createSource, /An admin user with this email already exists\. Use a different email or open the existing profile\./);
+  assert.match(duplicateUiBlock, /form\.setError\("email"/);
+  assert.match(duplicateUiBlock, /DUPLICATE_EMAIL_MESSAGE/);
+  assert.match(duplicateUiBlock, /variant: "destructive"/);
+  assert.doesNotMatch(duplicateUiBlock, /navigate\(|offer-letter\/new|admin-management/);
+  assert.match(createSource, /CREATE_USER_GENERIC_ERROR_MESSAGE[\s\S]*Failed to create user\. Please check the form and try again\./);
+});
+
+test("phase 3B.5 two-step trainee create defers setup and uses offer builder recovery path", async () => {
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const createSource = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
+  const builderSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterBuilder.tsx", import.meta.url), "utf8");
+  const profileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const traineeSource = await readFile(new URL("../client/src/pages/TraineeWorkspace.tsx", import.meta.url), "utf8");
+  const createRouteBlock = routesSource.slice(
+    routesSource.indexOf('app.post("/api/admin/users"'),
+    routesSource.indexOf('app.get("/api/admin/users/:id/engagements"'),
+  );
+
+  assert.match(createRouteBlock, /Setup email deferral is only supported for trainee creation/);
+  assert.match(createRouteBlock, /setupEmailDeferred/);
+  assert.match(createRouteBlock, /engagement: delivery\.engagement \?\? null/);
+  assert.match(createSource, /payload\.deferSetupEmail = true/);
+  assert.match(createSource, /Continue to Offer Letter/);
+  assert.match(createSource, /Trainee engagement created\. Continue by creating the offer letter/);
+  assert.match(createSource, /\/admin-management\/profile\/\$\{admin\.id\}\/offer-letter\/new\?engagementId=\$\{engagement\.id\}&fromCreate=1/);
+  assert.match(builderSource, /Step 2 of 2: Create the offer letter for this trainee engagement/);
+  assert.match(builderSource, /data-testid="button-skip-offer-letter-for-now"/);
+  assert.match(profileSource, /No offer letter has been created for this trainee yet/);
+  assert.match(profileSource, /Create Offer Letter/);
+  assert.match(traineeSource, /No offer letter is available yet/);
+  assert.match(traineeSource, /enabled: hasAcceptedOffer/);
+  assert.doesNotMatch(createSource + builderSource + profileSource + routesSource, /resumeUpload|resumeParsing|rawResume|candidateLifecycle|rejectedCandidate|DocuSign|signed-copy/i);
 });

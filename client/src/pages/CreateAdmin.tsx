@@ -5,13 +5,14 @@ import { useLocation } from "wouter";
 import { z } from "zod";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ApiError, apiRequest, getApiErrorMessage } from "@/lib/queryClient";
+import { ApiError, apiRequest } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
-import { AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
+import { AdminEngagement, AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
 import {
   ASSIGNABLE_ACCESS_GROUP_OPTIONS,
   DEFAULT_TRAINEE_ACCESS_GROUP,
@@ -23,6 +24,10 @@ import {
 
 const CREATE_EMAIL_FAILURE_MESSAGE =
   "Admin was created and activated, but password setup email failed. Use resend setup link after fixing email delivery.";
+const DUPLICATE_EMAIL_MESSAGE =
+  "An admin user with this email already exists. Use a different email or open the existing profile.";
+const CREATE_USER_GENERIC_ERROR_MESSAGE =
+  "Failed to create user. Please check the form and try again.";
 
 const createAdminSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
@@ -93,6 +98,21 @@ const createAdminSchema = z.object({
 
 type CreateAdminForm = z.infer<typeof createAdminSchema>;
 
+interface CreateAdminResponse {
+  admin: AdminUser;
+  engagement: AdminEngagement | null;
+  setupEmailDeferred?: boolean;
+}
+
+function isDuplicateEmailError(error: unknown) {
+  if (!(error instanceof ApiError) || !error.body || typeof error.body !== "object") {
+    return false;
+  }
+
+  const body = error.body as { code?: unknown; field?: unknown };
+  return body.code === "ADMIN_EMAIL_EXISTS" || body.field === "email";
+}
+
 export default function CreateAdmin() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -160,6 +180,7 @@ export default function CreateAdmin() {
       };
 
       if (role === 'trainee_access') {
+        payload.deferSetupEmail = true;
         payload.engagement = {
           engagementType: data.engagementType || 'intern',
           scheduleType: data.scheduleType || null,
@@ -173,16 +194,38 @@ export default function CreateAdmin() {
         };
       }
 
-      await apiRequest("POST", "/api/admin/users", payload);
+      const response = await apiRequest("POST", "/api/admin/users", payload);
+      return response.json() as Promise<CreateAdminResponse>;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/approvals"] });
+      const admin = result.admin;
+      const engagement = result.engagement;
+
+      if (isTraineeIdentity) {
+        toast({
+          title: "Success",
+          description: "Trainee engagement created. Continue by creating the offer letter.",
+        });
+
+        if (admin?.id && engagement?.id) {
+          navigate(`/admin-management/profile/${admin.id}/offer-letter/new?engagementId=${engagement.id}&fromCreate=1`);
+          return;
+        }
+
+        toast({
+          title: "Missing engagement",
+          description: "The trainee was created, but the engagement id was not returned. Opening the profile recovery path.",
+          variant: "destructive",
+        });
+        navigate(admin?.id ? `/admin-management/profile/${admin.id}` : "/admin-management");
+        return;
+      }
+
       toast({
         title: "Success",
-        description: isTraineeIdentity
-          ? "Trainee user created. Password setup email sent."
-          : "Admin created. Password setup email sent.",
+        description: "Admin created. Password setup email sent.",
       });
       navigate("/admin-management");
     },
@@ -216,9 +259,19 @@ export default function CreateAdmin() {
         return;
       }
 
+      if (isDuplicateEmailError(error)) {
+        form.setError("email", { type: "server", message: DUPLICATE_EMAIL_MESSAGE }, { shouldFocus: true });
+        toast({
+          title: "Email already exists",
+          description: DUPLICATE_EMAIL_MESSAGE,
+          variant: "destructive",
+        });
+        return;
+      }
+
       toast({
         title: "Error",
-        description: getApiErrorMessage(error, isTraineeIdentity ? "Failed to create trainee user" : "Failed to create admin"),
+        description: CREATE_USER_GENERIC_ERROR_MESSAGE,
         variant: "destructive",
       });
     },
@@ -350,20 +403,29 @@ export default function CreateAdmin() {
                   <div>
                     <h2 className="text-lg font-medium text-foreground">Initial Access</h2>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Trainee accounts can review and accept their offer before full workspace access is enabled. Trainee Workspace access activates after offer acceptance.
+                      Auto-assigned for trainee accounts:
                     </p>
                   </div>
-                  <div
-                    className="inline-flex rounded-md border border-border bg-muted px-3 py-1 text-sm font-medium text-foreground"
-                    data-testid="pill-default-access-group"
+                  <Badge
+                    variant="secondary"
+                    className="w-fit cursor-default px-3 py-1 text-sm font-medium"
+                    data-testid="badge-default-access-group"
                   >
                     {DEFAULT_TRAINEE_ACCESS_GROUP.label}
-                  </div>
+                  </Badge>
+                  <p className="text-sm text-muted-foreground">
+                    Trainee Workspace access is granted only after the offer letter is accepted.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    This access group is assigned automatically and cannot be changed during trainee creation.
+                  </p>
                 </section>
               )}
 
               <div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-                After this user is created, the account will be activated and a one-time password setup link will be sent to the email address above. The link expires in 24 hours.
+                {isTraineeIdentity
+                  ? "After this trainee engagement is created, continue to the offer letter. The setup link is sent when the offer letter is sent."
+                  : "After this user is created, the account will be activated and a one-time password setup link will be sent to the email address above. The link expires in 24 hours."}
               </div>
 
               {isTraineeIdentity && (
@@ -540,8 +602,8 @@ export default function CreateAdmin() {
                   {createAdminMutation.isPending
                     ? "Creating..."
                     : isTraineeIdentity
-                      ? "Create Trainee User"
-                      : "Create Admin"}
+                      ? "Continue to Offer Letter"
+                      : "Create Admin User"}
                 </Button>
               </div>
             </form>

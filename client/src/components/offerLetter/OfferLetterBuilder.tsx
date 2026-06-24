@@ -125,9 +125,13 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const queryEngagementId = useMemo(() => {
-    const value = new URLSearchParams(window.location.search).get("engagementId");
+    const searchParams = new URLSearchParams(window.location.search);
+    const value = searchParams.get("engagementId");
     const parsed = value ? Number(value) : NaN;
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, []);
+  const fromCreate = useMemo(() => {
+    return new URLSearchParams(window.location.search).get("fromCreate") === "1";
   }, []);
 
   const [selectedEngagementId, setSelectedEngagementId] = useState<number | null>(queryEngagementId);
@@ -415,7 +419,9 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
           </Button>
           <h1 className="text-3xl font-light text-foreground">Offer Letter Builder</h1>
           <p className="text-muted-foreground">
-            Build the document from structured merge fields while reviewing the full draft.
+            {fromCreate
+              ? "Step 2 of 2: Create the offer letter for this trainee engagement."
+              : "Build the document from structured merge fields while reviewing the full draft."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -439,6 +445,15 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh Preview
           </Button>
+          {fromCreate && (
+            <Button
+              variant="outline"
+              onClick={() => setLocation(`/admin-management/profile/${adminId}`)}
+              data-testid="button-skip-offer-letter-for-now"
+            >
+              Skip for Now
+            </Button>
+          )}
           <Button
             onClick={() => createOfferLetterMutation.mutate()}
             disabled={createDisabled}

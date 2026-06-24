@@ -6,7 +6,7 @@ import type {
   InsertAdminEngagementDocument,
 } from "@shared/schema";
 import type { IStorage } from "./storage";
-import { getAdminAppOrigin } from "./passwordSetup";
+import { buildPasswordSetupUrl, createPasswordSetupToken, getAdminAppOrigin } from "./passwordSetup";
 import {
   buildLegacyOfferLetterPdfContext,
   buildSnapshotOfferLetterPdfContext,
@@ -21,7 +21,7 @@ import {
   type PrivateObjectBuffer,
   type PutPrivateObjectInput,
 } from "./lib/privateR2Storage";
-import { sendOfferLetterReadyEmail } from "./email";
+import { sendOfferLetterReadyEmail, sendTraineeOfferSetupEmail } from "./email";
 import {
   previewOfferLetterTemplate,
   type ManualOfferLetterMergeValues,
@@ -53,6 +53,10 @@ export interface OfferLetterObjectStorage {
 
 export interface OfferLetterEmailSender {
   (input: { to: string; name: string; workspaceUrl: string; title: string }): Promise<boolean>;
+}
+
+export interface OfferLetterSetupEmailSender {
+  (input: { to: string; name: string; setupUrl: string; workspaceUrl: string; title: string }): Promise<boolean>;
 }
 
 export const defaultOfferLetterObjectStorage: OfferLetterObjectStorage = {
@@ -95,6 +99,25 @@ function safeLifecycleMetadata(document: AdminEngagementDocument, extra: Record<
 
 function hasMergeSnapshot(document: Pick<AdminEngagementDocument, "mergeData">) {
   return Boolean(document.mergeData);
+}
+
+function metadataValue(metadata: unknown, key: string) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  return (metadata as Record<string, unknown>)[key];
+}
+
+function isPasswordSetupInvitationEvent(event: { eventType?: string; metadata?: unknown }) {
+  if (event.eventType !== "invitation_sent") {
+    return false;
+  }
+  const purpose = metadataValue(event.metadata, "purpose");
+  return (
+    purpose === "password_setup" ||
+    purpose === "password_setup_resend" ||
+    purpose === "trainee_offer_setup"
+  );
 }
 
 async function getEngagementContext(
@@ -418,6 +441,7 @@ export async function sendOfferLetterDocument(input: {
   storage: IStorage;
   objectStorage?: OfferLetterObjectStorage;
   sendEmail?: OfferLetterEmailSender;
+  sendSetupEmail?: OfferLetterSetupEmailSender;
   engagementId: number;
   documentId: number;
   actorAdminId: number;
@@ -468,13 +492,25 @@ export async function sendOfferLetterDocument(input: {
     throw new OfferLetterError(404, "Trainee admin user not found");
   }
 
+  const workspaceUrl = `${getAdminAppOrigin()}/trainee`;
+  const setupInvitationSent = await maybeSendDeferredTraineeSetupEmail({
+    storage: input.storage,
+    sendSetupEmail: input.sendSetupEmail ?? sendTraineeOfferSetupEmail,
+    trainee,
+    engagementId: input.engagementId,
+    actorAdminId: input.actorAdminId,
+    workspaceUrl,
+    title: document.title,
+    now,
+  });
+
   const sendEmail = input.sendEmail ?? sendOfferLetterReadyEmail;
-  const sent = await sendEmail({
+  const sent = setupInvitationSent || (await sendEmail({
     to: trainee.email,
     name: trainee.name,
-    workspaceUrl: `${getAdminAppOrigin()}/trainee`,
+    workspaceUrl,
     title: document.title,
-  });
+  }));
   if (!sent) {
     throw new OfferLetterError(502, "Offer letter email could not be sent");
   }
@@ -500,6 +536,67 @@ export async function sendOfferLetterDocument(input: {
   }
 
   return updated;
+}
+
+async function maybeSendDeferredTraineeSetupEmail(input: {
+  storage: IStorage;
+  sendSetupEmail: OfferLetterSetupEmailSender;
+  trainee: AdminUser;
+  engagementId: number;
+  actorAdminId: number;
+  workspaceUrl: string;
+  title: string;
+  now: Date;
+}) {
+  if (
+    input.trainee.role !== "trainee_access" ||
+    input.trainee.status !== "active" ||
+    !input.trainee.mustChangePassword
+  ) {
+    return false;
+  }
+
+  const events = await input.storage.listAdminLifecycleEvents(input.trainee.id);
+  if (events.some(isPasswordSetupInvitationEvent)) {
+    return false;
+  }
+
+  const setupToken = createPasswordSetupToken(input.now);
+  const updatedTrainee = await input.storage.refreshPasswordSetupTokenForAdmin(
+    input.trainee.id,
+    setupToken.tokenHash,
+    setupToken.expiresAt,
+  );
+  if (!updatedTrainee) {
+    return false;
+  }
+
+  const sent = await input.sendSetupEmail({
+    to: updatedTrainee.email,
+    name: updatedTrainee.name,
+    setupUrl: buildPasswordSetupUrl(setupToken.token),
+    workspaceUrl: input.workspaceUrl,
+    title: input.title,
+  });
+  if (!sent) {
+    throw new OfferLetterError(502, "Trainee setup email could not be sent");
+  }
+
+  await input.storage.createAdminLifecycleEvent({
+    adminUserId: updatedTrainee.id,
+    engagementId: input.engagementId,
+    eventType: "invitation_sent",
+    occurredAt: input.now,
+    actorAdminId: input.actorAdminId,
+    metadata: {
+      channel: "email",
+      purpose: "trainee_offer_setup",
+      source: "offer_letter_send",
+    },
+    notes: null,
+  });
+
+  return true;
 }
 
 export async function voidOfferLetterDocument(input: {

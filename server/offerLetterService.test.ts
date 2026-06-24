@@ -37,6 +37,9 @@ class MemoryOfferLetterStorage {
       email: `admin-${this.admins.size + 1}@example.com`,
       role: "trainee_access",
       status: "active",
+      mustChangePassword: false,
+      passwordSetupTokenHash: null,
+      passwordSetupExpiresAt: null,
       ...overrides,
     };
     this.admins.set(admin.id, admin);
@@ -133,6 +136,36 @@ class MemoryOfferLetterStorage {
 
   async getAdminUser(id: number) {
     return this.admins.get(id);
+  }
+
+  async refreshPasswordSetupTokenForAdmin(id: number, tokenHash: string, expiresAt: Date) {
+    const existing = this.admins.get(id);
+    if (!existing || existing.status !== "active" || existing.mustChangePassword !== true) {
+      return undefined;
+    }
+    const updated = {
+      ...existing,
+      passwordSetupTokenHash: tokenHash,
+      passwordSetupExpiresAt: expiresAt,
+      updatedAt: new Date("2026-05-06T00:00:00Z"),
+    };
+    this.admins.set(id, updated);
+    return updated;
+  }
+
+  async listAdminLifecycleEvents(adminUserId: number) {
+    return this.events.filter((event) => event.adminUserId === adminUserId);
+  }
+
+  async createAdminLifecycleEvent(event: any) {
+    const created = {
+      id: this.events.length + 1,
+      occurredAt: event.occurredAt ?? new Date("2026-05-06T00:00:00Z"),
+      createdAt: new Date("2026-05-06T00:00:00Z"),
+      ...event,
+    };
+    this.events.push(created);
+    return created;
   }
 
   async listAdminEngagementDocuments(engagementId: number) {
@@ -917,6 +950,136 @@ test("offer letter send uses a link-only trainee workspace email and marks sent"
   assert.doesNotMatch(emailInput.workspaceUrl, /token|document|bearer/i);
   assert.deepEqual(objectStorage.existsChecks, [document.fileKey]);
   assert.equal(store.events.at(-1).eventType, "offer_letter_sent");
+});
+
+test("sending offer after deferred setup sends setup access email and records invitation", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({
+    name: "Deferred Trainee",
+    email: "deferred@example.com",
+    mustChangePassword: true,
+    passwordSetupTokenHash: "old-hash",
+    passwordSetupExpiresAt: new Date("2026-05-01T00:00:00Z"),
+  });
+  const engagement = store.seedEngagement(trainee.id);
+  const document = store.seedDocument({ engagementId: engagement.id, status: "draft", sentAt: null });
+  const objectStorage = createPrivateObjectStore();
+  objectStorage.objects.set(document.fileKey, Buffer.from("pdf"));
+  let setupEmailInput: any;
+  let offerEmailCalled = false;
+
+  const sent = await sendOfferLetterDocument({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    documentId: document.id,
+    actorAdminId: 99,
+    sendEmail: async () => {
+      offerEmailCalled = true;
+      return true;
+    },
+    sendSetupEmail: async (input) => {
+      setupEmailInput = input;
+      return true;
+    },
+    now: new Date("2026-05-06T00:00:00Z"),
+  });
+
+  assert.equal(sent.status, "sent");
+  assert.equal(offerEmailCalled, false);
+  assert.equal(setupEmailInput.to, "deferred@example.com");
+  assert.match(setupEmailInput.setupUrl, /\/set-password\?token=/);
+  assert.match(setupEmailInput.workspaceUrl, /\/trainee$/);
+  assert.doesNotMatch(JSON.stringify(setupEmailInput), /fileKey|signed|bearer|documentId|engagement-documents/i);
+  assert.notEqual(store.admins.get(trainee.id).passwordSetupTokenHash, "old-hash");
+  assert.deepEqual(
+    store.events.slice(-2).map((event) => event.eventType),
+    ["invitation_sent", "offer_letter_sent"],
+  );
+  assert.equal(store.events.at(-2).metadata.purpose, "trainee_offer_setup");
+});
+
+test("failed deferred setup email does not mark invitation or offer sent", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({
+    email: "deferred-fail@example.com",
+    mustChangePassword: true,
+    passwordSetupTokenHash: "old-hash",
+    passwordSetupExpiresAt: new Date("2026-05-01T00:00:00Z"),
+  });
+  const engagement = store.seedEngagement(trainee.id);
+  const document = store.seedDocument({ engagementId: engagement.id, status: "draft", sentAt: null });
+  const objectStorage = createPrivateObjectStore();
+  objectStorage.objects.set(document.fileKey, Buffer.from("pdf"));
+  let offerEmailCalled = false;
+
+  await assert.rejects(
+    sendOfferLetterDocument({
+      storage: store as any,
+      objectStorage,
+      engagementId: engagement.id,
+      documentId: document.id,
+      actorAdminId: 99,
+      sendEmail: async () => {
+        offerEmailCalled = true;
+        return true;
+      },
+      sendSetupEmail: async () => false,
+      now: new Date("2026-05-06T00:00:00Z"),
+    }),
+    /Trainee setup email could not be sent/,
+  );
+
+  assert.equal(offerEmailCalled, false);
+  assert.equal(store.documents.get(document.id).status, "draft");
+  assert.equal(store.documents.get(document.id).sentAt, null);
+  assert.equal(store.events.some((event) => event.eventType === "invitation_sent"), false);
+  assert.equal(store.events.some((event) => event.eventType === "offer_letter_sent"), false);
+});
+
+test("resending offer does not spam setup email after setup invitation exists", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin({
+    email: "already-invited@example.com",
+    mustChangePassword: true,
+    passwordSetupTokenHash: "existing-hash",
+  });
+  const engagement = store.seedEngagement(trainee.id);
+  const document = store.seedDocument({ engagementId: engagement.id, status: "sent" });
+  const objectStorage = createPrivateObjectStore();
+  objectStorage.objects.set(document.fileKey, Buffer.from("pdf"));
+  await store.createAdminLifecycleEvent({
+    adminUserId: trainee.id,
+    engagementId: engagement.id,
+    eventType: "invitation_sent",
+    actorAdminId: 99,
+    metadata: { channel: "email", purpose: "trainee_offer_setup" },
+    notes: null,
+  });
+  let setupEmailCalls = 0;
+  let offerEmailCalls = 0;
+
+  const sent = await sendOfferLetterDocument({
+    storage: store as any,
+    objectStorage,
+    engagementId: engagement.id,
+    documentId: document.id,
+    actorAdminId: 99,
+    sendEmail: async () => {
+      offerEmailCalls += 1;
+      return true;
+    },
+    sendSetupEmail: async () => {
+      setupEmailCalls += 1;
+      return true;
+    },
+    now: new Date("2026-05-06T00:00:00Z"),
+  });
+
+  assert.equal(sent.status, "sent");
+  assert.equal(setupEmailCalls, 0);
+  assert.equal(offerEmailCalls, 1);
+  assert.equal(store.events.filter((event) => event.eventType === "invitation_sent").length, 1);
 });
 
 test("accepted offer letter cannot be voided or regenerated and still gates onboarding readiness", async () => {

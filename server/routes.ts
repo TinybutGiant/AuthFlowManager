@@ -84,7 +84,42 @@ const createAdminUserSchema = z.object({
   role: accessRoleSchema.exclude(['super_admin']),
   permissions: z.array(z.string()).optional(),
   engagement: z.unknown().optional(),
+  deferSetupEmail: z.boolean().optional(),
 });
+
+function errorField(error: unknown, field: string): string {
+  if (!error || typeof error !== "object" || !(field in error)) {
+    return "";
+  }
+  const value = (error as Record<string, unknown>)[field];
+  return typeof value === "string" ? value.toLowerCase() : "";
+}
+
+function isAdminEmailUniqueViolation(error: unknown): boolean {
+  if (error && typeof error === "object" && "cause" in error) {
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause && cause !== error && isAdminEmailUniqueViolation(cause)) {
+      return true;
+    }
+  }
+
+  if (errorField(error, "code") !== "23505") {
+    return false;
+  }
+
+  const constraint = errorField(error, "constraint");
+  const table = errorField(error, "table");
+  const detail = errorField(error, "detail");
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+
+  return (
+    constraint.includes("admin_users_email") ||
+    constraint.includes("admin_users_email_unique") ||
+    (table === "admin_users" && detail.includes("email")) ||
+    detail.includes("key (email)") ||
+    message.includes("admin_users_email")
+  );
+}
 
 const passwordSetupTokenSchema = z.object({
   token: z.string().min(20),
@@ -620,10 +655,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/users", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const validatedData = createAdminUserSchema.parse(req.body);
-      const { engagement, ...adminData } = validatedData;
+      const { engagement, deferSetupEmail, ...adminData } = validatedData;
       const engagementData = engagement !== undefined && engagement !== null
         ? engagementPayloadSchema.parse(engagement)
         : undefined;
+      if (deferSetupEmail && adminData.role !== 'trainee_access') {
+        return res.status(400).json({
+          message: "Setup email deferral is only supported for trainee creation",
+        });
+      }
       z.object({
         role: accessRoleSchema,
         engagement: engagementPayloadSchema.optional(),
@@ -674,38 +714,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const emailSent = await sendAdminPasswordSetupEmail({
-        to: delivery.admin.email,
-        name: delivery.admin.name,
-        setupUrl: delivery.setupUrl,
-        role: delivery.admin.role,
-      });
+      const setupEmailDeferred = Boolean(deferSetupEmail && delivery.admin.role === 'trainee_access');
+      const responseBody = {
+        admin: await serializeAdminUser(delivery.admin),
+        engagement: delivery.engagement ?? null,
+        setupEmailDeferred,
+      };
 
-      if (!emailSent) {
-        return res.status(502).json({
-          message: "Admin was created and activated, but password setup email failed. Use resend setup link after fixing email delivery.",
-          admin: await serializeAdminUser(delivery.admin),
+      if (!setupEmailDeferred) {
+        const emailSent = await sendAdminPasswordSetupEmail({
+          to: delivery.admin.email,
+          name: delivery.admin.name,
+          setupUrl: delivery.setupUrl,
+          role: delivery.admin.role,
         });
-      }
 
-      if (delivery.engagement) {
-        try {
-          await storage.createAdminLifecycleEvent({
-            adminUserId: delivery.admin.id,
-            engagementId: delivery.engagement.id,
-            eventType: 'invitation_sent',
-            actorAdminId: req.adminUser.id,
-            metadata: { channel: 'email', purpose: 'password_setup', source: 'direct_create' },
-            notes: null,
+        if (!emailSent) {
+          return res.status(502).json({
+            message: "Admin was created and activated, but password setup email failed. Use resend setup link after fixing email delivery.",
+            ...responseBody,
           });
-        } catch (eventError) {
-          console.warn("Failed to record invitation_sent lifecycle event:", eventError);
+        }
+
+        if (delivery.engagement) {
+          try {
+            await storage.createAdminLifecycleEvent({
+              adminUserId: delivery.admin.id,
+              engagementId: delivery.engagement.id,
+              eventType: 'invitation_sent',
+              actorAdminId: req.adminUser.id,
+              metadata: { channel: 'email', purpose: 'password_setup', source: 'direct_create' },
+              notes: null,
+            });
+          } catch (eventError) {
+            console.warn("Failed to record invitation_sent lifecycle event:", eventError);
+          }
         }
       }
 
-      res.status(201).json(await serializeAdminUser(delivery.admin));
+      res.status(201).json(responseBody);
     } catch (error: any) {
-      res.status(400).json({ message: "Failed to create admin user", error: error?.message || 'Unknown error' });
+      if (isAdminEmailUniqueViolation(error)) {
+        return res.status(409).json({
+          message: "An admin user with this email already exists.",
+          code: "ADMIN_EMAIL_EXISTS",
+          field: "email",
+        });
+      }
+
+      console.error("[create admin user] Failed to create admin user", error);
+      res.status(400).json({ message: "Failed to create admin user" });
     }
   });
 

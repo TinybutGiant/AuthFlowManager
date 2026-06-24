@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { sendAdminPasswordSetupEmail, sendOfferLetterReadyEmail } from "./email";
+import { sendAdminPasswordSetupEmail, sendOfferLetterReadyEmail, sendTraineeOfferSetupEmail } from "./email";
 
 const mailEnvKeys = [
   "MAILGUN_API_KEY",
@@ -153,6 +153,40 @@ test("offer letter email is link-only and uses trainee workspace URL", async () 
     assert.match(requestedBody, /subject=Your\+Yaotu\+trainee\+offer\+letter\+is\+ready\+for\+review/);
     assert.match(requestedBody, /https%3A%2F%2Fadmin\.example\.com%2Ftrainee/);
     assert.doesNotMatch(requestedBody, /attachment|token|bearer|documentId/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+test("trainee offer setup email uses setup and workspace links without document secrets", async () => {
+  const restoreEnv = withCleanMailEnv();
+  const originalFetch = globalThis.fetch;
+  let requestedBody = "";
+
+  globalThis.fetch = (async (_input, init) => {
+    requestedBody = String(init?.body);
+    return new Response("OK", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    process.env.MAILGUN_API_KEY = "test-api-key";
+    process.env.MAILGUN_DOMAIN = "mg.example.com";
+    process.env.MAILGUN_FROM = "YaoTu Admin <admin@mg.example.com>";
+
+    const sent = await sendTraineeOfferSetupEmail({
+      to: "trainee@example.com",
+      name: "Trainee User",
+      setupUrl: "https://admin.example.com/set-password?token=test",
+      workspaceUrl: "https://admin.example.com/trainee",
+      title: "Trainee Offer Letter",
+    });
+
+    assert.equal(sent, true);
+    assert.match(requestedBody, /subject=Your\+Yaotu\+trainee\+offer\+letter\+is\+ready\+for\+review/);
+    assert.match(requestedBody, /https%3A%2F%2Fadmin\.example\.com%2Fset-password%3Ftoken%3Dtest/);
+    assert.match(requestedBody, /https%3A%2F%2Fadmin\.example\.com%2Ftrainee/);
+    assert.doesNotMatch(requestedBody, /attachment|bearer|documentId|fileKey|signedUrl/i);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();
