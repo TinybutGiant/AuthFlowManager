@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -44,6 +45,11 @@ const createAdminSchema = z.object({
   supervisorAdminId: z.string().optional(),
   expectedHoursPerWeek: z.string().optional(),
   workScope: z.string().optional(),
+  positionTitle: z.string().optional(),
+  schoolName: z.string().optional(),
+  programOrMajor: z.string().optional(),
+  responseDeadline: z.string().optional(),
+  workLocation: z.string().optional(),
 }).superRefine((data, ctx) => {
   if (data.identityType === 'admin_staff' && !data.accessGroup) {
     ctx.addIssue({
@@ -80,6 +86,36 @@ const createAdminSchema = z.object({
       message: 'Work scope is required for Trainee',
     });
   }
+  if (data.identityType === 'trainee' && !data.positionTitle?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['positionTitle'],
+      message: 'Position title is required for Trainee',
+    });
+  }
+  if (data.identityType === 'trainee' && data.workAuthorizationType === 'cpt') {
+    if (!data.schoolName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['schoolName'],
+        message: 'School name is required for CPT trainees',
+      });
+    }
+    if (!data.programOrMajor?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['programOrMajor'],
+        message: 'Program or major is required for CPT trainees',
+      });
+    }
+    if (!data.responseDeadline) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['responseDeadline'],
+        message: 'Response deadline is required for CPT trainees',
+      });
+    }
+  }
   if (data.identityType === 'trainee' && data.engagementType === 'intern' && !data.endDate) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -102,6 +138,10 @@ interface CreateAdminResponse {
   admin: AdminUser;
   engagement: AdminEngagement | null;
   setupEmailDeferred?: boolean;
+}
+
+interface CompanyBrandDefaultsResponse {
+  defaultWorkLocation: string;
 }
 
 function isDuplicateEmailError(error: unknown) {
@@ -133,6 +173,11 @@ export default function CreateAdmin() {
       supervisorAdminId: "",
       expectedHoursPerWeek: "",
       workScope: "",
+      positionTitle: "",
+      schoolName: "",
+      programOrMajor: "",
+      responseDeadline: "",
+      workLocation: "",
     },
   });
   const selectedIdentityType = form.watch("identityType");
@@ -143,6 +188,11 @@ export default function CreateAdmin() {
 
   const { data: admins = [] } = useQuery<AdminUser[]>({
     queryKey: ["/api/admin/users"],
+    retry: false,
+  });
+
+  const { data: companyBrandDefaults } = useQuery<CompanyBrandDefaultsResponse>({
+    queryKey: ["/api/admin/company-brand-defaults"],
     retry: false,
   });
 
@@ -160,7 +210,21 @@ export default function CreateAdmin() {
     form.setValue("supervisorAdminId", "");
     form.setValue("expectedHoursPerWeek", "");
     form.setValue("workScope", "");
+    form.setValue("positionTitle", "");
+    form.setValue("schoolName", "");
+    form.setValue("programOrMajor", "");
+    form.setValue("responseDeadline", "");
+    form.setValue("workLocation", "");
   };
+
+  useEffect(() => {
+    if (!isTraineeIdentity || form.getValues("workLocation")) {
+      return;
+    }
+    if (companyBrandDefaults?.defaultWorkLocation) {
+      form.setValue("workLocation", companyBrandDefaults.defaultWorkLocation, { shouldValidate: true });
+    }
+  }, [companyBrandDefaults?.defaultWorkLocation, form, isTraineeIdentity]);
 
   const getSupervisorRoleLabel = (role: AdminUser["role"]) => {
     return role === "trainee_access" ? "Trainee" : ROLE_DISPLAY_NAMES[role] || role;
@@ -190,6 +254,11 @@ export default function CreateAdmin() {
           supervisorAdminId: data.supervisorAdminId ? Number(data.supervisorAdminId) : null,
           expectedHoursPerWeek: data.expectedHoursPerWeek ? Number(data.expectedHoursPerWeek) : null,
           workScope: data.workScope || null,
+          positionTitle: data.positionTitle || null,
+          schoolName: data.schoolName || null,
+          programOrMajor: data.programOrMajor || null,
+          responseDeadline: data.responseDeadline || null,
+          workLocation: data.workLocation || null,
           status: 'draft',
         };
       }
@@ -431,15 +500,97 @@ export default function CreateAdmin() {
               {isTraineeIdentity && (
                 <section className="rounded-md border border-border p-5 space-y-5">
                   <div>
-                    <h2 className="text-lg font-medium text-foreground">Engagement</h2>
+                    <h2 className="text-lg font-medium text-foreground">Create Trainee Engagement Seed</h2>
                     <p className="text-sm text-muted-foreground mt-1">
                       Trainee identity is for temporary interns or trainees. It does not grant access to core admin operations.
                     </p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Engagement tracks start/end dates, supervisor, work scope, and onboarding/offboarding events.
+                      Capture the reusable school, CPT, engagement, and offer seed facts before creating the offer letter.
                     </p>
                   </div>
 
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-semibold text-foreground">School / CPT Info</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <Label htmlFor="school-name">School Name</Label>
+                        <Input
+                          id="school-name"
+                          {...form.register("schoolName")}
+                          placeholder="e.g. Wayne State University"
+                          data-testid="input-school-name"
+                        />
+                        {form.formState.errors.schoolName && (
+                          <p className="text-sm text-destructive mt-1">
+                            {form.formState.errors.schoolName.message}
+                          </p>
+                        )}
+                      </div>
+
+                      <div>
+                        <Label htmlFor="program-or-major">Program or Major</Label>
+                        <Input
+                          id="program-or-major"
+                          {...form.register("programOrMajor")}
+                          placeholder="e.g. Data Science"
+                          data-testid="input-program-or-major"
+                        />
+                        {form.formState.errors.programOrMajor && (
+                          <p className="text-sm text-destructive mt-1">
+                            {form.formState.errors.programOrMajor.message}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-semibold text-foreground">Offer Seed Facts</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <Label htmlFor="position-title">Position Title</Label>
+                        <Input
+                          id="position-title"
+                          {...form.register("positionTitle")}
+                          placeholder="e.g. Business Analyst Intern"
+                          data-testid="input-position-title"
+                        />
+                        {form.formState.errors.positionTitle && (
+                          <p className="text-sm text-destructive mt-1">
+                            {form.formState.errors.positionTitle.message}
+                          </p>
+                        )}
+                      </div>
+
+                      <div>
+                        <Label htmlFor="work-location">Work Location</Label>
+                        <Input
+                          id="work-location"
+                          {...form.register("workLocation")}
+                          placeholder="Remote"
+                          data-testid="input-work-location"
+                        />
+                      </div>
+
+                      <div>
+                        <Label htmlFor="response-deadline">Response Deadline</Label>
+                        <Input
+                          id="response-deadline"
+                          type="date"
+                          {...form.register("responseDeadline")}
+                          data-testid="input-response-deadline"
+                        />
+                        {form.formState.errors.responseDeadline && (
+                          <p className="text-sm text-destructive mt-1">
+                            {form.formState.errors.responseDeadline.message}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-semibold text-foreground">Engagement Info</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <Label htmlFor="engagement-type">Engagement Type</Label>
@@ -580,6 +731,7 @@ export default function CreateAdmin() {
                         {form.formState.errors.workScope.message}
                       </p>
                     )}
+                  </div>
                   </div>
                   {/* TODO: Add permission override UI only after a clear override model exists. Permissions remain role-derived for now. */}
                 </section>

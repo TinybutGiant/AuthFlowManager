@@ -5,6 +5,10 @@ import type {
   InsertAdminDocumentTemplate,
 } from "@shared/schema";
 import type { IStorage } from "./storage";
+import {
+  YAOTU_COMPANY_BRAND_DEFAULTS,
+  companyBrandSnapshot,
+} from "./companyBrandDefaults";
 
 export const OFFER_LETTER_TEMPLATE_VARIABLES = [
   "trainee_name",
@@ -35,22 +39,19 @@ export const OFFER_LETTER_TEMPLATE_VARIABLES = [
 ] as const;
 
 export type OfferLetterTemplateVariable = typeof OFFER_LETTER_TEMPLATE_VARIABLES[number];
-export type OfferLetterMergeData = Record<OfferLetterTemplateVariable, string>;
+export type OfferLetterMergeData = Record<OfferLetterTemplateVariable, string> & {
+  company_brand: ReturnType<typeof companyBrandSnapshot>;
+};
 
 const TEMPLATE_VARIABLE_PATTERN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 const SUPPORTED_VARIABLES = new Set<string>(OFFER_LETTER_TEMPLATE_VARIABLES);
-const MANUAL_VARIABLES = new Set<string>([
+const REQUIRED_MERGE_VARIABLES = new Set<string>([
   "engagement_title",
-  "function_area",
-  "compensation_text",
   "school_name",
   "program_or_major",
-  "work_location",
   "response_deadline",
   "responsibilities_text",
-  "training_alignment_text",
   "signatory_name",
-  "signatory_title",
 ]);
 
 export class DocumentTemplateError extends Error {
@@ -74,10 +75,7 @@ export interface ManualOfferLetterMergeValues {
   responseDeadline?: string;
   responsibilitiesText?: string;
   trainingAlignmentText?: string;
-  companyPhone?: string;
-  companyEmail?: string;
   signatoryName?: string;
-  signatoryTitle?: string;
 }
 
 export interface OfferLetterTemplatePreview {
@@ -110,19 +108,6 @@ function trimOptional(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function getCompanyName() {
-  return process.env.COMPANY_NAME?.trim() || "Yaotu";
-}
-
-function getCompanyEmail() {
-  const value = process.env.COMPANY_EMAIL
-    || process.env.MAIL_FROM
-    || process.env.MAILGUN_FROM
-    || "";
-  const match = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match?.[0] ?? "";
-}
-
 function toSnakeManualValues(values: ManualOfferLetterMergeValues) {
   return {
     engagement_title: trimOptional(values.engagementTitle),
@@ -134,11 +119,33 @@ function toSnakeManualValues(values: ManualOfferLetterMergeValues) {
     response_deadline: trimOptional(values.responseDeadline),
     responsibilities_text: trimOptional(values.responsibilitiesText),
     training_alignment_text: trimOptional(values.trainingAlignmentText),
-    company_phone: trimOptional(values.companyPhone),
-    company_email: trimOptional(values.companyEmail),
     signatory_name: trimOptional(values.signatoryName),
-    signatory_title: trimOptional(values.signatoryTitle),
   };
+}
+
+function scheduleText(input: Pick<AdminEngagement, "scheduleType" | "expectedHoursPerWeek">) {
+  const schedule = valueOrFallback(input.scheduleType);
+  if (!input.expectedHoursPerWeek) {
+    return schedule;
+  }
+  return `${schedule}, ${input.expectedHoursPerWeek} hours per week`;
+}
+
+function trainingAlignmentText(input: {
+  manualValue: string;
+  programOrMajor: string;
+  responsibilitiesText: string;
+}) {
+  if (input.manualValue) {
+    return input.manualValue;
+  }
+  const programText = input.programOrMajor
+    ? ` in ${input.programOrMajor}`
+    : "";
+  const responsibilitiesText = input.responsibilitiesText
+    ? ` The responsibilities are intended to build practical experience through ${input.responsibilitiesText}`
+    : "";
+  return `This engagement is designed to provide supervised practical training aligned with the student's academic background${programText} and prior experience.${responsibilitiesText}`;
 }
 
 export function extractTemplateVariables(...templates: string[]): string[] {
@@ -213,12 +220,25 @@ function buildMergeData(input: {
   manualValues: ManualOfferLetterMergeValues;
 }): OfferLetterMergeData {
   const manual = toSnakeManualValues(input.manualValues);
+  const positionTitle = trimOptional(input.engagement.positionTitle) || manual.engagement_title;
+  const schoolName = trimOptional(input.engagement.schoolName) || manual.school_name;
+  const programOrMajor = trimOptional(input.engagement.programOrMajor) || manual.program_or_major;
+  const engagementResponseDeadline = dateOnly(input.engagement.responseDeadline);
+  const responseDeadline = engagementResponseDeadline === "Not set"
+    ? manual.response_deadline
+    : engagementResponseDeadline;
+  const workLocation =
+    trimOptional(input.engagement.workLocation) ||
+    manual.work_location ||
+    YAOTU_COMPANY_BRAND_DEFAULTS.defaultWorkLocation;
+  const responsibilitiesText = manual.responsibilities_text || valueOrFallback(input.engagement.workScope, "");
+  const signatoryName = manual.signatory_name || (input.supervisor ? valueOrFallback(input.supervisor.name) : "");
 
   return {
     trainee_name: valueOrFallback(input.trainee.name),
     trainee_email: valueOrFallback(input.trainee.email),
     engagement_type: valueOrFallback(input.engagement.engagementType),
-    schedule_text: valueOrFallback(input.engagement.scheduleType),
+    schedule_text: scheduleText(input.engagement),
     start_date: dateOnly(input.engagement.startDate),
     end_date: dateOnly(input.engagement.endDate),
     expected_hours_per_week: valueOrFallback(input.engagement.expectedHoursPerWeek),
@@ -226,21 +246,25 @@ function buildMergeData(input: {
     work_authorization_type: valueOrFallback(input.engagement.workAuthorizationType),
     supervisor_name: input.supervisor ? valueOrFallback(input.supervisor.name) : "Not set",
     supervisor_email: input.supervisor ? valueOrFallback(input.supervisor.email) : "Not set",
-    engagement_title: manual.engagement_title,
+    engagement_title: positionTitle,
     function_area: manual.function_area,
     compensation_text: manual.compensation_text || "Unpaid internship position for academic practical training purposes.",
-    school_name: manual.school_name,
-    program_or_major: manual.program_or_major,
-    work_location: manual.work_location || "Remote",
-    response_deadline: manual.response_deadline,
-    responsibilities_text: manual.responsibilities_text || valueOrFallback(input.engagement.workScope, ""),
-    training_alignment_text: manual.training_alignment_text
-      || "The activities in this engagement are designed to provide supervised practical training aligned with the student's academic background and prior experience.",
-    company_phone: manual.company_phone || process.env.COMPANY_PHONE?.trim() || "Not provided",
-    company_email: manual.company_email || getCompanyEmail() || "Not provided",
-    signatory_name: manual.signatory_name || (input.supervisor ? valueOrFallback(input.supervisor.name) : ""),
-    signatory_title: manual.signatory_title || process.env.COMPANY_SIGNATORY_TITLE?.trim() || "Founder & Manager",
-    company_name: getCompanyName(),
+    school_name: schoolName,
+    program_or_major: programOrMajor,
+    work_location: workLocation,
+    response_deadline: responseDeadline,
+    responsibilities_text: responsibilitiesText,
+    training_alignment_text: trainingAlignmentText({
+      manualValue: manual.training_alignment_text,
+      programOrMajor,
+      responsibilitiesText,
+    }),
+    company_phone: YAOTU_COMPANY_BRAND_DEFAULTS.companyPhone,
+    company_email: YAOTU_COMPANY_BRAND_DEFAULTS.companyEmail,
+    signatory_name: signatoryName,
+    signatory_title: YAOTU_COMPANY_BRAND_DEFAULTS.defaultSignatoryTitle,
+    company_name: YAOTU_COMPANY_BRAND_DEFAULTS.companyName,
+    company_brand: companyBrandSnapshot(),
   };
 }
 
@@ -253,6 +277,7 @@ function renderPlainTextTemplate(template: string, mergeData: OfferLetterMergeDa
 export function mergePlainTextTemplate(input: {
   template: Pick<AdminDocumentTemplate, "titleTemplate" | "bodyTemplate" | "contentFormat">;
   mergeData: OfferLetterMergeData;
+  allowMissing?: boolean;
 }) {
   if (input.template.contentFormat !== "plain_text") {
     throw new DocumentTemplateError(400, "Only plain_text templates are supported.");
@@ -263,10 +288,10 @@ export function mergePlainTextTemplate(input: {
     input.template.bodyTemplate,
   );
   const missingVariables = usedVariables.filter((variable) => (
-    MANUAL_VARIABLES.has(variable) && !input.mergeData[variable as OfferLetterTemplateVariable]?.trim()
+    REQUIRED_MERGE_VARIABLES.has(variable) && !input.mergeData[variable as OfferLetterTemplateVariable]?.trim()
   ));
 
-  if (missingVariables.length) {
+  if (missingVariables.length && !input.allowMissing) {
     throw new DocumentTemplateError(400, "Template variables are missing required values.", {
       missing_variables: missingVariables,
     });
@@ -285,6 +310,7 @@ export async function previewOfferLetterTemplate(input: {
   engagementId: number;
   templateId: number;
   manualValues: ManualOfferLetterMergeValues;
+  allowMissing?: boolean;
 }): Promise<OfferLetterTemplatePreview> {
   const template = await input.storage.getAdminDocumentTemplate(input.templateId);
   if (!template || template.documentType !== "offer_letter") {
@@ -299,7 +325,11 @@ export async function previewOfferLetterTemplate(input: {
     ...context,
     manualValues: input.manualValues,
   });
-  const merged = mergePlainTextTemplate({ template, mergeData });
+  const merged = mergePlainTextTemplate({
+    template,
+    mergeData,
+    allowMissing: input.allowMissing,
+  });
 
   return {
     template,

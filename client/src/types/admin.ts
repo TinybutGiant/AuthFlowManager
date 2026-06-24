@@ -99,6 +99,11 @@ export interface AdminEngagement {
   endDate?: string | null;
   supervisorAdminId?: number | null;
   workScope?: string | null;
+  positionTitle?: string | null;
+  schoolName?: string | null;
+  programOrMajor?: string | null;
+  responseDeadline?: string | null;
+  workLocation?: string | null;
   expectedHoursPerWeek?: number | null;
   status: EngagementStatus;
   endedAt?: string | null;
@@ -128,6 +133,11 @@ export interface TraineeEngagement {
   end_date?: string | null;
   expected_hours_per_week?: number | null;
   work_scope?: string | null;
+  position_title?: string | null;
+  school_name?: string | null;
+  program_or_major?: string | null;
+  response_deadline?: string | null;
+  work_location?: string | null;
   status: EngagementStatus;
   ended_at?: string | null;
   supervisor?: {

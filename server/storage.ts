@@ -492,7 +492,83 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteAdminUser(id: number): Promise<void> {
-    await db.delete(adminUsers).where(eq(adminUsers.id, id));
+    await db.transaction(async (tx) => {
+      const ownedEngagements = await tx
+        .select({ id: adminEngagements.id })
+        .from(adminEngagements)
+        .where(eq(adminEngagements.adminUserId, id));
+      const ownedEngagementIds = ownedEngagements.map((engagement) => engagement.id);
+      const ownedEngagementFilter = ownedEngagementIds.length > 0
+        ? inArray(adminEngagements.id, ownedEngagementIds)
+        : undefined;
+      const ownedDocumentFilter = ownedEngagementIds.length > 0
+        ? or(
+            eq(adminEngagementDocuments.adminUserId, id),
+            inArray(adminEngagementDocuments.engagementId, ownedEngagementIds),
+          )
+        : eq(adminEngagementDocuments.adminUserId, id);
+      const ownedActivityLogFilter = ownedEngagementIds.length > 0
+        ? or(
+            eq(adminActivityLogs.adminUserId, id),
+            inArray(adminActivityLogs.engagementId, ownedEngagementIds),
+          )
+        : eq(adminActivityLogs.adminUserId, id);
+      const ownedLifecycleEventFilter = ownedEngagementIds.length > 0
+        ? or(
+            eq(adminLifecycleEvents.adminUserId, id),
+            inArray(adminLifecycleEvents.engagementId, ownedEngagementIds),
+          )
+        : eq(adminLifecycleEvents.adminUserId, id);
+
+      await tx
+        .update(adminUsers)
+        .set({ createdBy: null, updatedAt: new Date() })
+        .where(eq(adminUsers.createdBy, id));
+
+      await tx
+        .update(adminUserAccessGrants)
+        .set({ grantedBy: null, revokedBy: null, updatedAt: new Date() })
+        .where(or(eq(adminUserAccessGrants.grantedBy, id), eq(adminUserAccessGrants.revokedBy, id)));
+
+      await tx
+        .update(adminDocumentTemplates)
+        .set({ createdBy: null, updatedAt: new Date() })
+        .where(eq(adminDocumentTemplates.createdBy, id));
+
+      await tx
+        .update(adminEngagements)
+        .set({ supervisorAdminId: null, createdBy: null, updatedAt: new Date() })
+        .where(or(eq(adminEngagements.supervisorAdminId, id), eq(adminEngagements.createdBy, id)));
+
+      await tx
+        .update(adminActivityLogs)
+        .set({ reviewedBy: null, updatedAt: new Date() })
+        .where(eq(adminActivityLogs.reviewedBy, id));
+
+      await tx
+        .update(adminEngagementDocuments)
+        .set({ acceptedBy: null, voidedBy: null, createdBy: null, updatedAt: new Date() })
+        .where(or(
+          eq(adminEngagementDocuments.acceptedBy, id),
+          eq(adminEngagementDocuments.voidedBy, id),
+          eq(adminEngagementDocuments.createdBy, id),
+        ));
+
+      await tx
+        .update(adminLifecycleEvents)
+        .set({ actorAdminId: null })
+        .where(eq(adminLifecycleEvents.actorAdminId, id));
+
+      await tx.delete(adminEngagementDocuments).where(ownedDocumentFilter);
+      await tx.delete(adminActivityLogs).where(ownedActivityLogFilter);
+      await tx.delete(adminLifecycleEvents).where(ownedLifecycleEventFilter);
+      await tx.delete(adminUserAccessGrants).where(eq(adminUserAccessGrants.adminUserId, id));
+      await tx.delete(adminUserApprovals).where(eq(adminUserApprovals.targetAdminId, id));
+      if (ownedEngagementFilter) {
+        await tx.delete(adminEngagements).where(ownedEngagementFilter);
+      }
+      await tx.delete(adminUsers).where(eq(adminUsers.id, id));
+    });
   }
 
   async listAdminUsers(filters?: { role?: AdminRole; status?: AdminStatus }): Promise<AdminUser[]> {

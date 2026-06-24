@@ -39,6 +39,11 @@ export interface OfferLetterPdfContext {
 export interface OfferLetterPdfInput {
   document: Pick<AdminEngagementDocument, "title" | "body" | "version">;
   context: OfferLetterPdfContext;
+  brandLogo?: {
+    assetPath: string;
+    altText: string;
+    version: string;
+  } | null;
   generatedAt?: Date;
 }
 
@@ -134,6 +139,17 @@ export async function renderOfferLetterPdfBuffer(input: OfferLetterPdfInput): Pr
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
   });
+
+  if (input.brandLogo?.assetPath) {
+    try {
+      doc.image(input.brandLogo.assetPath, doc.page.margins.left, doc.y, { fit: [120, 48] });
+      doc.moveDown(0.75);
+    } catch {
+      console.warn("[offer-letter-pdf] Company logo could not be rendered; omitting logo.", {
+        version: input.brandLogo.version,
+      });
+    }
+  }
 
   doc.font("Helvetica-Bold").fontSize(18).text(input.document.title, { align: "center" });
   doc.moveDown(0.5);

@@ -26,6 +26,7 @@ import {
   previewOfferLetterTemplate,
   type ManualOfferLetterMergeValues,
 } from "./documentTemplateService";
+import { companyBrandLogoAsset } from "./companyBrandDefaults";
 
 const PRIVATE_STORAGE_NOT_CONFIGURED_MESSAGE = "Private offer letter storage is not configured.";
 const PREPARE_OFFER_LETTER_ERROR_MESSAGE = "Could not prepare the offer letter document.";
@@ -172,6 +173,7 @@ export async function generateOfferLetterPdfArtifact(input: {
     pdf = await renderOfferLetterPdfBuffer({
       document: input.document,
       context,
+      brandLogo: companyBrandLogoAsset({ warn: true }),
       generatedAt: now,
     });
   } catch (error) {

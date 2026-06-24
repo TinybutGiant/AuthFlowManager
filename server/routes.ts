@@ -63,6 +63,7 @@ import {
   previewOfferLetterTemplate,
   updateDocumentTemplate,
 } from './documentTemplateService';
+import { publicCompanyBrandDefaults } from './companyBrandDefaults';
 import { deriveAccountTypeFromLegacyRole } from './adminAccessModel';
 
 // Login/Register schemas
@@ -155,6 +156,11 @@ function sanitizeEngagementForTrainee(engagement: any, supervisor?: any) {
           role: supervisor.role,
         }
       : null,
+    position_title: engagement.positionTitle,
+    school_name: engagement.schoolName,
+    program_or_major: engagement.programOrMajor,
+    response_deadline: safeDateOnly(engagement.responseDeadline),
+    work_location: engagement.workLocation,
   };
 }
 
@@ -854,6 +860,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/company-brand-defaults", requireAuth, requireRole(['super_admin']), async (_req: any, res) => {
+    res.json(publicCompanyBrandDefaults());
+  });
+
   app.get("/api/admin/document-templates", requireAuth, requireAnyAccessGroup(['super_admin', 'document_templates']), async (req: any, res) => {
     try {
       const documentType = req.query.documentType ? String(req.query.documentType) : undefined;
@@ -954,6 +964,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage,
         engagementId,
         templateId: payload.templateId,
+        allowMissing: true,
         manualValues: {
           engagementTitle: payload.engagementTitle,
           functionArea: payload.functionArea,
@@ -964,10 +975,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           responseDeadline: payload.responseDeadline,
           responsibilitiesText: payload.responsibilitiesText,
           trainingAlignmentText: payload.trainingAlignmentText,
-          companyPhone: payload.companyPhone,
-          companyEmail: payload.companyEmail,
           signatoryName: payload.signatoryName,
-          signatoryTitle: payload.signatoryTitle,
         },
       });
 
@@ -977,6 +985,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         title: preview.title,
         body: preview.body,
         merge_data: preview.mergeData,
+        company_brand_defaults: publicCompanyBrandDefaults(),
         used_variables: preview.usedVariables,
         missing_variables: preview.missingVariables,
       });
@@ -1005,10 +1014,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               responseDeadline: payload.responseDeadline,
               responsibilitiesText: payload.responsibilitiesText,
               trainingAlignmentText: payload.trainingAlignmentText,
-              companyPhone: payload.companyPhone,
-              companyEmail: payload.companyEmail,
               signatoryName: payload.signatoryName,
-              signatoryTitle: payload.signatoryTitle,
             },
             title: payload.title,
             body: payload.body,
@@ -1186,6 +1192,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updatedAdmin = await storage.updateAdminUser(id, updates);
       res.json(await serializeAdminUser(updatedAdmin));
     } catch (error: any) {
+      if (isAdminEmailUniqueViolation(error)) {
+        return res.status(409).json({
+          message: "An admin with this email already exists.",
+          field: "email",
+        });
+      }
       res.status(400).json({ message: "Failed to update admin user", error: error?.message });
     }
   });
@@ -1193,10 +1205,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/admin/users/:id", requireAuth, requireRole(['super_admin']), async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
+      if (id === req.adminUser.id) {
+        return res.status(400).json({ message: "You cannot delete your own admin account while signed in." });
+      }
+      const admin = await storage.getAdminUser(id);
+      if (!admin) {
+        return res.status(404).json({ message: "Admin user not found" });
+      }
       await storage.deleteAdminUser(id);
       res.status(204).send();
-    } catch (error) {
-      res.status(400).json({ message: "Failed to delete admin user" });
+    } catch (error: any) {
+      console.error("[delete admin user] Failed to delete admin user", error);
+      res.status(400).json({ message: "Failed to delete admin user", error: error?.message });
     }
   });
 

@@ -44,28 +44,38 @@ import {
   type OfferTemplatePreviewResponse,
 } from "./offerLetterPreviewMapper";
 
-const DEFAULT_CPT_COMPENSATION_TEXT =
-  "Unpaid internship position for academic practical training purposes.";
-const DEFAULT_CPT_SIGNATORY_TITLE = "Founder & Manager";
-const DEFAULT_TRAINING_ALIGNMENT_TEXT =
-  "The activities in this engagement are designed to provide supervised practical training aligned with the student's academic background and prior experience.";
-
-type OfferReadinessKey =
-  | "resumeReviewed"
-  | "discussionCompleted"
-  | "schoolDetailsConfirmed"
-  | "responsibilitiesAligned";
-
-const OFFER_READINESS_LABELS: Array<{ key: OfferReadinessKey; label: string }> = [
-  { key: "resumeReviewed", label: "Resume reviewed outside system" },
-  { key: "discussionCompleted", label: "Zoom/discussion completed" },
-  { key: "schoolDetailsConfirmed", label: "School/CPT details confirmed" },
-  { key: "responsibilitiesAligned", label: "Responsibilities aligned with student background" },
-];
-
 interface OfferLetterBuilderProps {
   adminId: number;
 }
+
+interface CompanyBrandDefaultsResponse {
+  companyName: string;
+  companyEmail: string;
+  companyPhone: string;
+  defaultWorkLocation: string;
+  defaultSignatoryTitle: string;
+  logo: {
+    enabled: boolean;
+    altText: string;
+    version: string;
+    hasAsset: boolean;
+  };
+}
+
+const ENGAGEMENT_SEED_VARIABLES = new Set([
+  "school_name",
+  "program_or_major",
+  "engagement_title",
+  "response_deadline",
+  "work_location",
+]);
+
+const OFFER_BUILDER_VARIABLES = new Set([
+  "responsibilities_text",
+  "training_alignment_text",
+  "compensation_text",
+  "signatory_name",
+]);
 
 function extractMissingVariables(error: unknown) {
   if (error instanceof ApiError && error.body && typeof error.body === "object") {
@@ -95,20 +105,18 @@ function sortTemplates(templates: AdminDocumentTemplate[]) {
 
 function fieldPayload(fields: OfferLetterManualFields) {
   return {
-    engagementTitle: fields.engagementTitle,
-    functionArea: fields.functionArea,
     compensationText: fields.compensationText,
-    schoolName: fields.schoolName,
-    programOrMajor: fields.programOrMajor,
-    workLocation: fields.workLocation,
-    responseDeadline: fields.responseDeadline,
     responsibilitiesText: fields.responsibilitiesText,
     trainingAlignmentText: fields.trainingAlignmentText,
-    companyPhone: fields.companyPhone,
-    companyEmail: fields.companyEmail,
     signatoryName: fields.signatoryName,
-    signatoryTitle: fields.signatoryTitle,
   };
+}
+
+function formatValue(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "Not set";
+  }
+  return String(value).replace(/_/g, " ");
 }
 
 function focusField(field: OfferLetterMissingField) {
@@ -137,12 +145,7 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
   const [selectedEngagementId, setSelectedEngagementId] = useState<number | null>(queryEngagementId);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [fields, setFields] = useState<OfferLetterManualFields>(() => emptyOfferLetterManualFields());
-  const [offerReadiness, setOfferReadiness] = useState<Record<OfferReadinessKey, boolean>>({
-    resumeReviewed: false,
-    discussionCompleted: false,
-    schoolDetailsConfirmed: false,
-    responsibilitiesAligned: false,
-  });
+  const [responsibilitiesTouched, setResponsibilitiesTouched] = useState(false);
   const [rawTemplateOpen, setRawTemplateOpen] = useState(false);
   const [serverPreview, setServerPreview] = useState<OfferTemplatePreviewResponse | null>(null);
   const [serverMissingVariables, setServerMissingVariables] = useState<string[]>([]);
@@ -165,6 +168,11 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
 
   const { data: documentTemplates = [], isLoading: templatesLoading } = useQuery<AdminDocumentTemplate[]>({
     queryKey: ["/api/admin/document-templates?documentType=offer_letter"],
+    retry: false,
+  });
+
+  const { data: companyBrandDefaults } = useQuery<CompanyBrandDefaultsResponse>({
+    queryKey: ["/api/admin/company-brand-defaults"],
     retry: false,
   });
 
@@ -198,37 +206,28 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
   }, [engagements, selectedEngagementId]);
 
   useEffect(() => {
-    if (!selectedTemplateId && templates.length > 0) {
-      setSelectedTemplateId(String(templates[0].id));
-    }
-  }, [selectedTemplateId, templates]);
+    if (selectedTemplateId || templates.length === 0) return;
+    const cptTemplate = templates.find((template) => template.name === CPT_TEMPLATE_NAME);
+    const generalTemplate = templates.find((template) => template.name !== CPT_TEMPLATE_NAME);
+    const preferredTemplate = selectedEngagement?.workAuthorizationType === "cpt"
+      ? cptTemplate ?? templates[0]
+      : generalTemplate ?? templates[0];
+    setSelectedTemplateId(String(preferredTemplate.id));
+  }, [selectedEngagement?.workAuthorizationType, selectedTemplateId, templates]);
 
   useEffect(() => {
     if (!selectedTemplate || !selectedEngagement) return;
-    const nextDefaultsKey = `${selectedTemplate.id}:${selectedEngagement.id}`;
+    const nextDefaultsKey = `${selectedEngagement.id}`;
     if (defaultsKey === nextDefaultsKey) return;
 
     setFields((current) => ({
       ...current,
-      engagementTitle:
-        current.engagementTitle || `${admin?.name ?? "Trainee"} Trainee Engagement`,
-      workLocation:
-        current.workLocation || (selectedTemplate.name === CPT_TEMPLATE_NAME ? "Remote" : ""),
-      responsibilitiesText:
-        current.responsibilitiesText ||
-        (selectedTemplate.name === CPT_TEMPLATE_NAME ? selectedEngagement.workScope || "" : ""),
-      compensationText:
-        current.compensationText ||
-        (selectedTemplate.name === CPT_TEMPLATE_NAME ? DEFAULT_CPT_COMPENSATION_TEXT : ""),
-      trainingAlignmentText:
-        current.trainingAlignmentText ||
-        (selectedTemplate.name === CPT_TEMPLATE_NAME ? DEFAULT_TRAINING_ALIGNMENT_TEXT : ""),
-      signatoryTitle:
-        current.signatoryTitle ||
-        (selectedTemplate.name === CPT_TEMPLATE_NAME ? DEFAULT_CPT_SIGNATORY_TITLE : ""),
+      responsibilitiesText: responsibilitiesTouched
+        ? current.responsibilitiesText
+        : current.responsibilitiesText || selectedEngagement.workScope || "",
     }));
     setDefaultsKey(nextDefaultsKey);
-  }, [admin?.name, defaultsKey, selectedEngagement, selectedTemplate]);
+  }, [defaultsKey, responsibilitiesTouched, selectedEngagement, selectedTemplate]);
 
   const previewKey = useMemo(
     () => previewRequestFingerprint({
@@ -296,6 +295,53 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
     }),
     [activeMissingVariables, activePreview, fields, selectedTemplate],
   );
+  const effectiveBrandDefaults = activePreview?.company_brand_defaults ?? companyBrandDefaults ?? null;
+  const missingFromEngagementSeed = model.missingFields.filter((field) =>
+    ENGAGEMENT_SEED_VARIABLES.has(field.variable)
+  );
+  const missingFromOfferBuilder = model.missingFields.filter((field) =>
+    OFFER_BUILDER_VARIABLES.has(field.variable)
+  );
+  const otherMissingFields = model.missingFields.filter((field) =>
+    !ENGAGEMENT_SEED_VARIABLES.has(field.variable) &&
+    !OFFER_BUILDER_VARIABLES.has(field.variable)
+  );
+  const mergeData = activePreview?.merge_data ?? {};
+  const supervisorText = mergeData.supervisor_name && mergeData.supervisor_email
+    ? `${mergeData.supervisor_name} (${mergeData.supervisor_email})`
+    : selectedEngagement?.supervisorAdminId
+      ? `Admin ID ${selectedEngagement.supervisorAdminId}`
+      : "Not set";
+  const engagementContext = [
+    ["Trainee Name", admin?.name],
+    ["Trainee Email", admin?.email],
+    ["School Name", selectedEngagement?.schoolName],
+    ["Program or Major", selectedEngagement?.programOrMajor],
+    ["Position Title", selectedEngagement?.positionTitle],
+    ["Start Date", selectedEngagement?.startDate],
+    ["End Date", selectedEngagement?.endDate],
+    ["Expected Hours Per Week", selectedEngagement?.expectedHoursPerWeek],
+    ["Schedule", selectedEngagement?.scheduleType],
+    ["Work Authorization", selectedEngagement?.workAuthorizationType],
+    ["Work Location", selectedEngagement?.workLocation || effectiveBrandDefaults?.defaultWorkLocation],
+    ["Supervisor", supervisorText],
+    ["Response Deadline", selectedEngagement?.responseDeadline],
+    ["Work Scope", selectedEngagement?.workScope],
+  ];
+  const companyContext = effectiveBrandDefaults
+    ? [
+        ["Company Name", effectiveBrandDefaults.companyName],
+        ["Company Email", effectiveBrandDefaults.companyEmail],
+        ["Company Phone", effectiveBrandDefaults.companyPhone],
+        ["Signatory Title", effectiveBrandDefaults.defaultSignatoryTitle],
+        [
+          "Logo",
+          effectiveBrandDefaults.logo.enabled
+            ? `Enabled (${effectiveBrandDefaults.logo.version})`
+            : "Disabled",
+        ],
+      ]
+    : [];
 
   const createOfferLetterMutation = useMutation({
     mutationFn: async () => {
@@ -345,18 +391,16 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
     createOfferLetterMutation.isPending;
 
   const updateField = (key: keyof OfferLetterManualFields, value: string) => {
+    if (key === "responsibilitiesText") {
+      setResponsibilitiesTouched(true);
+    }
     setFields((current) => ({ ...current, [key]: value }));
   };
 
   const resetDraftForEngagement = (engagementId: number) => {
     setSelectedEngagementId(engagementId);
     setFields(emptyOfferLetterManualFields());
-    setOfferReadiness({
-      resumeReviewed: false,
-      discussionCompleted: false,
-      schoolDetailsConfirmed: false,
-      responsibilitiesAligned: false,
-    });
+    setResponsibilitiesTouched(false);
     setServerPreview(null);
     setServerMissingVariables([]);
     setPreviewError(null);
@@ -490,18 +534,68 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
             </div>
 
             {model.missingFields.length > 0 ? (
-              <div className="space-y-2">
-                {model.missingFields.map((field) => (
-                  <button
-                    key={field.variable}
-                    type="button"
-                    className="w-full rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm hover:bg-amber-100"
-                    onClick={() => focusField(field)}
-                  >
-                    <span className="block font-medium text-amber-950">{field.label}</span>
-                    <span className="text-xs text-amber-800">{field.sectionTitle}</span>
-                  </button>
-                ))}
+              <div className="space-y-4">
+                {missingFromEngagementSeed.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Missing from Engagement Seed
+                    </p>
+                    {missingFromEngagementSeed.map((field) => (
+                      <div
+                        key={field.variable}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm"
+                      >
+                        <span className="block font-medium text-amber-950">{field.label}</span>
+                        <span className="text-xs text-amber-800">
+                          This value should be completed in the engagement seed.
+                        </span>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setLocation(`/admin-management/profile/${adminId}`)}
+                    >
+                      Back to Profile
+                    </Button>
+                  </div>
+                )}
+
+                {missingFromOfferBuilder.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Missing Offer Builder Input
+                    </p>
+                    {missingFromOfferBuilder.map((field) => (
+                      <button
+                        key={field.variable}
+                        type="button"
+                        className="w-full rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm hover:bg-amber-100"
+                        onClick={() => focusField(field)}
+                      >
+                        <span className="block font-medium text-amber-950">{field.label}</span>
+                        <span className="text-xs text-amber-800">{field.sectionTitle}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {otherMissingFields.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Other Missing Fields
+                    </p>
+                    {otherMissingFields.map((field) => (
+                      <div
+                        key={field.variable}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+                      >
+                        {field.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
@@ -514,20 +608,22 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
             <div>
               <p className="mb-2 text-sm font-semibold text-foreground">Sections</p>
               <div className="space-y-1">
-                {model.sections.map((section) => (
+                {[
+                  ["offer-section-template", "Template"],
+                  ["offer-section-context", "Reused Context"],
+                  ["offer-section-responsibilities", "Primary Responsibilities"],
+                  ["offer-section-advanced", "Advanced Overrides"],
+                ].map(([id, title]) => (
                   <button
-                    key={section.id}
+                    key={id}
                     type="button"
-                    className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
+                    className="flex w-full items-center rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
                     onClick={() => {
-                      const element = window.document.getElementById(`offer-section-${section.id}`);
+                      const element = window.document.getElementById(id);
                       element?.scrollIntoView({ behavior: "smooth", block: "start" });
                     }}
                   >
-                    <span>{section.title}</span>
-                    {section.missingCount > 0 && (
-                      <Badge variant="secondary">{section.missingCount}</Badge>
-                    )}
+                    <span>{title}</span>
                   </button>
                 ))}
               </div>
@@ -616,54 +712,75 @@ export function OfferLetterBuilder({ adminId }: OfferLetterBuilderProps) {
 
             {isCptTemplateSelected && (
               <div className="rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
-                CPT Details fields are active for this template. Confirm school, program, CPT/I-20 wording,
-                dates, hours, responsibilities, unpaid wording, and Trainee Workspace acceptance in the preview.
+                CPT template selected. Review the engagement seed values and finalize Primary Responsibilities.
               </div>
             )}
 
-            {model.sections
-              .filter((section) => section.fields.length > 0)
-              .map((section) => (
-                <section key={section.id} id={`offer-section-${section.id}`} className="space-y-3">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{section.title}</p>
-                    {section.missingCount > 0 && (
-                      <p className="text-xs text-amber-700">{section.missingCount} required field(s) missing</p>
-                    )}
+            <section id="offer-section-context" className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Reused from Engagement Seed</p>
+                <p className="text-xs text-muted-foreground">
+                  These values come from the trainee engagement record.
+                </p>
+              </div>
+              <div className="space-y-2 rounded-md border bg-muted/20 p-3 text-sm">
+                {engagementContext.map(([label, value]) => (
+                  <div key={label} className="grid grid-cols-[130px_minmax(0,1fr)] gap-2">
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className="break-words">{formatValue(value)}</span>
                   </div>
-                  <div className="space-y-4">
-                    {section.fields.map((definition) => renderField(definition))}
+                ))}
+              </div>
+              {companyContext.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-foreground">Company Brand Defaults</p>
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3 text-sm">
+                    {companyContext.map(([label, value]) => (
+                      <div key={label} className="grid grid-cols-[130px_minmax(0,1fr)] gap-2">
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className="break-words">{formatValue(value)}</span>
+                      </div>
+                    ))}
                   </div>
-                  <Separator />
-                </section>
-              ))}
+                </div>
+              )}
+              <Separator />
+            </section>
 
-            {isCptTemplateSelected && (
-              <section id="offer-section-readiness" className="space-y-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">Offer Readiness</p>
-                  <p className="text-xs text-muted-foreground">
-                    Admin-only checklist. This is not submitted, stored, exposed to trainee, or included in PDF.
-                  </p>
+            <section id="offer-section-responsibilities" className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Primary Responsibilities</p>
+                <p className="text-xs text-muted-foreground">
+                  Start from the engagement work scope, then expand into the final task list for the offer letter.
+                </p>
+              </div>
+              <Textarea
+                id="offer-field-responsibilitiesText"
+                value={fields.responsibilitiesText}
+                maxLength={8000}
+                className={cn(
+                  "min-h-40",
+                  missingFromOfferBuilder.some((field) => field.variable === "responsibilities_text") &&
+                    "border-amber-400 bg-amber-50 focus-visible:ring-amber-500",
+                )}
+                onChange={(event) => updateField("responsibilitiesText", event.target.value)}
+                data-testid="offer-field-responsibilitiesText"
+              />
+              <Separator />
+            </section>
+
+            <section id="offer-section-advanced" className="space-y-3">
+              <details className="group">
+                <summary className="cursor-pointer text-sm font-semibold text-foreground">
+                  Advanced Overrides
+                </summary>
+                <div className="mt-3 space-y-4">
+                  {OFFER_LETTER_FIELD_DEFINITIONS
+                    .filter((definition) => definition.variable !== "responsibilities_text")
+                    .map((definition) => renderField(definition))}
                 </div>
-                <div className="space-y-2 rounded-md border bg-muted/30 p-3">
-                  {OFFER_READINESS_LABELS.map((item) => (
-                    <label key={item.key} className="flex items-start gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={offerReadiness[item.key]}
-                        onChange={(event) => setOfferReadiness((current) => ({
-                          ...current,
-                          [item.key]: event.target.checked,
-                        }))}
-                        data-testid={`checkbox-offer-readiness-${item.key}`}
-                      />
-                      <span>{item.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </section>
-            )}
+              </details>
+            </section>
           </div>
         </aside>
       </div>

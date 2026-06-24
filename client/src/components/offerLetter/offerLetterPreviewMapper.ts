@@ -5,7 +5,20 @@ export interface OfferTemplatePreviewResponse {
   template_version: number;
   title: string;
   body: string;
-  merge_data: Record<string, string>;
+  merge_data: Record<string, unknown>;
+  company_brand_defaults?: {
+    companyName: string;
+    companyEmail: string;
+    companyPhone: string;
+    defaultWorkLocation: string;
+    defaultSignatoryTitle: string;
+    logo: {
+      enabled: boolean;
+      altText: string;
+      version: string;
+      hasAsset: boolean;
+    };
+  };
   used_variables: string[];
   missing_variables: string[];
 }
@@ -20,10 +33,7 @@ export interface OfferLetterManualFields {
   responseDeadline: string;
   responsibilitiesText: string;
   trainingAlignmentText: string;
-  companyPhone: string;
-  companyEmail: string;
   signatoryName: string;
-  signatoryTitle: string;
 }
 
 export type OfferLetterFieldSectionId =
@@ -32,8 +42,7 @@ export type OfferLetterFieldSectionId =
   | "engagement"
   | "training_alignment"
   | "compensation"
-  | "signature"
-  | "readiness";
+  | "signature";
 
 export interface OfferLetterFieldDefinition {
   variable: string;
@@ -94,68 +103,13 @@ const SECTION_TITLES: Record<OfferLetterFieldSectionId, string> = {
   training_alignment: "Training Alignment",
   compensation: "Compensation",
   signature: "Signature",
-  readiness: "Offer Readiness",
 };
 
 export const OFFER_LETTER_FIELD_DEFINITIONS: OfferLetterFieldDefinition[] = [
   {
-    variable: "school_name",
-    fieldKey: "schoolName",
-    label: "School Name",
-    sectionId: "candidate_school",
-    sectionTitle: SECTION_TITLES.candidate_school,
-    required: true,
-    maxLength: 200,
-  },
-  {
-    variable: "program_or_major",
-    fieldKey: "programOrMajor",
-    label: "Program or Major",
-    sectionId: "candidate_school",
-    sectionTitle: SECTION_TITLES.candidate_school,
-    required: true,
-    maxLength: 300,
-  },
-  {
-    variable: "engagement_title",
-    fieldKey: "engagementTitle",
-    label: "Engagement Title",
-    sectionId: "engagement",
-    sectionTitle: SECTION_TITLES.engagement,
-    required: true,
-    maxLength: 200,
-  },
-  {
-    variable: "function_area",
-    fieldKey: "functionArea",
-    label: "Function Area",
-    sectionId: "engagement",
-    sectionTitle: SECTION_TITLES.engagement,
-    required: false,
-    maxLength: 200,
-  },
-  {
-    variable: "work_location",
-    fieldKey: "workLocation",
-    label: "Work Location",
-    sectionId: "engagement",
-    sectionTitle: SECTION_TITLES.engagement,
-    required: true,
-    maxLength: 500,
-  },
-  {
-    variable: "response_deadline",
-    fieldKey: "responseDeadline",
-    label: "Response Deadline",
-    sectionId: "engagement",
-    sectionTitle: SECTION_TITLES.engagement,
-    required: true,
-    maxLength: 200,
-  },
-  {
     variable: "responsibilities_text",
     fieldKey: "responsibilitiesText",
-    label: "Responsibilities",
+    label: "Primary Responsibilities",
     sectionId: "training_alignment",
     sectionTitle: SECTION_TITLES.training_alignment,
     required: true,
@@ -168,7 +122,7 @@ export const OFFER_LETTER_FIELD_DEFINITIONS: OfferLetterFieldDefinition[] = [
     label: "Training Alignment",
     sectionId: "training_alignment",
     sectionTitle: SECTION_TITLES.training_alignment,
-    required: true,
+    required: false,
     multiline: true,
     maxLength: 8000,
   },
@@ -178,7 +132,7 @@ export const OFFER_LETTER_FIELD_DEFINITIONS: OfferLetterFieldDefinition[] = [
     label: "Compensation Text",
     sectionId: "compensation",
     sectionTitle: SECTION_TITLES.compensation,
-    required: true,
+    required: false,
     multiline: true,
     maxLength: 4000,
   },
@@ -188,35 +142,8 @@ export const OFFER_LETTER_FIELD_DEFINITIONS: OfferLetterFieldDefinition[] = [
     label: "Signatory Name",
     sectionId: "signature",
     sectionTitle: SECTION_TITLES.signature,
-    required: true,
-    maxLength: 200,
-  },
-  {
-    variable: "signatory_title",
-    fieldKey: "signatoryTitle",
-    label: "Signatory Title",
-    sectionId: "signature",
-    sectionTitle: SECTION_TITLES.signature,
-    required: true,
-    maxLength: 200,
-  },
-  {
-    variable: "company_email",
-    fieldKey: "companyEmail",
-    label: "Company Email",
-    sectionId: "signature",
-    sectionTitle: SECTION_TITLES.signature,
     required: false,
-    maxLength: 320,
-  },
-  {
-    variable: "company_phone",
-    fieldKey: "companyPhone",
-    label: "Company Phone",
-    sectionId: "signature",
-    sectionTitle: SECTION_TITLES.signature,
-    required: false,
-    maxLength: 100,
+    maxLength: 200,
   },
 ];
 
@@ -228,11 +155,16 @@ const FALLBACK_VARIABLE_LABELS: Record<string, string> = {
   trainee_name: "Trainee Name",
   trainee_email: "Trainee Email",
   engagement_type: "Engagement Type",
+  engagement_title: "Position Title",
   schedule_text: "Schedule",
   start_date: "Start Date",
   end_date: "End Date",
   expected_hours_per_week: "Expected Hours Per Week",
   work_scope: "Work Scope",
+  school_name: "School Name",
+  program_or_major: "Program or Major",
+  work_location: "Work Location",
+  response_deadline: "Response Deadline",
   work_authorization_type: "Work Authorization Type",
   supervisor_name: "Supervisor Name",
   supervisor_email: "Supervisor Email",
@@ -250,10 +182,7 @@ export function emptyOfferLetterManualFields(): OfferLetterManualFields {
     responseDeadline: "",
     responsibilitiesText: "",
     trainingAlignmentText: "",
-    companyPhone: "",
-    companyEmail: "",
     signatoryName: "",
-    signatoryTitle: "",
   };
 }
 
@@ -363,7 +292,6 @@ function buildSections(template: AdminDocumentTemplate | null, missingFields: Of
     "training_alignment",
     "compensation",
     "signature",
-    "readiness",
   ];
 
   return orderedSectionIds.map((id) => ({

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
 
 import {
@@ -20,6 +22,10 @@ import {
   previewOfferLetterTemplate,
   updateDocumentTemplate,
 } from "./documentTemplateService";
+import {
+  publicCompanyBrandDefaults,
+  YAOTU_COMPANY_BRAND_DEFAULTS,
+} from "./companyBrandDefaults";
 
 const CPT_TEMPLATE_NAME = "CPT Internship Offer Letter";
 
@@ -532,7 +538,21 @@ test("CPT training alignment migration updates template without resume storage w
   assert.doesNotMatch(migration, /docusign|e-signature|gmail|scanned copy/i);
 });
 
-test("CPT template preview applies manual fields and safe defaults", async () => {
+test("company brand defaults expose safe public logo metadata when logo is disabled", () => {
+  const defaults = publicCompanyBrandDefaults();
+
+  assert.equal(defaults.companyName, "Yaotu Technologies, LLC");
+  assert.equal(defaults.companyEmail, "info@ahhh-yaotu.com");
+  assert.equal(defaults.companyPhone, "313-310-7902");
+  assert.equal(defaults.defaultWorkLocation, "Remote");
+  assert.equal(defaults.defaultSignatoryTitle, "Founder & Manager");
+  assert.equal(defaults.logo.enabled, false);
+  assert.equal(defaults.logo.hasAsset, false);
+  assert.equal(defaults.logo.version, "default");
+  assert.equal("assetPath" in defaults.logo, false);
+});
+
+test("CPT template preview applies engagement seed fields and canonical brand defaults", async () => {
   const store = new MemoryOfferLetterStorage();
   const trainee = store.seedAdmin({ name: "CPT Trainee", email: "cpt@example.edu" });
   const supervisor = store.seedAdmin({ name: "CPT Supervisor", email: "supervisor@example.com", role: "admin_support" });
@@ -541,6 +561,10 @@ test("CPT template preview applies manual fields and safe defaults", async () =>
     workAuthorizationType: "cpt",
     workScope: "Build internal workflow documentation and supervised prototypes.",
     expectedHoursPerWeek: 21,
+    positionTitle: "Product Operations Intern",
+    schoolName: "Example University",
+    programOrMajor: "Information Systems",
+    responseDeadline: "2026-07-15",
   });
   const template = store.seedTemplate({
     name: CPT_TEMPLATE_NAME,
@@ -564,34 +588,33 @@ test("CPT template preview applies manual fields and safe defaults", async () =>
     storage: store as any,
     engagementId: engagement.id,
     templateId: template.id,
-    manualValues: {
-      engagementTitle: "Product Operations Intern",
-      schoolName: "Example University",
-      programOrMajor: "Information Systems",
-      responseDeadline: "July 15, 2026",
-    },
+    manualValues: {},
   });
 
   assert.equal(preview.title, "Offer of Internship for Product Operations Intern");
   assert.equal(preview.mergeData.school_name, "Example University");
   assert.equal(preview.mergeData.program_or_major, "Information Systems");
   assert.equal(preview.mergeData.work_location, "Remote");
-  assert.equal(preview.mergeData.response_deadline, "July 15, 2026");
+  assert.equal(preview.mergeData.response_deadline, "2026-07-15");
   assert.equal(preview.mergeData.responsibilities_text, "Build internal workflow documentation and supervised prototypes.");
-  assert.equal(
-    preview.mergeData.training_alignment_text,
-    "The activities in this engagement are designed to provide supervised practical training aligned with the student's academic background and prior experience.",
-  );
+  assert.match(preview.mergeData.training_alignment_text, /academic background in Information Systems/);
+  assert.match(preview.mergeData.training_alignment_text, /Build internal workflow documentation/);
   assert.equal(preview.mergeData.compensation_text, "Unpaid internship position for academic practical training purposes.");
   assert.equal(preview.mergeData.signatory_name, "CPT Supervisor");
-  assert.equal(preview.mergeData.signatory_title, "Founder & Manager");
-  assert.equal(preview.mergeData.company_phone, "Not provided");
-  assert.equal(preview.mergeData.company_email, "Not provided");
+  assert.equal(preview.mergeData.signatory_title, YAOTU_COMPANY_BRAND_DEFAULTS.defaultSignatoryTitle);
+  assert.equal(preview.mergeData.company_name, YAOTU_COMPANY_BRAND_DEFAULTS.companyName);
+  assert.equal(preview.mergeData.company_phone, YAOTU_COMPANY_BRAND_DEFAULTS.companyPhone);
+  assert.equal(preview.mergeData.company_email, YAOTU_COMPANY_BRAND_DEFAULTS.companyEmail);
+  assert.equal(preview.mergeData.company_brand.logo.enabled, false);
+  assert.equal(preview.mergeData.company_brand.logo.assetId, null);
+  assert.equal("assetPath" in preview.mergeData.company_brand.logo, false);
   assert.match(preview.body, /School: Example University/);
   assert.match(preview.body, /Program: Information Systems/);
   assert.match(preview.body, /Location: Remote/);
+  assert.match(preview.body, /Phone: 313-310-7902/);
+  assert.match(preview.body, /Email: info@ahhh-yaotu\.com/);
   assert.match(preview.body, /Responsibilities: Build internal workflow documentation/);
-  assert.match(preview.body, /Alignment: The activities in this engagement are designed/);
+  assert.match(preview.body, /Alignment: This engagement is designed/);
 });
 
 test("CPT template preview blocks unresolved required manual fields with controlled errors", async () => {
@@ -616,7 +639,6 @@ test("CPT template preview blocks unresolved required manual fields with control
         workLocation: "Remote",
         compensationText: "Unpaid internship position for academic practical training purposes.",
         signatoryName: "Admin Signatory",
-        signatoryTitle: "Founder & Manager",
       },
     }),
     (error: any) => (
@@ -631,12 +653,44 @@ test("CPT template preview blocks unresolved required manual fields with control
   );
 });
 
+test("CPT template preview can report missing engagement seed fields without blocking preview", async () => {
+  const store = new MemoryOfferLetterStorage();
+  const trainee = store.seedAdmin();
+  const engagement = store.seedEngagement(trainee.id);
+  const template = store.seedTemplate({
+    name: CPT_TEMPLATE_NAME,
+    titleTemplate: "{{engagement_title}}",
+    bodyTemplate: "School: {{school_name}}\nProgram: {{program_or_major}}\nDeadline: {{response_deadline}}\n{{responsibilities_text}}\n{{signatory_name}}",
+  });
+
+  const preview = await previewOfferLetterTemplate({
+    storage: store as any,
+    engagementId: engagement.id,
+    templateId: template.id,
+    allowMissing: true,
+    manualValues: {
+      responsibilitiesText: "Training activities.",
+      signatoryName: "Admin Signatory",
+    },
+  });
+
+  assert.deepEqual(
+    preview.missingVariables.sort(),
+    ["engagement_title", "program_or_major", "response_deadline", "school_name"],
+  );
+  assert.match(preview.body, /Training activities/);
+});
+
 test("CPT template document creation snapshots merge data and final body", async () => {
   const store = new MemoryOfferLetterStorage();
   const trainee = store.seedAdmin({ name: "Snapshot CPT", email: "snapshot-cpt@example.edu" });
   const engagement = store.seedEngagement(trainee.id, {
     workAuthorizationType: "cpt",
     workScope: "Original supervised training responsibilities.",
+    positionTitle: "CPT Product Intern",
+    schoolName: "Example University",
+    programOrMajor: "Computer Science",
+    responseDeadline: "2026-07-15",
   });
   const template = store.seedTemplate({
     name: CPT_TEMPLATE_NAME,
@@ -662,13 +716,8 @@ test("CPT template document creation snapshots merge data and final body", async
     actorAdminId: 99,
     templateId: template.id,
     manualValues: {
-      engagementTitle: "CPT Product Intern",
-      schoolName: "Example University",
-      programOrMajor: "Computer Science",
-      responseDeadline: "July 15, 2026",
       trainingAlignmentText: "This training aligns with coursework in software systems and product operations.",
       signatoryName: "Admin Signatory",
-      signatoryTitle: "Program Manager",
     },
     now: generatedAt,
   });
@@ -681,11 +730,23 @@ test("CPT template document creation snapshots merge data and final body", async
   assert.match(document.body, /Alignment: This training aligns with coursework/);
   assert.equal(document.mergeData.school_name, "Example University");
   assert.equal(document.mergeData.program_or_major, "Computer Science");
+  assert.equal(document.mergeData.response_deadline, "2026-07-15");
   assert.equal(document.mergeData.responsibilities_text, "Original supervised training responsibilities.");
   assert.equal(
     document.mergeData.training_alignment_text,
     "This training aligns with coursework in software systems and product operations.",
   );
+  assert.equal(document.mergeData.company_name, YAOTU_COMPANY_BRAND_DEFAULTS.companyName);
+  assert.equal(document.mergeData.company_email, YAOTU_COMPANY_BRAND_DEFAULTS.companyEmail);
+  assert.equal(document.mergeData.company_phone, YAOTU_COMPANY_BRAND_DEFAULTS.companyPhone);
+  assert.equal(document.mergeData.signatory_title, YAOTU_COMPANY_BRAND_DEFAULTS.defaultSignatoryTitle);
+  assert.equal(document.mergeData.company_brand.companyName, YAOTU_COMPANY_BRAND_DEFAULTS.companyName);
+  assert.equal(document.mergeData.company_brand.companyEmail, YAOTU_COMPANY_BRAND_DEFAULTS.companyEmail);
+  assert.equal(document.mergeData.company_brand.companyPhone, YAOTU_COMPANY_BRAND_DEFAULTS.companyPhone);
+  assert.equal(document.mergeData.company_brand.logo.enabled, false);
+  assert.equal(document.mergeData.company_brand.logo.version, "default");
+  assert.equal(document.mergeData.company_brand.logo.assetId, null);
+  assert.equal("assetPath" in document.mergeData.company_brand.logo, false);
 
   store.engagements.set(engagement.id, {
     ...engagement,
@@ -704,6 +765,77 @@ test("CPT template document creation snapshots merge data and final body", async
   assert.match(regenerated.body, /Alignment: This training aligns with coursework/);
   assert.equal(regenerated.mergeData.responsibilities_text, "Original supervised training responsibilities.");
   assert.equal(regenerated.mergeData.training_alignment_text, "This training aligns with coursework in software systems and product operations.");
+});
+
+test("enabled canonical logo asset is exposed safely and does not break PDF generation", async () => {
+  const mutableLogo = YAOTU_COMPANY_BRAND_DEFAULTS.logo as unknown as {
+    enabled: boolean;
+    assetPath: string | null;
+    version: string;
+  };
+  const originalLogo = {
+    enabled: mutableLogo.enabled,
+    assetPath: mutableLogo.assetPath,
+    version: mutableLogo.version,
+  };
+  const tempDir = await mkdtemp(path.join(tmpdir(), "yaotu-logo-"));
+  const logoPath = path.join(tempDir, "logo.png");
+
+  await writeFile(
+    logoPath,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP8z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+      "base64",
+    ),
+  );
+
+  try {
+    mutableLogo.enabled = true;
+    mutableLogo.assetPath = logoPath;
+    mutableLogo.version = "test-logo";
+
+    const publicDefaults = publicCompanyBrandDefaults();
+    assert.equal(publicDefaults.logo.enabled, true);
+    assert.equal(publicDefaults.logo.hasAsset, true);
+    assert.equal(publicDefaults.logo.version, "test-logo");
+    assert.equal("assetPath" in publicDefaults.logo, false);
+
+    const store = new MemoryOfferLetterStorage();
+    const trainee = store.seedAdmin({ name: "Logo Trainee", email: "logo@example.edu" });
+    const engagement = store.seedEngagement(trainee.id, {
+      positionTitle: "Logo Test Intern",
+      workScope: "Logo-safe PDF generation.",
+    });
+    const template = store.seedTemplate({
+      titleTemplate: "{{trainee_name}} / {{engagement_title}}",
+      bodyTemplate: "{{company_name}}\n{{responsibilities_text}}\n{{signatory_name}}\n{{signatory_title}}",
+    });
+    const objectStorage = createPrivateObjectStore();
+
+    const document = await createOfferLetterDocumentFromTemplate({
+      storage: store as any,
+      objectStorage,
+      engagementId: engagement.id,
+      actorAdminId: 99,
+      templateId: template.id,
+      manualValues: {
+        signatoryName: "Logo Signatory",
+      },
+      now: new Date("2026-05-05T00:00:00Z"),
+    });
+
+    assert.equal(document.mergeData.company_brand.logo.enabled, true);
+    assert.equal(document.mergeData.company_brand.logo.version, "test-logo");
+    assert.equal(document.mergeData.company_brand.logo.assetId, "test-logo");
+    assert.equal("assetPath" in document.mergeData.company_brand.logo, false);
+    assert.equal(objectStorage.putCount, 1);
+    assert.ok(document.fileSizeBytes > 0);
+  } finally {
+    mutableLogo.enabled = originalLogo.enabled;
+    mutableLogo.assetPath = originalLogo.assetPath;
+    mutableLogo.version = originalLogo.version;
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("template offer creation stores template and merge snapshots with frozen final body", async () => {

@@ -9,13 +9,58 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ArrowLeftRight, Delete, CheckCircle, Download, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { ArrowLeftRight, Delete, CheckCircle, Download, Edit, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
 import { AdminEngagement, AdminEngagementDocument, AdminLifecycleEvent, AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
 import { apiRequest, getApiErrorMessage, tokenManager } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+
+interface EngagementEditForm {
+  engagementType: string;
+  scheduleType: string;
+  workAuthorizationType: string;
+  startDate: string;
+  endDate: string;
+  supervisorAdminId: string;
+  positionTitle: string;
+  schoolName: string;
+  programOrMajor: string;
+  responseDeadline: string;
+  workLocation: string;
+  expectedHoursPerWeek: string;
+  workScope: string;
+}
+
+interface ProfileEditForm {
+  name: string;
+  email: string;
+}
+
+function engagementToEditForm(engagement: AdminEngagement): EngagementEditForm {
+  return {
+    engagementType: engagement.engagementType,
+    scheduleType: engagement.scheduleType ?? "none",
+    workAuthorizationType: engagement.workAuthorizationType,
+    startDate: engagement.startDate ?? "",
+    endDate: engagement.endDate ?? "",
+    supervisorAdminId: engagement.supervisorAdminId ? String(engagement.supervisorAdminId) : "none",
+    positionTitle: engagement.positionTitle ?? "",
+    schoolName: engagement.schoolName ?? "",
+    programOrMajor: engagement.programOrMajor ?? "",
+    responseDeadline: engagement.responseDeadline ?? "",
+    workLocation: engagement.workLocation ?? "",
+    expectedHoursPerWeek: engagement.expectedHoursPerWeek === null || engagement.expectedHoursPerWeek === undefined
+      ? ""
+      : String(engagement.expectedHoursPerWeek),
+    workScope: engagement.workScope ?? "",
+  };
+}
 
 export default function AdminProfile() {
   const params = useParams();
@@ -24,6 +69,10 @@ export default function AdminProfile() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [previewDocument, setPreviewDocument] = useState<AdminEngagementDocument | null>(null);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileEditForm, setProfileEditForm] = useState<ProfileEditForm | null>(null);
+  const [editingEngagement, setEditingEngagement] = useState<AdminEngagement | null>(null);
+  const [engagementEditForm, setEngagementEditForm] = useState<EngagementEditForm | null>(null);
 
   const { data: admin, isLoading } = useQuery<AdminUser>({
     queryKey: ["/api/admin/users", adminId],
@@ -39,6 +88,12 @@ export default function AdminProfile() {
 
   const { data: lifecycleEvents = [] } = useQuery<AdminLifecycleEvent[]>({
     queryKey: ["/api/admin/users", adminId, "lifecycle-events"],
+    enabled: !!adminId,
+    retry: false,
+  });
+
+  const { data: allAdmins = [] } = useQuery<AdminUser[]>({
+    queryKey: ["/api/admin/users"],
     enabled: !!adminId,
     retry: false,
   });
@@ -91,6 +146,40 @@ export default function AdminProfile() {
     queryClient.invalidateQueries({ queryKey: engagementDocumentQueryKey });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "lifecycle-events"] });
   };
+
+  const updateProfileMutation = useMutation({
+    mutationFn: async () => {
+      if (!admin || !profileEditForm) {
+        throw new Error("Open the profile editor before saving changes.");
+      }
+
+      const payload = {
+        name: profileEditForm.name.trim(),
+        email: profileEditForm.email.trim(),
+      };
+
+      const response = await apiRequest("PUT", `/api/admin/users/${admin.id}`, payload);
+      return response.json() as Promise<AdminUser>;
+    },
+    onSuccess: (updatedAdmin) => {
+      queryClient.setQueryData(["/api/admin/users", adminId], updatedAdmin);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId] });
+      setEditingProfile(false);
+      setProfileEditForm(null);
+      toast({
+        title: "Profile updated",
+        description: "The saved admin profile information has been updated.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not update profile",
+        description: getApiErrorMessage(error, "Please check the profile fields and try again."),
+        variant: "destructive",
+      });
+    },
+  });
 
   const sendOfferLetterMutation = useMutation({
     mutationFn: async (document: AdminEngagementDocument) => {
@@ -163,6 +252,93 @@ export default function AdminProfile() {
       });
     },
   });
+
+  const updateEngagementMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingEngagement || !engagementEditForm) {
+        throw new Error("Open an engagement before saving changes.");
+      }
+
+      const payload = {
+        engagementType: engagementEditForm.engagementType,
+        scheduleType: engagementEditForm.scheduleType === "none" ? null : engagementEditForm.scheduleType,
+        workAuthorizationType: engagementEditForm.workAuthorizationType,
+        startDate: engagementEditForm.startDate || null,
+        endDate: engagementEditForm.endDate || null,
+        supervisorAdminId: engagementEditForm.supervisorAdminId === "none"
+          ? null
+          : Number(engagementEditForm.supervisorAdminId),
+        positionTitle: engagementEditForm.positionTitle || null,
+        schoolName: engagementEditForm.schoolName || null,
+        programOrMajor: engagementEditForm.programOrMajor || null,
+        responseDeadline: engagementEditForm.responseDeadline || null,
+        workLocation: engagementEditForm.workLocation || null,
+        expectedHoursPerWeek: engagementEditForm.expectedHoursPerWeek === ""
+          ? null
+          : Number(engagementEditForm.expectedHoursPerWeek),
+        workScope: engagementEditForm.workScope || null,
+      };
+
+      const response = await apiRequest(
+        "PATCH",
+        `/api/admin/engagements/${editingEngagement.id}`,
+        payload,
+      );
+      return response.json() as Promise<AdminEngagement>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "engagements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "lifecycle-events"] });
+      queryClient.invalidateQueries({ queryKey: engagementDocumentQueryKey });
+      setEditingEngagement(null);
+      setEngagementEditForm(null);
+      toast({
+        title: "Engagement updated",
+        description: "The offer seed fields have been saved.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not update engagement",
+        description: getApiErrorMessage(error, "Please check the engagement fields and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const openEditEngagement = (engagement: AdminEngagement) => {
+    setEditingEngagement(engagement);
+    setEngagementEditForm(engagementToEditForm(engagement));
+  };
+
+  const closeEditEngagement = () => {
+    if (updateEngagementMutation.isPending) return;
+    setEditingEngagement(null);
+    setEngagementEditForm(null);
+  };
+
+  const updateEngagementField = (field: keyof EngagementEditForm, value: string) => {
+    setEngagementEditForm((current) => current ? { ...current, [field]: value } : current);
+  };
+
+  const openEditProfile = () => {
+    if (!admin) return;
+    setProfileEditForm({
+      name: admin.name,
+      email: admin.email,
+    });
+    setEditingProfile(true);
+  };
+
+  const closeEditProfile = () => {
+    if (updateProfileMutation.isPending) return;
+    setEditingProfile(false);
+    setProfileEditForm(null);
+  };
+
+  const updateProfileField = (field: keyof ProfileEditForm, value: string) => {
+    setProfileEditForm((current) => current ? { ...current, [field]: value } : current);
+  };
 
   const openCreateOfferLetter = (engagement: AdminEngagement) => {
     setLocation(`/admin-management/profile/${adminId}/offer-letter/new?engagementId=${engagement.id}`);
@@ -272,6 +448,24 @@ export default function AdminProfile() {
       ?? documents.find((document) => document.document_type === "offer_letter");
   };
 
+  const missingOfferSeedFields = (engagement: AdminEngagement) => {
+    const missing: string[] = [];
+    if (!engagement.positionTitle?.trim()) missing.push("Position Title");
+    if (!engagement.workLocation?.trim()) missing.push("Work Location");
+    if (engagement.workAuthorizationType === "cpt") {
+      if (!engagement.schoolName?.trim()) missing.push("School Name");
+      if (!engagement.programOrMajor?.trim()) missing.push("Program or Major");
+      if (!engagement.responseDeadline) missing.push("Response Deadline");
+    }
+    return missing;
+  };
+
+  const supervisorOptions = allAdmins.filter((candidate) => (
+    candidate.id !== admin.id &&
+    candidate.status === "active" &&
+    candidate.role !== "trainee_access"
+  ));
+
   return (
     <div className="space-y-8">
       <div className="mb-8 flex justify-between items-start">
@@ -327,6 +521,17 @@ export default function AdminProfile() {
                 <p className="text-muted-foreground" data-testid="text-admin-email">
                   {admin.email}
                 </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-4"
+                  onClick={openEditProfile}
+                  data-testid="button-edit-profile-info"
+                >
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit Profile Info
+                </Button>
               </div>
 
               <div className="space-y-4">
@@ -404,9 +609,31 @@ export default function AdminProfile() {
                 <div className="space-y-4">
                   {engagements.map((engagement) => (
                     <div key={engagement.id} className="border-b border-border pb-4 last:border-0 last:pb-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-2">
-                        <Badge variant="secondary">{engagement.engagementType.replace('_', ' ')}</Badge>
-                        <Badge>{engagement.status}</Badge>
+                      {(() => {
+                        const missingSeedFields = admin.role === "trainee_access"
+                          ? missingOfferSeedFields(engagement)
+                          : [];
+                        return missingSeedFields.length > 0 ? (
+                          <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                            This trainee engagement is missing offer seed fields required for the offer letter:{" "}
+                            {missingSeedFields.join(", ")}.
+                          </div>
+                        ) : null;
+                      })()}
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary">{engagement.engagementType.replace('_', ' ')}</Badge>
+                          <Badge>{engagement.status}</Badge>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openEditEngagement(engagement)}
+                          data-testid={`button-edit-engagement-${engagement.id}`}
+                        >
+                          <Edit className="h-4 w-4 mr-2" />
+                          Edit Engagement Seed
+                        </Button>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                         <div>
@@ -436,6 +663,26 @@ export default function AdminProfile() {
                         <div>
                           <span className="text-muted-foreground">Expected Hours: </span>
                           <span>{engagement.expectedHoursPerWeek ?? 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Position Title: </span>
+                          <span>{engagement.positionTitle || 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">School: </span>
+                          <span>{engagement.schoolName || 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Program or Major: </span>
+                          <span>{engagement.programOrMajor || 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Work Location: </span>
+                          <span>{engagement.workLocation || 'Not set'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Response Deadline: </span>
+                          <span>{engagement.responseDeadline || 'Not set'}</span>
                         </div>
                         <div className="md:col-span-2">
                           <span className="text-muted-foreground">
@@ -628,6 +875,255 @@ export default function AdminProfile() {
           </Card>
         </div>
       </div>
+
+      <Dialog open={editingProfile} onOpenChange={(open) => !open && closeEditProfile()}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Profile Info</DialogTitle>
+            <DialogDescription>
+              Update the saved Step 1 account information for this admin.
+            </DialogDescription>
+          </DialogHeader>
+          {profileEditForm && (
+            <form
+              className="space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                updateProfileMutation.mutate();
+              }}
+            >
+              <div className="space-y-2">
+                <Label>Full Name</Label>
+                <Input
+                  value={profileEditForm.name}
+                  minLength={2}
+                  required
+                  onChange={(event) => updateProfileField("name", event.target.value)}
+                  data-testid="input-edit-admin-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Email</Label>
+                <Input
+                  type="email"
+                  value={profileEditForm.email}
+                  required
+                  onChange={(event) => updateProfileField("email", event.target.value)}
+                  data-testid="input-edit-admin-email"
+                />
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeEditProfile}
+                  disabled={updateProfileMutation.isPending}
+                  data-testid="button-cancel-edit-profile"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={updateProfileMutation.isPending}
+                  data-testid="button-save-edit-profile"
+                >
+                  {updateProfileMutation.isPending ? "Saving..." : "Save Profile Info"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingEngagement)} onOpenChange={(open) => !open && closeEditEngagement()}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Edit Engagement Seed</DialogTitle>
+            <DialogDescription>
+              Update the Step 1 values reused by the offer letter builder.
+            </DialogDescription>
+          </DialogHeader>
+          {engagementEditForm && (
+            <form
+              className="max-h-[70vh] space-y-5 overflow-y-auto pr-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                updateEngagementMutation.mutate();
+              }}
+            >
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Position Title</Label>
+                  <Input
+                    value={engagementEditForm.positionTitle}
+                    onChange={(event) => updateEngagementField("positionTitle", event.target.value)}
+                    data-testid="input-edit-position-title"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Work Location</Label>
+                  <Input
+                    value={engagementEditForm.workLocation}
+                    onChange={(event) => updateEngagementField("workLocation", event.target.value)}
+                    data-testid="input-edit-work-location"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>School Name</Label>
+                  <Input
+                    value={engagementEditForm.schoolName}
+                    onChange={(event) => updateEngagementField("schoolName", event.target.value)}
+                    data-testid="input-edit-school-name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Program or Major</Label>
+                  <Input
+                    value={engagementEditForm.programOrMajor}
+                    onChange={(event) => updateEngagementField("programOrMajor", event.target.value)}
+                    data-testid="input-edit-program-or-major"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Response Deadline</Label>
+                  <Input
+                    type="date"
+                    value={engagementEditForm.responseDeadline}
+                    onChange={(event) => updateEngagementField("responseDeadline", event.target.value)}
+                    data-testid="input-edit-response-deadline"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Expected Hours Per Week</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="168"
+                    value={engagementEditForm.expectedHoursPerWeek}
+                    onChange={(event) => updateEngagementField("expectedHoursPerWeek", event.target.value)}
+                    data-testid="input-edit-expected-hours"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Engagement Type</Label>
+                  <Select
+                    value={engagementEditForm.engagementType}
+                    onValueChange={(value) => updateEngagementField("engagementType", value)}
+                  >
+                    <SelectTrigger data-testid="select-edit-engagement-type">
+                      <SelectValue placeholder="Select engagement type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="employee">Employee</SelectItem>
+                      <SelectItem value="intern">Intern</SelectItem>
+                      <SelectItem value="contractor">Contractor</SelectItem>
+                      <SelectItem value="advisor">Advisor</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Schedule Type</Label>
+                  <Select
+                    value={engagementEditForm.scheduleType}
+                    onValueChange={(value) => updateEngagementField("scheduleType", value)}
+                  >
+                    <SelectTrigger data-testid="select-edit-schedule-type">
+                      <SelectValue placeholder="Select schedule type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      <SelectItem value="full_time">Full-time</SelectItem>
+                      <SelectItem value="part_time">Part-time</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Work Authorization</Label>
+                  <Select
+                    value={engagementEditForm.workAuthorizationType}
+                    onValueChange={(value) => updateEngagementField("workAuthorizationType", value)}
+                  >
+                    <SelectTrigger data-testid="select-edit-work-authorization-type">
+                      <SelectValue placeholder="Select work authorization" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="cpt">CPT</SelectItem>
+                      <SelectItem value="opt">OPT</SelectItem>
+                      <SelectItem value="stem_opt">STEM OPT</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Supervisor</Label>
+                  <Select
+                    value={engagementEditForm.supervisorAdminId}
+                    onValueChange={(value) => updateEngagementField("supervisorAdminId", value)}
+                  >
+                    <SelectTrigger data-testid="select-edit-supervisor-admin">
+                      <SelectValue placeholder="Select supervisor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      {supervisorOptions.map((candidate) => (
+                        <SelectItem key={candidate.id} value={String(candidate.id)}>
+                          {candidate.name} - {candidate.email}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Start Date</Label>
+                  <Input
+                    type="date"
+                    value={engagementEditForm.startDate}
+                    onChange={(event) => updateEngagementField("startDate", event.target.value)}
+                    data-testid="input-edit-start-date"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>End Date</Label>
+                  <Input
+                    type="date"
+                    value={engagementEditForm.endDate}
+                    onChange={(event) => updateEngagementField("endDate", event.target.value)}
+                    data-testid="input-edit-end-date"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Work Scope</Label>
+                  <Textarea
+                    value={engagementEditForm.workScope}
+                    onChange={(event) => updateEngagementField("workScope", event.target.value)}
+                    data-testid="textarea-edit-work-scope"
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeEditEngagement}
+                  disabled={updateEngagementMutation.isPending}
+                  data-testid="button-cancel-edit-engagement"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={updateEngagementMutation.isPending}
+                  data-testid="button-save-edit-engagement"
+                >
+                  {updateEngagementMutation.isPending ? "Saving..." : "Save Engagement Seed"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(previewDocument)} onOpenChange={(open) => !open && setPreviewDocument(null)}>
         <DialogContent className="max-w-2xl">

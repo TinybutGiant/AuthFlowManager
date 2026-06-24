@@ -202,6 +202,20 @@ test("document template validation is plain-text and strict", () => {
     functionArea: "Research",
     compensationText: "Compensation text",
   }).success, true);
+  assert.equal(offerLetterPayloadSchema.safeParse({
+    documentType: "offer_letter",
+    templateId: 1,
+    responsibilitiesText: "Supervised training activities.",
+  }).success, true);
+  assert.equal(offerLetterPayloadSchema.safeParse({
+    documentType: "offer_letter",
+    templateId: 1,
+    companyEmail: "frontend-owned@example.com",
+  }).success, false);
+  assert.equal(templatePreviewPayloadSchema.safeParse({
+    templateId: 1,
+    companyPhone: "555-0100",
+  }).success, false);
   assert.equal(templatePreviewPayloadSchema.safeParse({
     templateId: 1,
     engagementId: 2,
@@ -249,9 +263,9 @@ test("offer letter preview mapper maps missing fields to readable sections", () 
   assert.deepEqual(
     model.missingFields.map((field) => `${field.sectionTitle}:${field.label}`),
     [
-      "Candidate / School:Program or Major",
-      "Training Alignment:Responsibilities",
-      "Candidate / School:School Name",
+      "Template:Program or Major",
+      "Training Alignment:Primary Responsibilities",
+      "Template:School Name",
     ],
   );
   assert.equal(model.previewIsValid, false);
@@ -327,7 +341,7 @@ test("admin update allowlist rejects protected fields", () => {
   }
 });
 
-test("trainee access requires engagement, end date, supervisor, and work scope", () => {
+test("trainee access requires engagement, end date, supervisor, work scope, and offer seed fields", () => {
   const traineeCreateSchema = z.object({
     role: accessRoleSchema,
     engagement: engagementPayloadSchema.optional(),
@@ -341,6 +355,7 @@ test("trainee access requires engagement, end date, supervisor, and work scope",
       workAuthorizationType: 'none',
       supervisorAdminId: 1,
       workScope: 'Training project',
+      positionTitle: 'Operations Trainee',
     },
   }).success, false);
   assert.equal(traineeCreateSchema.safeParse({
@@ -349,6 +364,27 @@ test("trainee access requires engagement, end date, supervisor, and work scope",
       engagementType: 'intern',
       workAuthorizationType: 'none',
       endDate: '2026-08-31',
+      workScope: 'Training project',
+      positionTitle: 'Operations Trainee',
+    },
+  }).success, false);
+  assert.equal(traineeCreateSchema.safeParse({
+    role: 'trainee_access',
+    engagement: {
+      engagementType: 'intern',
+      workAuthorizationType: 'none',
+      endDate: '2026-08-31',
+      supervisorAdminId: 1,
+      positionTitle: 'Operations Trainee',
+    },
+  }).success, false);
+  assert.equal(traineeCreateSchema.safeParse({
+    role: 'trainee_access',
+    engagement: {
+      engagementType: 'intern',
+      workAuthorizationType: 'none',
+      endDate: '2026-08-31',
+      supervisorAdminId: 1,
       workScope: 'Training project',
     },
   }).success, false);
@@ -359,16 +395,33 @@ test("trainee access requires engagement, end date, supervisor, and work scope",
       workAuthorizationType: 'none',
       endDate: '2026-08-31',
       supervisorAdminId: 1,
+      workScope: 'Training project',
+      positionTitle: 'Operations Trainee',
+    },
+  }).success, true);
+  assert.equal(traineeCreateSchema.safeParse({
+    role: 'trainee_access',
+    engagement: {
+      engagementType: 'intern',
+      workAuthorizationType: 'cpt',
+      endDate: '2026-08-31',
+      supervisorAdminId: 1,
+      workScope: 'Training project',
+      positionTitle: 'Operations Trainee',
     },
   }).success, false);
   assert.equal(traineeCreateSchema.safeParse({
     role: 'trainee_access',
     engagement: {
       engagementType: 'intern',
-      workAuthorizationType: 'none',
+      workAuthorizationType: 'cpt',
       endDate: '2026-08-31',
       supervisorAdminId: 1,
       workScope: 'Training project',
+      positionTitle: 'Operations Trainee',
+      schoolName: 'Wayne State University',
+      programOrMajor: 'Information Systems',
+      responseDeadline: '2026-07-15',
     },
   }).success, true);
   assert.equal(traineeCreateSchema.safeParse({ role: 'admin_finance' }).success, true);
@@ -437,6 +490,7 @@ test("Phase B migration adds account type and role-derived access grants without
   assert.match(migration, /"access_group" text NOT NULL/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS "idx_admin_user_access_grants_active_unique"/);
   assert.match(migration, /WHERE "revoked_at" IS NULL/);
+  assert.match(migration, /'trainee_offer_portal'/);
   assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
   assert.match(migration, /TO anon, authenticated/);
   assert.match(migration, /USING \(false\)/);
@@ -464,6 +518,20 @@ test("Phase B.1 migration adds trainee offer portal and accepted-offer workspace
   assert.match(migration, /"access_group" = 'trainee_workspace'/);
   assert.match(migration, /"revoked_at" IS NULL/);
   assert.match(migration, /intentionally not revoked/);
+});
+
+test("Phase 3B.6 migration adds engagement seed fields for offer letters", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0013_engagement_seed_brand_defaults.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "position_title" text/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "school_name" text/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "program_or_major" text/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "response_deadline" date/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "work_location" text/);
+  assert.doesNotMatch(migration, /logo|company_name|company_email|company_phone|brand/i);
 });
 
 test("Phase B storage dual-writes account type and role-derived grants while preserving legacy non-trainee role auth", async () => {
@@ -575,7 +643,7 @@ test("create admin UI separates Identity Type, Access Groups, and Engagement fie
   );
   const defaultAccessGroupSection = source.slice(
     source.indexOf('Initial Access'),
-    source.indexOf('<h2 className="text-lg font-medium text-foreground">Engagement</h2>')
+    source.indexOf('<h2 className="text-lg font-medium text-foreground">Create Trainee Engagement Seed</h2>')
   );
   const workAuthorizationSection = source.slice(
     source.indexOf('data-testid="select-work-authorization-type"'),
@@ -601,11 +669,13 @@ test("create admin UI separates Identity Type, Access Groups, and Engagement fie
   assert.match(defaultAccessGroupSection, /<Badge/);
   assert.doesNotMatch(defaultAccessGroupSection, /<Button|onClick|Switch|Checkbox|Toggle/);
   assert.match(source, /isTraineeIdentity &&/);
-  assert.match(source, />Engagement</);
+  assert.match(source, />Create Trainee Engagement Seed</);
+  assert.match(source, />Offer Seed Facts</);
+  assert.match(source, />Engagement Info</);
   assert.match(source, />Work Authorization</);
   assert.match(source, /End date is required for Trainee/);
   assert.match(source, /Trainee identity is for temporary interns or trainees/);
-  assert.match(source, /Engagement tracks start\/end dates, supervisor, work scope/);
+  assert.match(source, /Capture the reusable school, CPT, engagement, and offer seed facts/);
   assert.match(source, /payload\.deferSetupEmail = true/);
   assert.match(source, /fromCreate=1/);
   assert.match(source, /\? "Continue to Offer Letter"/);
@@ -777,27 +847,69 @@ test("offer letter APIs use admin or trainee scoped permissions", async () => {
   const traineeSanitizerBlock = source.slice(traineeSanitizerStart, traineeSanitizerEnd);
   assert.doesNotMatch(
     traineeSanitizerBlock,
-    /mergeData|merge_data|templateTitle|template_body|templateBody|offerReadiness|resumeReviewed|discussionCompleted/,
+    /mergeData|merge_data|templateTitle|template_body|templateBody|company_brand|companyBrand|assetPath|assetId|storageKey|logo|offerReadiness|resumeReviewed|discussionCompleted/,
   );
 });
 
-test("CPT offer readiness checklist remains admin UI only", async () => {
+test("Phase 3B.6 company brand defaults are server-canonical and Step 2 stays narrow", async () => {
   const builderSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterBuilder.tsx", import.meta.url), "utf8");
+  const mapperSource = await readFile(new URL("../client/src/components/offerLetter/offerLetterPreviewMapper.ts", import.meta.url), "utf8");
+  const createSource = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
   const validationSource = await readFile(new URL("./adminEngagementValidation.ts", import.meta.url), "utf8");
+  const brandDefaultsSource = await readFile(new URL("./companyBrandDefaults.ts", import.meta.url), "utf8");
+  const templateServiceSource = await readFile(new URL("./documentTemplateService.ts", import.meta.url), "utf8");
+  const pdfSource = await readFile(new URL("./pdf/renderOfferLetterPdf.ts", import.meta.url), "utf8");
 
-  assert.match(builderSource, /Offer Readiness/);
-  assert.match(builderSource, /Resume reviewed outside system/);
-  assert.match(builderSource, /Zoom\/discussion completed/);
-  assert.match(builderSource, /School\/CPT details confirmed/);
-  assert.match(builderSource, /Responsibilities aligned with student background/);
-  assert.match(builderSource, /Admin-only checklist/);
-  assert.match(builderSource, /This is not submitted, stored, exposed to trainee, or included in PDF/);
+  assert.match(brandDefaultsSource, /YAOTU_COMPANY_BRAND_DEFAULTS/);
+  assert.match(brandDefaultsSource, /companyName: "Yaotu Technologies, LLC"/);
+  assert.match(brandDefaultsSource, /companyEmail: "info@ahhh-yaotu.com"/);
+  assert.match(brandDefaultsSource, /companyPhone: "313-310-7902"/);
+  assert.match(brandDefaultsSource, /defaultSignatoryTitle: "Founder & Manager"/);
+  assert.match(brandDefaultsSource, /enabled: false/);
+  assert.match(brandDefaultsSource, /assetPath: null/);
+  assert.match(brandDefaultsSource, /TODO: Enable only after a canonical server-readable logo asset is added/);
+  assert.match(brandDefaultsSource, /publicCompanyBrandDefaults/);
+  assert.match(brandDefaultsSource, /companyBrandSnapshot/);
+  assert.match(brandDefaultsSource, /companyBrandLogoAsset/);
+
+  assert.match(templateServiceSource, /YAOTU_COMPANY_BRAND_DEFAULTS/);
+  assert.match(templateServiceSource, /companyBrandSnapshot\(\)/);
+  assert.match(templateServiceSource, /company_name: YAOTU_COMPANY_BRAND_DEFAULTS\.companyName/);
+  assert.match(templateServiceSource, /company_email: YAOTU_COMPANY_BRAND_DEFAULTS\.companyEmail/);
+  assert.match(templateServiceSource, /company_phone: YAOTU_COMPANY_BRAND_DEFAULTS\.companyPhone/);
+  assert.match(templateServiceSource, /signatory_title: YAOTU_COMPANY_BRAND_DEFAULTS\.defaultSignatoryTitle/);
+
+  assert.match(routesSource, /"\/api\/admin\/company-brand-defaults"/);
+  assert.match(routesSource, /publicCompanyBrandDefaults\(\)/);
+  assert.match(routesSource, /company_brand_defaults: publicCompanyBrandDefaults\(\)/);
+  assert.match(pdfSource, /brandLogo/);
+  assert.match(pdfSource, /doc\.image/);
+  assert.match(pdfSource, /Company logo could not be rendered; omitting logo/);
+
+  assert.match(createSource, /Create Trainee Engagement Seed/);
+  assert.match(createSource, /School \/ CPT Info/);
+  assert.match(createSource, /Offer Seed Facts/);
+  assert.match(createSource, /positionTitle/);
+  assert.match(createSource, /schoolName/);
+  assert.match(createSource, /programOrMajor/);
+  assert.match(createSource, /responseDeadline/);
+  assert.match(createSource, /workLocation/);
+  assert.match(createSource, /\/api\/admin\/company-brand-defaults/);
+
+  assert.match(builderSource, /Reused from Engagement Seed/);
+  assert.match(builderSource, /Company Brand Defaults/);
+  assert.match(builderSource, /\/api\/admin\/company-brand-defaults/);
+  assert.doesNotMatch(builderSource, /Yaotu Technologies, LLC|info@ahhh-yaotu\.com|313-310-7902|Founder & Manager/);
+  assert.doesNotMatch(mapperSource, /companyPhone: ""|companyEmail: ""|signatoryTitle: ""/);
   const fieldPayloadStart = builderSource.indexOf("function fieldPayload");
   const fieldPayloadEnd = builderSource.indexOf("function focusField", fieldPayloadStart);
   const fieldPayloadBlock = builderSource.slice(fieldPayloadStart, fieldPayloadEnd);
-  assert.doesNotMatch(fieldPayloadBlock, /offerReadiness|resumeReviewed|discussionCompleted|schoolDetailsConfirmed|responsibilitiesAligned/);
-  assert.doesNotMatch(routesSource + validationSource, /offerReadiness|resumeReviewed|discussionCompleted|schoolDetailsConfirmed|responsibilitiesAligned/);
+  assert.doesNotMatch(
+    fieldPayloadBlock,
+    /companyPhone|companyEmail|signatoryTitle|engagementTitle|schoolName|programOrMajor|workLocation|responseDeadline/,
+  );
+  assert.doesNotMatch(builderSource + routesSource + validationSource, /offerReadiness|resumeReviewed|discussionCompleted|schoolDetailsConfirmed|responsibilitiesAligned/);
   assert.doesNotMatch(routesSource + validationSource, /resumeUpload|resumeParsing|rawResume|candidateLifecycle|rejectedCandidate/);
 });
 
@@ -1101,7 +1213,72 @@ test("create admin duplicate email uses safe 409 response and field-level UI err
   assert.match(createSource, /CREATE_USER_GENERIC_ERROR_MESSAGE[\s\S]*Failed to create user\. Please check the form and try again\./);
 });
 
-test("phase 3B.5 two-step trainee create defers setup and uses offer builder recovery path", async () => {
+test("delete admin page and route perform confirmed destructive deletion", async () => {
+  const deleteSource = await readFile(new URL("../client/src/pages/DeleteAdmin.tsx", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
+
+  assert.match(deleteSource, /apiRequest\("DELETE", `\/api\/admin\/users\/\$\{adminId\}`\)/);
+  assert.match(deleteSource, /input-delete-admin-confirmation/);
+  assert.match(deleteSource, /confirmation\.trim\(\) === expectedConfirmation/);
+  assert.match(deleteSource, /disabled=\{!confirmed \|\| deleteMutation\.isPending\}/);
+  assert.match(deleteSource, /button-confirm-delete-admin/);
+  assert.doesNotMatch(deleteSource, /Admin deletion functionality will be implemented here/);
+
+  const routeStart = routesSource.indexOf('app.delete("/api/admin/users/:id"');
+  const routeEnd = routesSource.indexOf("  // Approval workflow routes", routeStart);
+  const deleteRouteBlock = routesSource.slice(routeStart, routeEnd);
+  assert.match(deleteRouteBlock, /requireRole\(\['super_admin'\]\)/);
+  assert.match(deleteRouteBlock, /id === req\.adminUser\.id/);
+  assert.match(deleteRouteBlock, /storage\.getAdminUser\(id\)/);
+  assert.match(deleteRouteBlock, /status\(404\)\.json\(\{ message: "Admin user not found" \}\)/);
+  assert.match(deleteRouteBlock, /storage\.deleteAdminUser\(id\)/);
+
+  const storageStart = storageSource.indexOf("async deleteAdminUser");
+  const storageEnd = storageSource.indexOf("async listAdminUsers", storageStart);
+  const deleteStorageBlock = storageSource.slice(storageStart, storageEnd);
+  assert.match(deleteStorageBlock, /db\.transaction/);
+  assert.match(deleteStorageBlock, /adminEngagementDocuments/);
+  assert.match(deleteStorageBlock, /adminActivityLogs/);
+  assert.match(deleteStorageBlock, /adminLifecycleEvents/);
+  assert.match(deleteStorageBlock, /adminUserAccessGrants/);
+  assert.match(deleteStorageBlock, /adminUserApprovals/);
+  assert.match(deleteStorageBlock, /adminEngagements/);
+  assert.match(deleteStorageBlock, /adminUsers/);
+});
+
+test("admin profile lets super admin edit trainee engagement seed fields after Step 1", async () => {
+  const profileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.match(profileSource, /Edit Profile Info/);
+  assert.match(profileSource, /button-edit-profile-info/);
+  assert.match(profileSource, /input-edit-admin-name/);
+  assert.match(profileSource, /input-edit-admin-email/);
+  assert.match(profileSource, /apiRequest\("PUT", `\/api\/admin\/users\/\$\{admin\.id\}`/);
+  assert.match(profileSource, /queryClient\.setQueryData\(\["\/api\/admin\/users", adminId\], updatedAdmin\)/);
+  assert.match(profileSource, /Edit Engagement Seed/);
+  assert.match(profileSource, /button-edit-engagement-/);
+  assert.match(profileSource, /input-edit-position-title/);
+  assert.match(profileSource, /input-edit-school-name/);
+  assert.match(profileSource, /input-edit-program-or-major/);
+  assert.match(profileSource, /input-edit-response-deadline/);
+  assert.match(profileSource, /input-edit-work-location/);
+  assert.match(profileSource, /textarea-edit-work-scope/);
+  assert.match(profileSource, /select-edit-supervisor-admin/);
+  assert.match(profileSource, /apiRequest\(\s*"PATCH",\s*`\/api\/admin\/engagements\/\$\{editingEngagement\.id\}`/);
+  assert.match(profileSource, /positionTitle: engagementEditForm\.positionTitle \|\| null/);
+  assert.match(profileSource, /schoolName: engagementEditForm\.schoolName \|\| null/);
+  assert.match(profileSource, /programOrMajor: engagementEditForm\.programOrMajor \|\| null/);
+  assert.match(profileSource, /responseDeadline: engagementEditForm\.responseDeadline \|\| null/);
+  assert.match(profileSource, /workLocation: engagementEditForm\.workLocation \|\| null/);
+  assert.match(profileSource, /queryKey: \["\/api\/admin\/users", adminId, "engagements"\]/);
+  assert.match(routesSource, /app\.put\("\/api\/admin\/users\/:id"/);
+  assert.match(routesSource, /isAdminEmailUniqueViolation\(error\)/);
+  assert.match(routesSource, /An admin with this email already exists\./);
+});
+
+test("phase 3B.6 two-step trainee create defers setup and carries offer seed fields", async () => {
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
   const createSource = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
   const builderSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterBuilder.tsx", import.meta.url), "utf8");
@@ -1116,10 +1293,17 @@ test("phase 3B.5 two-step trainee create defers setup and uses offer builder rec
   assert.match(createRouteBlock, /setupEmailDeferred/);
   assert.match(createRouteBlock, /engagement: delivery\.engagement \?\? null/);
   assert.match(createSource, /payload\.deferSetupEmail = true/);
+  assert.match(createSource, /input-position-title/);
+  assert.match(createSource, /input-school-name/);
+  assert.match(createSource, /input-program-or-major/);
+  assert.match(createSource, /input-response-deadline/);
+  assert.match(createSource, /input-work-location/);
   assert.match(createSource, /Continue to Offer Letter/);
   assert.match(createSource, /Trainee engagement created\. Continue by creating the offer letter/);
   assert.match(createSource, /\/admin-management\/profile\/\$\{admin\.id\}\/offer-letter\/new\?engagementId=\$\{engagement\.id\}&fromCreate=1/);
   assert.match(builderSource, /Step 2 of 2: Create the offer letter for this trainee engagement/);
+  assert.match(builderSource, /Reused from Engagement Seed/);
+  assert.match(builderSource, /Company Brand Defaults/);
   assert.match(builderSource, /data-testid="button-skip-offer-letter-for-now"/);
   assert.match(profileSource, /No offer letter has been created for this trainee yet/);
   assert.match(profileSource, /Create Offer Letter/);

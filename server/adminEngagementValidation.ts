@@ -87,6 +87,11 @@ export const engagementPayloadBaseSchema = z.object({
     z.number().int().positive().nullable().optional()
   ),
   workScope: optionalNullableStringSchema,
+  positionTitle: optionalNullableStringSchema,
+  schoolName: optionalNullableStringSchema,
+  programOrMajor: optionalNullableStringSchema,
+  responseDeadline: optionalDateSchema,
+  workLocation: optionalNullableStringSchema,
   expectedHoursPerWeek: optionalNumberSchema,
   status: engagementStatusSchema.default('draft'),
 });
@@ -121,6 +126,11 @@ export function validateTraineeEngagement(
       endDate?: string | null;
       supervisorAdminId?: number | null;
       workScope?: string | null;
+      workAuthorizationType?: string | null;
+      positionTitle?: string | null;
+      schoolName?: string | null;
+      programOrMajor?: string | null;
+      responseDeadline?: string | null;
     };
   },
   ctx: z.RefinementCtx
@@ -160,6 +170,38 @@ export function validateTraineeEngagement(
       path: ['engagement', 'workScope'],
       message: 'Work scope is required for Trainee Access',
     });
+  }
+
+  if (!data.engagement.positionTitle?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['engagement', 'positionTitle'],
+      message: 'Position title is required for Trainee Access',
+    });
+  }
+
+  if (data.engagement.workAuthorizationType === 'cpt') {
+    if (!data.engagement.schoolName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['engagement', 'schoolName'],
+        message: 'School name is required for CPT trainees',
+      });
+    }
+    if (!data.engagement.programOrMajor?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['engagement', 'programOrMajor'],
+        message: 'Program or major is required for CPT trainees',
+      });
+    }
+    if (!data.engagement.responseDeadline) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['engagement', 'responseDeadline'],
+        message: 'Response deadline is required for CPT trainees',
+      });
+    }
   }
 }
 
@@ -236,19 +278,7 @@ const manualTemplateMergeValuesSchema = {
     (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
     z.string().trim().max(8000).optional()
   ),
-  companyPhone: z.preprocess(
-    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
-    z.string().trim().max(100).optional()
-  ),
-  companyEmail: z.preprocess(
-    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
-    z.string().trim().email().max(320).optional()
-  ),
   signatoryName: z.preprocess(
-    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
-    z.string().trim().max(200).optional()
-  ),
-  signatoryTitle: z.preprocess(
     (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
     z.string().trim().max(200).optional()
   ),

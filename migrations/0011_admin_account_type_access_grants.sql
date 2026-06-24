@@ -46,6 +46,7 @@ CHECK ("access_group" IN (
   'support_admin',
   'super_admin',
   'admin_operations',
+  'trainee_offer_portal',
   'trainee_workspace',
   'document_templates',
   'lifecycle_jobs'
