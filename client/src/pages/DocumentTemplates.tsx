@@ -108,7 +108,7 @@ function parseAllowedVariables(value: string) {
 
 function TemplateBodyBlock({ value }: { value: string }) {
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-4 text-sm leading-6">
+    <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-4 text-sm leading-6">
       {value}
     </pre>
   );
@@ -446,7 +446,7 @@ export default function DocumentTemplates() {
       </Dialog>
 
       <Dialog open={isFormOpen} onOpenChange={(open) => !open && resetForm()}>
-        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+        <DialogContent className="max-h-[calc(100vh-1rem)] w-[96vw] max-w-7xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
           <DialogHeader>
             <DialogTitle>{formTitle}</DialogTitle>
             <DialogDescription>
@@ -514,7 +514,7 @@ export default function DocumentTemplates() {
                 id="template-body"
                 value={formState.bodyTemplate}
                 onChange={(event) => setFormState((value) => ({ ...value, bodyTemplate: event.target.value }))}
-                className="min-h-72 font-mono text-sm"
+                className="min-h-[28rem] font-mono text-sm"
                 maxLength={20000}
                 data-testid="textarea-document-template-body"
               />
