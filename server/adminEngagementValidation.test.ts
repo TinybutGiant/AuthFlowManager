@@ -28,6 +28,10 @@ import {
   tokenizeOfferLetterTemplateText,
   variableLabel,
 } from "../client/src/components/offerLetter/offerLetterPreviewMapper";
+import {
+  parseOfferLetterPlainText,
+  stripLegacyOfferLetterTextHeader,
+} from "../shared/offerLetterPlainTextParser";
 import { z } from "zod";
 
 test("access role rejects engagement identity and lifecycle values", () => {
@@ -269,6 +273,48 @@ test("offer letter preview mapper maps missing fields to readable sections", () 
     ],
   );
   assert.equal(model.previewIsValid, false);
+});
+
+test("Phase 3B.7 plain-text offer parser identifies formal document blocks safely", () => {
+  const blocks = parseOfferLetterPlainText(`
+1. Status, Schedule, and Location
+
+This is a normal paragraph with <script>alert("x")</script> text.
+
+* Schedule: part time
+* Work location: Remote
+
+Your primary responsibilities will include:
+
+1. Conduct supervised research across a long list item that should wrap safely in renderers.
+2. Document findings for supervisor review.
+
+Sincerely,
+
+Jane Manager
+Founder & Manager
+
+Acknowledged and Accepted:
+
+By accepting this offer, you acknowledge the terms.
+`);
+
+  assert.equal(blocks.some((block) => block.type === "sectionHeading" && block.text === "Status, Schedule, and Location"), true);
+  assert.equal(blocks.some((block) => block.type === "bulletList" && block.items.length === 2), true);
+  assert.equal(blocks.some((block) => block.type === "numberedList" && block.items.length === 2), true);
+  assert.equal(blocks.some((block) => block.type === "signatureBlock" && block.lines.includes("Jane Manager")), true);
+  assert.equal(blocks.some((block) => block.type === "acknowledgmentBlock"), true);
+  assert.equal(
+    blocks.some((block) => block.type === "paragraph" && block.text.includes("<script>alert(\"x\")</script>")),
+    true,
+  );
+  assert.equal(
+    stripLegacyOfferLetterTextHeader("Yaotu Technologies, LLC\nRemote\n\nSubject: Offer", {
+      companyName: "Yaotu Technologies, LLC",
+      workLocation: "Remote",
+    }),
+    "Subject: Offer",
+  );
 });
 
 test("trainee end engagement validation only accepts optional reason", () => {
@@ -532,6 +578,27 @@ test("Phase 3B.6 migration adds engagement seed fields for offer letters", async
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "response_deadline" date/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "work_location" text/);
   assert.doesNotMatch(migration, /logo|company_name|company_email|company_phone|brand/i);
+});
+
+test("Phase 3B.7 template migration adds formal active offer template versions", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0014_formal_offer_letter_template_typography.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /'CPT Internship Offer Letter'/);
+  assert.match(migration, /'Default Offer Letter Template'/);
+  assert.match(migration, /'active'/);
+  assert.match(migration, /\b3,\s*\n\s*'Offer of Internship for \{\{engagement_title\}\}'/);
+  assert.match(migration, /\b2,\s*\n\s*'Offer Letter for \{\{engagement_title\}\}'/);
+  assert.match(migration, /internship position of \{\{engagement_title\}\}/);
+  assert.match(migration, /training position of \{\{engagement_title\}\}/);
+  assert.match(migration, /Your primary responsibilities will include:/);
+  assert.match(migration, /"responsibilities_text"/);
+  assert.match(migration, /"signatory_name"/);
+  assert.match(migration, /"signatory_title"/);
+  assert.match(migration, /"status" = 'archived'/);
+  assert.doesNotMatch(migration, /dangerouslySetInnerHTML|raw html|rich text|html-to-pdf/i);
 });
 
 test("Phase B storage dual-writes account type and role-derived grants while preserving legacy non-trainee role auth", async () => {
@@ -918,6 +985,7 @@ test("offer letter builder replaces old modal with document-first safe preview",
   const builderSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterBuilder.tsx", import.meta.url), "utf8");
   const previewSource = await readFile(new URL("../client/src/components/offerLetter/OfferLetterDocumentPreview.tsx", import.meta.url), "utf8");
   const mapperSource = await readFile(new URL("../client/src/components/offerLetter/offerLetterPreviewMapper.ts", import.meta.url), "utf8");
+  const pdfSource = await readFile(new URL("./pdf/renderOfferLetterPdf.ts", import.meta.url), "utf8");
 
   assert.match(adminProfileSource, /setLocation\(`\/admin-management\/profile\/\$\{adminId\}\/offer-letter\/new\?engagementId=\$\{engagement\.id\}`\)/);
   assert.doesNotMatch(adminProfileSource, /Final Title|Final Body|textarea-offer-letter-body|button-preview-offer-template/);
@@ -939,11 +1007,29 @@ test("offer letter builder replaces old modal with document-first safe preview",
   const createPayloadBlock = builderSource.slice(createPayloadStart, createPayloadEnd);
   assert.doesNotMatch(createPayloadBlock, /title:\s*|body:\s*|offerReadiness|resumeReviewed|discussionCompleted/);
 
-  assert.match(previewSource, /whitespace-pre-wrap/);
+  assert.match(previewSource, /parseOfferLetterPlainText/);
+  assert.match(previewSource, /stripLegacyOfferLetterTextHeader/);
+  assert.match(previewSource, /sectionHeading/);
+  assert.match(previewSource, /bulletList/);
+  assert.match(previewSource, /numberedList/);
+  assert.match(previewSource, /signatureBlock/);
+  assert.match(previewSource, /acknowledgmentBlock/);
   assert.match(previewSource, /TokenizedText/);
   assert.match(previewSource, /data-variable/);
   assert.match(previewSource, /data-missing/);
   assert.doesNotMatch(previewSource, /dangerouslySetInnerHTML|innerHTML|ReactMarkdown|marked|markdown-to-jsx/i);
+
+  assert.match(pdfSource, /OFFER_LETTER_PDF_TYPOGRAPHY/);
+  assert.match(pdfSource, /BODY_FONT_SIZE: 10\.75/);
+  assert.match(pdfSource, /TITLE_FONT_SIZE: 14\.5/);
+  assert.match(pdfSource, /SECTION_FONT_SIZE: 11\.5/);
+  assert.match(pdfSource, /parseOfferLetterPlainText/);
+  assert.match(pdfSource, /renderListItem/);
+  assert.match(pdfSource, /stripLegacyOfferLetterTextHeader/);
+  assert.doesNotMatch(pdfSource, /\.text\("Trainee"/);
+  assert.doesNotMatch(pdfSource, /\.text\("Engagement"/);
+  assert.doesNotMatch(pdfSource, /\.text\("Offer Letter"/);
+  assert.doesNotMatch(pdfSource, /Version \$\{input\.document\.version\}|Generated \$\{generatedAt\.toISOString\(\)\}/);
 
   assert.match(mapperSource, /VARIABLE_PATTERN/);
   assert.match(mapperSource, /tokenizeOfferLetterTemplateText/);

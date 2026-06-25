@@ -134,7 +134,6 @@ function scheduleText(input: Pick<AdminEngagement, "scheduleType" | "expectedHou
 function trainingAlignmentText(input: {
   manualValue: string;
   programOrMajor: string;
-  responsibilitiesText: string;
 }) {
   if (input.manualValue) {
     return input.manualValue;
@@ -142,10 +141,7 @@ function trainingAlignmentText(input: {
   const programText = input.programOrMajor
     ? ` in ${input.programOrMajor}`
     : "";
-  const responsibilitiesText = input.responsibilitiesText
-    ? ` The responsibilities are intended to build practical experience through ${input.responsibilitiesText}`
-    : "";
-  return `This engagement is designed to provide supervised practical training aligned with the student's academic background${programText} and prior experience.${responsibilitiesText}`;
+  return `This training position is designed to provide supervised practical training aligned with the student's academic background${programText}, prior experience, and learning objectives.`;
 }
 
 export function extractTemplateVariables(...templates: string[]): string[] {
@@ -257,7 +253,6 @@ function buildMergeData(input: {
     training_alignment_text: trainingAlignmentText({
       manualValue: manual.training_alignment_text,
       programOrMajor,
-      responsibilitiesText,
     }),
     company_phone: YAOTU_COMPANY_BRAND_DEFAULTS.companyPhone,
     company_email: YAOTU_COMPANY_BRAND_DEFAULTS.companyEmail,

@@ -98,7 +98,10 @@ function sortTemplates(templates: AdminDocumentTemplate[]) {
   return templates
     .filter((template) => template.document_type === "offer_letter" && template.status !== "archived")
     .sort((a, b) => {
-      if (a.status === b.status) return a.name.localeCompare(b.name);
+      if (a.status === b.status) {
+        const nameComparison = a.name.localeCompare(b.name);
+        return nameComparison === 0 ? b.version - a.version : nameComparison;
+      }
       return a.status === "active" ? -1 : 1;
     });
 }

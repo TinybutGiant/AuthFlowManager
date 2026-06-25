@@ -598,7 +598,8 @@ test("CPT template preview applies engagement seed fields and canonical brand de
   assert.equal(preview.mergeData.response_deadline, "2026-07-15");
   assert.equal(preview.mergeData.responsibilities_text, "Build internal workflow documentation and supervised prototypes.");
   assert.match(preview.mergeData.training_alignment_text, /academic background in Information Systems/);
-  assert.match(preview.mergeData.training_alignment_text, /Build internal workflow documentation/);
+  assert.match(preview.mergeData.training_alignment_text, /learning objectives/);
+  assert.doesNotMatch(preview.mergeData.training_alignment_text, /Build internal workflow documentation/);
   assert.equal(preview.mergeData.compensation_text, "Unpaid internship position for academic practical training purposes.");
   assert.equal(preview.mergeData.signatory_name, "CPT Supervisor");
   assert.equal(preview.mergeData.signatory_title, YAOTU_COMPANY_BRAND_DEFAULTS.defaultSignatoryTitle);
@@ -614,7 +615,7 @@ test("CPT template preview applies engagement seed fields and canonical brand de
   assert.match(preview.body, /Phone: 313-310-7902/);
   assert.match(preview.body, /Email: info@ahhh-yaotu\.com/);
   assert.match(preview.body, /Responsibilities: Build internal workflow documentation/);
-  assert.match(preview.body, /Alignment: This engagement is designed/);
+  assert.match(preview.body, /Alignment: This training position is designed/);
 });
 
 test("CPT template preview blocks unresolved required manual fields with controlled errors", async () => {

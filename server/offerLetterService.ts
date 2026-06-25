@@ -26,7 +26,7 @@ import {
   previewOfferLetterTemplate,
   type ManualOfferLetterMergeValues,
 } from "./documentTemplateService";
-import { companyBrandLogoAsset } from "./companyBrandDefaults";
+import { companyBrandLogoAsset, YAOTU_COMPANY_BRAND_DEFAULTS } from "./companyBrandDefaults";
 
 const PRIVATE_STORAGE_NOT_CONFIGURED_MESSAGE = "Private offer letter storage is not configured.";
 const PREPARE_OFFER_LETTER_ERROR_MESSAGE = "Could not prepare the offer letter document.";
@@ -102,6 +102,43 @@ function hasMergeSnapshot(document: Pick<AdminEngagementDocument, "mergeData">) 
   return Boolean(document.mergeData);
 }
 
+function mergeDataString(mergeData: unknown, key: string) {
+  if (!mergeData || typeof mergeData !== "object" || Array.isArray(mergeData)) {
+    return "";
+  }
+  const value = (mergeData as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function companyBrandForPdf(document: Pick<AdminEngagementDocument, "mergeData">) {
+  const mergeData = document.mergeData;
+  const companyBrand = (
+    mergeData &&
+    typeof mergeData === "object" &&
+    !Array.isArray(mergeData) &&
+    typeof (mergeData as Record<string, unknown>).company_brand === "object" &&
+    !Array.isArray((mergeData as Record<string, unknown>).company_brand)
+  )
+    ? (mergeData as Record<string, unknown>).company_brand as Record<string, unknown>
+    : null;
+
+  const snapshotCompanyName = typeof companyBrand?.companyName === "string" ? companyBrand.companyName : "";
+  const snapshotDefaultLocation = typeof companyBrand?.defaultWorkLocation === "string"
+    ? companyBrand.defaultWorkLocation
+    : "";
+
+  return {
+    companyName:
+      snapshotCompanyName ||
+      mergeDataString(mergeData, "company_name") ||
+      YAOTU_COMPANY_BRAND_DEFAULTS.companyName,
+    workLocation:
+      mergeDataString(mergeData, "work_location") ||
+      snapshotDefaultLocation ||
+      YAOTU_COMPANY_BRAND_DEFAULTS.defaultWorkLocation,
+  };
+}
+
 function metadataValue(metadata: unknown, key: string) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     return undefined;
@@ -173,6 +210,7 @@ export async function generateOfferLetterPdfArtifact(input: {
     pdf = await renderOfferLetterPdfBuffer({
       document: input.document,
       context,
+      brand: companyBrandForPdf(input.document),
       brandLogo: companyBrandLogoAsset({ warn: true }),
       generatedAt: now,
     });
