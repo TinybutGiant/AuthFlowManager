@@ -1059,7 +1059,12 @@ test("offer letter send uses a link-only trainee workspace email and marks sent"
   const store = new MemoryOfferLetterStorage();
   const trainee = store.seedAdmin({ name: "Trainee User", email: "trainee@example.com" });
   const engagement = store.seedEngagement(trainee.id);
-  const document = store.seedDocument({ engagementId: engagement.id, status: "draft" });
+  const document = store.seedDocument({
+    engagementId: engagement.id,
+    status: "draft",
+    title: "Offer Letter for Full-Stack Engineer Intern",
+    mergeData: { engagement_title: "Full-Stack Engineer Intern" },
+  });
   const objectStorage = createPrivateObjectStore();
   objectStorage.objects.set(document.fileKey, Buffer.from("pdf"));
   let emailInput: any;
@@ -1079,6 +1084,7 @@ test("offer letter send uses a link-only trainee workspace email and marks sent"
 
   assert.equal(sent.status, "sent");
   assert.equal(emailInput.to, "trainee@example.com");
+  assert.equal(emailInput.positionTitle, "Full-Stack Engineer Intern");
   assert.match(emailInput.workspaceUrl, /\/trainee$/);
   assert.doesNotMatch(emailInput.workspaceUrl, /token|document|bearer/i);
   assert.deepEqual(objectStorage.existsChecks, [document.fileKey]);
@@ -1095,7 +1101,13 @@ test("sending offer after deferred setup sends setup access email and records in
     passwordSetupExpiresAt: new Date("2026-05-01T00:00:00Z"),
   });
   const engagement = store.seedEngagement(trainee.id);
-  const document = store.seedDocument({ engagementId: engagement.id, status: "draft", sentAt: null });
+  const document = store.seedDocument({
+    engagementId: engagement.id,
+    status: "draft",
+    sentAt: null,
+    title: "Offer Letter for Product Operations Intern",
+    mergeData: { engagement_title: "Product Operations Intern" },
+  });
   const objectStorage = createPrivateObjectStore();
   objectStorage.objects.set(document.fileKey, Buffer.from("pdf"));
   let setupEmailInput: any;
@@ -1121,6 +1133,7 @@ test("sending offer after deferred setup sends setup access email and records in
   assert.equal(sent.status, "sent");
   assert.equal(offerEmailCalled, false);
   assert.equal(setupEmailInput.to, "deferred@example.com");
+  assert.equal(setupEmailInput.positionTitle, "Product Operations Intern");
   assert.match(setupEmailInput.setupUrl, /\/set-password\?token=/);
   assert.match(setupEmailInput.workspaceUrl, /\/trainee$/);
   assert.doesNotMatch(JSON.stringify(setupEmailInput), /fileKey|signed|bearer|documentId|engagement-documents/i);

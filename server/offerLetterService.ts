@@ -53,11 +53,11 @@ export interface OfferLetterObjectStorage {
 }
 
 export interface OfferLetterEmailSender {
-  (input: { to: string; name: string; workspaceUrl: string; title: string }): Promise<boolean>;
+  (input: { to: string; name: string; workspaceUrl: string; positionTitle: string }): Promise<boolean>;
 }
 
 export interface OfferLetterSetupEmailSender {
-  (input: { to: string; name: string; setupUrl: string; workspaceUrl: string; title: string }): Promise<boolean>;
+  (input: { to: string; name: string; setupUrl: string; workspaceUrl: string; positionTitle: string }): Promise<boolean>;
 }
 
 export const defaultOfferLetterObjectStorage: OfferLetterObjectStorage = {
@@ -108,6 +108,10 @@ function mergeDataString(mergeData: unknown, key: string) {
   }
   const value = (mergeData as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function offerLetterEmailPositionTitle(document: Pick<AdminEngagementDocument, "mergeData" | "title">) {
+  return mergeDataString(document.mergeData, "engagement_title") || document.title;
 }
 
 function companyBrandForPdf(document: Pick<AdminEngagementDocument, "mergeData">) {
@@ -533,6 +537,7 @@ export async function sendOfferLetterDocument(input: {
   }
 
   const workspaceUrl = `${getAdminAppOrigin()}/trainee`;
+  const positionTitle = offerLetterEmailPositionTitle(document);
   const setupInvitationSent = await maybeSendDeferredTraineeSetupEmail({
     storage: input.storage,
     sendSetupEmail: input.sendSetupEmail ?? sendTraineeOfferSetupEmail,
@@ -540,7 +545,7 @@ export async function sendOfferLetterDocument(input: {
     engagementId: input.engagementId,
     actorAdminId: input.actorAdminId,
     workspaceUrl,
-    title: document.title,
+    positionTitle,
     now,
   });
 
@@ -549,7 +554,7 @@ export async function sendOfferLetterDocument(input: {
     to: trainee.email,
     name: trainee.name,
     workspaceUrl,
-    title: document.title,
+    positionTitle,
   }));
   if (!sent) {
     throw new OfferLetterError(502, "Offer letter email could not be sent");
@@ -585,7 +590,7 @@ async function maybeSendDeferredTraineeSetupEmail(input: {
   engagementId: number;
   actorAdminId: number;
   workspaceUrl: string;
-  title: string;
+  positionTitle: string;
   now: Date;
 }) {
   if (
@@ -616,7 +621,7 @@ async function maybeSendDeferredTraineeSetupEmail(input: {
     name: updatedTrainee.name,
     setupUrl: buildPasswordSetupUrl(setupToken.token),
     workspaceUrl: input.workspaceUrl,
-    title: input.title,
+    positionTitle: input.positionTitle,
   });
   if (!sent) {
     throw new OfferLetterError(502, "Trainee setup email could not be sent");

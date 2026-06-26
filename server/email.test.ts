@@ -127,7 +127,7 @@ test("password setup email uses access role label in subject and body", async ()
   }
 });
 
-test("offer letter email is link-only and uses trainee workspace URL", async () => {
+test("offer letter ready email is formal, link-only, and uses trainee workspace URL", async () => {
   const restoreEnv = withCleanMailEnv();
   const originalFetch = globalThis.fetch;
   let requestedBody = "";
@@ -146,12 +146,20 @@ test("offer letter email is link-only and uses trainee workspace URL", async () 
       to: "trainee@example.com",
       name: "Trainee User",
       workspaceUrl: "https://admin.example.com/trainee",
-      title: "Trainee Offer Letter",
+      positionTitle: "Offer Letter for Full-Stack Engineer Intern",
     });
 
+    const form = new URLSearchParams(requestedBody);
+    const text = form.get("text") ?? "";
+    const html = form.get("html") ?? "";
+
     assert.equal(sent, true);
-    assert.match(requestedBody, /subject=Your\+Yaotu\+trainee\+offer\+letter\+is\+ready\+for\+review/);
-    assert.match(requestedBody, /https%3A%2F%2Fadmin\.example\.com%2Ftrainee/);
+    assert.equal(form.get("subject"), "Offer of Internship for Full-Stack Engineer Intern");
+    assert.match(text, /Yaotu Technologies, LLC is pleased to extend you an offer/);
+    assert.match(text, /Review Offer Letter: https:\/\/admin\.example\.com\/trainee/);
+    assert.match(html, />Review Offer Letter<\/a>/);
+    assert.doesNotMatch(text, /Set Up Your Account|expires in 24 hours/);
+    assert.doesNotMatch(text, /Your trainee offer letter|Offer Letter for Full-Stack Engineer Intern is ready/i);
     assert.doesNotMatch(requestedBody, /attachment|token|bearer|documentId/i);
   } finally {
     globalThis.fetch = originalFetch;
@@ -179,13 +187,22 @@ test("trainee offer setup email uses setup and workspace links without document 
       name: "Trainee User",
       setupUrl: "https://admin.example.com/set-password?token=test",
       workspaceUrl: "https://admin.example.com/trainee",
-      title: "Trainee Offer Letter",
+      positionTitle: "Full-Stack Engineer Intern",
     });
 
+    const form = new URLSearchParams(requestedBody);
+    const text = form.get("text") ?? "";
+    const html = form.get("html") ?? "";
+
     assert.equal(sent, true);
-    assert.match(requestedBody, /subject=Your\+Yaotu\+trainee\+offer\+letter\+is\+ready\+for\+review/);
-    assert.match(requestedBody, /https%3A%2F%2Fadmin\.example\.com%2Fset-password%3Ftoken%3Dtest/);
-    assert.match(requestedBody, /https%3A%2F%2Fadmin\.example\.com%2Ftrainee/);
+    assert.equal(form.get("subject"), "Offer of Internship for Full-Stack Engineer Intern");
+    assert.match(text, /Yaotu Technologies, LLC is pleased to extend you an offer/);
+    assert.match(text, /Set Up Your Account: https:\/\/admin\.example\.com\/set-password\?token=test/);
+    assert.match(text, /Review Offer Letter: https:\/\/admin\.example\.com\/trainee/);
+    assert.match(text, /one-time account setup link expires in 24 hours/);
+    assert.match(html, />Set Up Your Account<\/a>/);
+    assert.match(html, />Review Offer Letter<\/a>/);
+    assert.doesNotMatch(text, /Your trainee offer letter|Trainee Workspace:/i);
     assert.doesNotMatch(requestedBody, /attachment|bearer|documentId|fileKey|signedUrl/i);
   } finally {
     globalThis.fetch = originalFetch;

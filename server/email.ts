@@ -11,7 +11,7 @@ interface OfferLetterEmailInput {
   to: string;
   name: string;
   workspaceUrl: string;
-  title: string;
+  positionTitle: string;
 }
 
 interface TraineeOfferSetupEmailInput extends OfferLetterEmailInput {
@@ -33,6 +33,26 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function normalizeOfferPositionTitle(value: string): string {
+  let positionTitle = value.trim();
+
+  for (const pattern of [
+    /^offer\s+of\s+internship\s+for\s+/i,
+    /^offer\s+letter\s+for\s+/i,
+    /^trainee\s+offer\s+letter\s+for\s+/i,
+  ]) {
+    positionTitle = positionTitle.replace(pattern, "").trim();
+  }
+
+  positionTitle = positionTitle.replace(/\s+offer\s+letter$/i, "").trim();
+
+  if (!positionTitle || /^offer\s+letter$/i.test(positionTitle)) {
+    return "Internship Position";
+  }
+
+  return positionTitle;
 }
 
 function getMailgunConfig() {
@@ -124,22 +144,38 @@ export async function sendAdminPasswordSetupEmail(input: PasswordSetupEmailInput
 export async function sendOfferLetterReadyEmail(input: OfferLetterEmailInput): Promise<boolean> {
   const escapedName = escapeHtml(input.name);
   const escapedWorkspaceUrl = escapeHtml(input.workspaceUrl);
-  const escapedTitle = escapeHtml(input.title);
-  const subject = "Your Yaotu trainee offer letter is ready for review";
+  const positionTitle = normalizeOfferPositionTitle(input.positionTitle);
+  const escapedPositionTitle = escapeHtml(positionTitle);
+  const subject = `Offer of Internship for ${positionTitle}`;
   const text = [
-    `Hello ${input.name},`,
+    `Hi ${input.name},`,
     "",
-    `Your trainee offer letter "${input.title}" is ready for review.`,
-    "Please log in to your trainee workspace to review and accept it.",
+    `Congratulations! Yaotu Technologies, LLC is pleased to extend you an offer for the position of ${positionTitle}.`,
     "",
-    input.workspaceUrl,
+    "Your formal offer letter is now available in the Trainee Workspace. Please log in to review the offer details.",
+    "",
+    `Review Offer Letter: ${input.workspaceUrl}`,
+    "",
+    "If you have any questions or would like clarification on any aspect of the position, responsibilities, schedule, or next steps, please let us know.",
+    "",
+    "We would appreciate your response at your earliest convenience so we may proceed with the next steps.",
+    "",
+    "Congratulations again, and we look forward to the possibility of working together.",
+    "",
+    "Best regards,",
+    "Shengyu",
+    "Yaotu Technologies, LLC",
   ].join("\n");
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <p>Hello ${escapedName},</p>
-      <p>Your trainee offer letter <strong>${escapedTitle}</strong> is ready for review.</p>
-      <p>Please log in to your trainee workspace to review and accept it.</p>
-      <p><a href="${escapedWorkspaceUrl}">${escapedWorkspaceUrl}</a></p>
+      <p>Hi ${escapedName},</p>
+      <p>Congratulations! Yaotu Technologies, LLC is pleased to extend you an offer for the position of <strong>${escapedPositionTitle}</strong>.</p>
+      <p>Your formal offer letter is now available in the Trainee Workspace. Please log in to review the offer details.</p>
+      <p><a href="${escapedWorkspaceUrl}">Review Offer Letter</a></p>
+      <p>If you have any questions or would like clarification on any aspect of the position, responsibilities, schedule, or next steps, please let us know.</p>
+      <p>We would appreciate your response at your earliest convenience so we may proceed with the next steps.</p>
+      <p>Congratulations again, and we look forward to the possibility of working together.</p>
+      <p>Best regards,<br />Shengyu<br />Yaotu Technologies, LLC</p>
     </div>
   `;
 
@@ -157,25 +193,40 @@ export async function sendTraineeOfferSetupEmail(input: TraineeOfferSetupEmailIn
   const escapedName = escapeHtml(input.name);
   const escapedSetupUrl = escapeHtml(input.setupUrl);
   const escapedWorkspaceUrl = escapeHtml(input.workspaceUrl);
-  const escapedTitle = escapeHtml(input.title);
-  const subject = "Your Yaotu trainee offer letter is ready for review";
+  const positionTitle = normalizeOfferPositionTitle(input.positionTitle);
+  const escapedPositionTitle = escapeHtml(positionTitle);
+  const subject = `Offer of Internship for ${positionTitle}`;
   const text = [
-    `Hello ${input.name},`,
+    `Hi ${input.name},`,
     "",
-    `Your trainee offer letter "${input.title}" is ready for review.`,
-    "Please set up your account, log in to the Trainee Workspace, and review and accept the offer letter.",
+    `Congratulations! Yaotu Technologies, LLC is pleased to extend you an offer for the position of ${positionTitle}.`,
     "",
-    `Set up your account: ${input.setupUrl}`,
-    `Trainee Workspace: ${input.workspaceUrl}`,
+    "Your formal offer letter is now available in the Trainee Workspace. Please set up your account, then review the offer details there.",
+    "",
+    `Set Up Your Account: ${input.setupUrl}`,
+    `Review Offer Letter: ${input.workspaceUrl}`,
+    "",
+    "If you have any questions or would like clarification on any aspect of the position, responsibilities, schedule, or next steps, please let us know.",
+    "",
+    "Please note that the one-time account setup link expires in 24 hours.",
+    "",
+    "Congratulations again, and we look forward to the possibility of working together.",
+    "",
+    "Best regards,",
+    "Shengyu",
+    "Yaotu Technologies, LLC",
   ].join("\n");
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <p>Hello ${escapedName},</p>
-      <p>Your trainee offer letter <strong>${escapedTitle}</strong> is ready for review.</p>
-      <p>Please set up your account, log in to the Trainee Workspace, and review and accept the offer letter.</p>
-      <p><a href="${escapedSetupUrl}">Set up your account</a></p>
-      <p><a href="${escapedWorkspaceUrl}">Open Trainee Workspace</a></p>
-      <p>This one-time setup link expires in 24 hours.</p>
+      <p>Hi ${escapedName},</p>
+      <p>Congratulations! Yaotu Technologies, LLC is pleased to extend you an offer for the position of <strong>${escapedPositionTitle}</strong>.</p>
+      <p>Your formal offer letter is now available in the Trainee Workspace. Please set up your account, then review the offer details there.</p>
+      <p><a href="${escapedSetupUrl}">Set Up Your Account</a></p>
+      <p><a href="${escapedWorkspaceUrl}">Review Offer Letter</a></p>
+      <p>If you have any questions or would like clarification on any aspect of the position, responsibilities, schedule, or next steps, please let us know.</p>
+      <p>Please note that the one-time account setup link expires in 24 hours.</p>
+      <p>Congratulations again, and we look forward to the possibility of working together.</p>
+      <p>Best regards,<br />Shengyu<br />Yaotu Technologies, LLC</p>
     </div>
   `;
 
