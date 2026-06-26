@@ -84,6 +84,13 @@ export type AdminActivityType =
   | 'meeting'
   | 'other';
 export type AdminActivityLogStatus = 'submitted' | 'reviewed';
+export type FeedbackMeetingStatus =
+  | 'scheduled'
+  | 'absence_requested'
+  | 'excused'
+  | 'completed'
+  | 'missed'
+  | 'cancelled';
 export type AdminEngagementDocumentType = 'offer_letter';
 export type AdminEngagementDocumentStatus = 'draft' | 'sent' | 'viewed' | 'accepted' | 'declined' | 'voided';
 export type AdminDocumentTemplateStatus = 'draft' | 'active' | 'archived';
@@ -158,6 +165,66 @@ export interface AdminActivityLog {
   status: AdminActivityLogStatus;
   reviewed_at?: string | null;
   created_at: string;
+}
+
+export interface FeedbackSlot {
+  id: number;
+  supervisor_admin_id: number;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+  timezone: string;
+  status: 'active' | 'inactive';
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface FeedbackSchedule {
+  id: number;
+  engagement_id: number;
+  admin_user_id: number;
+  supervisor_admin_id: number;
+  frequency_per_week: 1 | 2;
+  timezone: string;
+  selected_slots: Array<{
+    id: number;
+    dayOfWeek: number;
+    startTime: string;
+    endTime: string;
+    timezone: string;
+  }>;
+  status: 'confirmed' | 'change_requested' | 'cancelled';
+  change_request_note?: string | null;
+  confirmed_at?: string | null;
+  change_requested_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface FeedbackMeetingOccurrence {
+  id: number;
+  schedule_id: number;
+  engagement_id: number;
+  admin_user_id: number;
+  supervisor_admin_id: number;
+  occurrence_date: string;
+  start_time: string;
+  end_time: string;
+  timezone: string;
+  status: FeedbackMeetingStatus;
+  absence_reason?: string | null;
+  absence_note?: string | null;
+  absence_requested_at?: string | null;
+  status_updated_by?: number | null;
+  status_updated_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CheckInBundle {
+  available_slots: FeedbackSlot[];
+  selected_schedule: FeedbackSchedule | null;
+  meeting_occurrences: FeedbackMeetingOccurrence[];
 }
 
 export interface AdminEngagementDocument {

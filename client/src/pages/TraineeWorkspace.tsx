@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,7 +23,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, getApiErrorMessage, tokenManager } from "@/lib/queryClient";
-import { AdminActivityLog, AdminActivityType, ROLE_DISPLAY_NAMES, TraineeDocument, TraineeEngagement } from "@/types/admin";
+import {
+  AdminActivityLog,
+  AdminActivityType,
+  CheckInBundle,
+  FeedbackMeetingOccurrence,
+  FeedbackMeetingStatus,
+  FeedbackSlot,
+  ROLE_DISPLAY_NAMES,
+  TraineeDocument,
+  TraineeEngagement,
+} from "@/types/admin";
 
 const ACTIVITY_TYPE_LABELS: Record<AdminActivityType, string> = {
   office_hour: "Office Hour",
@@ -36,6 +47,15 @@ const ACTIVITY_TYPE_LABELS: Record<AdminActivityType, string> = {
 };
 
 const activityTypes = Object.keys(ACTIVITY_TYPE_LABELS) as AdminActivityType[];
+const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MEETING_STATUS_LABELS: Record<FeedbackMeetingStatus, string> = {
+  scheduled: "Scheduled",
+  absence_requested: "Absence Requested",
+  excused: "Excused Absence",
+  completed: "Completed",
+  missed: "Missed",
+  cancelled: "Cancelled",
+};
 
 function formatValue(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") return "Not set";
@@ -58,6 +78,20 @@ function getOfferLetterStatusVariant(status: string) {
   return "secondary" as const;
 }
 
+function getMeetingStatusVariant(status: FeedbackMeetingStatus) {
+  if (status === "excused" || status === "completed") return "default" as const;
+  if (status === "missed" || status === "cancelled") return "destructive" as const;
+  if (status === "absence_requested") return "outline" as const;
+  return "secondary" as const;
+}
+
+function formatFeedbackSlot(slot: FeedbackSlot | { dayOfWeek: number; startTime: string; endTime: string; timezone: string }) {
+  const dayOfWeek = "day_of_week" in slot ? slot.day_of_week : slot.dayOfWeek;
+  const startTime = "start_time" in slot ? slot.start_time : slot.startTime;
+  const endTime = "end_time" in slot ? slot.end_time : slot.endTime;
+  return `${DAY_LABELS[dayOfWeek]} ${startTime}-${endTime} ${slot.timezone}`;
+}
+
 export default function TraineeWorkspace() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -68,6 +102,13 @@ export default function TraineeWorkspace() {
   const [learningObjective, setLearningObjective] = useState("");
   const [endReason, setEndReason] = useState("");
   const [offerAcceptedAcknowledgement, setOfferAcceptedAcknowledgement] = useState(false);
+  const [frequencyPerWeek, setFrequencyPerWeek] = useState("1");
+  const [selectedFeedbackSlotIds, setSelectedFeedbackSlotIds] = useState<string[]>([""]);
+  const [feedbackTimezone, setFeedbackTimezone] = useState(() => (
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+  ));
+  const [scheduleChangeNote, setScheduleChangeNote] = useState("");
+  const [absenceForms, setAbsenceForms] = useState<Record<number, { reason: string; note: string }>>({});
 
   const engagementQuery = useQuery<TraineeEngagement | null>({
     queryKey: ["/api/trainee/me/engagement"],
@@ -89,7 +130,19 @@ export default function TraineeWorkspace() {
     retry: false,
     enabled: hasAcceptedOffer,
   });
+  const checkInsQuery = useQuery<CheckInBundle>({
+    queryKey: ["/api/trainee/me/check-ins"],
+    retry: false,
+    enabled: hasAcceptedOffer,
+  });
   const logs = hasAcceptedOffer ? activityLogsQuery.data ?? [] : [];
+  const checkIns = checkInsQuery.data;
+  const feedbackSlots = checkIns?.available_slots ?? [];
+  const selectedSchedule = checkIns?.selected_schedule ?? null;
+  const meetingOccurrences = checkIns?.meeting_occurrences ?? [];
+  const upcomingMeetingOccurrences = meetingOccurrences.filter((occurrence) => (
+    occurrence.status !== "cancelled" && occurrence.occurrence_date >= new Date().toISOString().slice(0, 10)
+  ));
   const canSubmitActivity = hasAcceptedOffer && engagement?.status === "active";
   const canEndEngagement = Boolean(engagement && !["ended", "cancelled"].includes(engagement.status));
 
@@ -121,6 +174,88 @@ export default function TraineeWorkspace() {
       toast({
         title: "Could not submit activity log",
         description: getApiErrorMessage(error, "Please check the activity log and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const confirmFeedbackScheduleMutation = useMutation({
+    mutationFn: async () => {
+      const slotIds = selectedFeedbackSlotIds.filter(Boolean).map(Number);
+      const response = await apiRequest("POST", "/api/trainee/me/feedback-schedule", {
+        frequencyPerWeek: Number(frequencyPerWeek),
+        slotIds,
+        timezone: feedbackTimezone,
+      });
+      return response.json() as Promise<CheckInBundle>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/check-ins"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/lifecycle-events"] });
+      toast({
+        title: "Feedback meeting schedule confirmed",
+        description: "Your recurring check-in schedule has been recorded.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not confirm feedback meeting schedule",
+        description: getApiErrorMessage(error, "Please select available feedback meeting slots and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const requestScheduleChangeMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/trainee/me/feedback-schedule/change-request", {
+        note: scheduleChangeNote.trim() || null,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      setScheduleChangeNote("");
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/check-ins"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/lifecycle-events"] });
+      toast({
+        title: "Schedule change requested",
+        description: "Your supervisor can review the request from the engagement record.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not request schedule change",
+        description: getApiErrorMessage(error, "Please try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const requestAbsenceMutation = useMutation({
+    mutationFn: async (occurrenceId: number) => {
+      const form = absenceForms[occurrenceId] ?? { reason: "", note: "" };
+      const response = await apiRequest("POST", `/api/trainee/me/feedback-meetings/${occurrenceId}/absence-request`, {
+        reason: form.reason,
+        note: form.note.trim() || null,
+      });
+      return response.json() as Promise<FeedbackMeetingOccurrence>;
+    },
+    onSuccess: (occurrence) => {
+      setAbsenceForms((current) => ({
+        ...current,
+        [occurrence.id]: { reason: "", note: "" },
+      }));
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/check-ins"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trainee/me/lifecycle-events"] });
+      toast({
+        title: "Absence request submitted",
+        description: "Your feedback meeting absence request has been recorded.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not submit absence request",
+        description: getApiErrorMessage(error, "Please add a reason and try again."),
         variant: "destructive",
       });
     },
@@ -226,7 +361,43 @@ export default function TraineeWorkspace() {
     }
   };
 
-  const workspaceError = engagementQuery.isError || documentsQuery.isError || (hasAcceptedOffer && activityLogsQuery.isError);
+  const updateSelectedFeedbackSlot = (index: number, value: string) => {
+    setSelectedFeedbackSlotIds((current) => {
+      const next = [...current];
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const updateFrequency = (value: string) => {
+    setFrequencyPerWeek(value);
+    setSelectedFeedbackSlotIds((current) => {
+      const count = Number(value);
+      return Array.from({ length: count }, (_, index) => current[index] ?? "");
+    });
+  };
+
+  const updateAbsenceForm = (occurrenceId: number, field: "reason" | "note", value: string) => {
+    setAbsenceForms((current) => ({
+      ...current,
+      [occurrenceId]: {
+        reason: current[occurrenceId]?.reason ?? "",
+        note: current[occurrenceId]?.note ?? "",
+        [field]: value,
+      },
+    }));
+  };
+
+  const canConfirmFeedbackSchedule =
+    hasAcceptedOffer &&
+    selectedFeedbackSlotIds.filter(Boolean).length === Number(frequencyPerWeek) &&
+    new Set(selectedFeedbackSlotIds.filter(Boolean)).size === Number(frequencyPerWeek) &&
+    Boolean(feedbackTimezone.trim());
+
+  const workspaceError =
+    engagementQuery.isError ||
+    documentsQuery.isError ||
+    (hasAcceptedOffer && (activityLogsQuery.isError || checkInsQuery.isError));
 
   return (
     <div className="space-y-8">
@@ -234,7 +405,7 @@ export default function TraineeWorkspace() {
         <h1 className="text-3xl font-light text-foreground mb-2" data-testid="text-trainee-workspace-title">
           Trainee Workspace
         </h1>
-        <p className="text-muted-foreground">View your engagement and record trainee learning activities.</p>
+        <p className="text-muted-foreground">View your engagement, feedback meetings, and learning activity logs.</p>
       </div>
 
       {workspaceError && (
@@ -245,306 +416,513 @@ export default function TraineeWorkspace() {
         </Card>
       )}
 
-      {!documentsQuery.isLoading && !hasAcceptedOffer && (
-        <Card className="border-primary/40">
-          <CardContent className="pt-6 text-sm text-muted-foreground" data-testid="text-offer-portal-state">
-            Please review and accept your offer letter to unlock the Trainee Workspace.
-          </CardContent>
-        </Card>
-      )}
+      <Tabs defaultValue="overview" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="offer-letter">Offer Letter</TabsTrigger>
+          <TabsTrigger value="check-ins">Check-ins & Logs</TabsTrigger>
+        </TabsList>
 
-      {hasAcceptedOffer && engagement?.status !== "active" && (
-        <Card className="border-primary/40">
-          <CardContent className="pt-6 text-sm text-muted-foreground" data-testid="text-offer-accepted-pending-active">
-            Your offer has been accepted. Activity logs will be available when your engagement becomes active.
-          </CardContent>
-        </Card>
-      )}
+        <TabsContent value="overview" className="space-y-6">
+          {!documentsQuery.isLoading && !hasAcceptedOffer && (
+            <Card className="border-primary/40">
+              <CardContent className="pt-6 text-sm text-muted-foreground" data-testid="text-offer-portal-state">
+                Please review and accept your offer letter to unlock the Trainee Workspace.
+              </CardContent>
+            </Card>
+          )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <Card className="xl:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <GraduationCap className="h-5 w-5" />
-              Current Engagement
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {engagementQuery.isLoading ? (
-              <p className="text-muted-foreground">Loading engagement...</p>
-            ) : !engagement ? (
-              <p className="text-muted-foreground">No current engagement is available yet.</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="card-current-engagement">
-                <div>
-                  <p className="text-sm text-muted-foreground">Engagement Type</p>
-                  <p className="font-medium capitalize">{formatValue(engagement.engagement_type)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Status</p>
-                  <Badge variant={engagement.status === "active" ? "default" : "secondary"}>{engagement.status}</Badge>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Start Date</p>
-                  <p className="font-medium">{formatDate(engagement.start_date)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">End Date</p>
-                  <p className="font-medium">{formatDate(engagement.end_date)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Schedule Type</p>
-                  <p className="font-medium capitalize">{formatValue(engagement.schedule_type)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Expected Hours Per Week</p>
-                  <p className="font-medium">{formatValue(engagement.expected_hours_per_week)}</p>
-                </div>
-                <div className="md:col-span-2">
-                  <p className="text-sm text-muted-foreground">Work Scope</p>
-                  <p className="font-medium whitespace-pre-wrap">{formatValue(engagement.work_scope)}</p>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+          {hasAcceptedOffer && engagement?.status !== "active" && (
+            <Card className="border-primary/40">
+              <CardContent className="pt-6 text-sm text-muted-foreground" data-testid="text-offer-accepted-pending-active">
+                Your offer has been accepted. Learning Activity Logs will be available when your engagement becomes active.
+              </CardContent>
+            </Card>
+          )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <UserRound className="h-5 w-5" />
-              Supervisor
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {engagement?.supervisor ? (
-              <div className="space-y-2" data-testid="card-supervisor-details">
-                <p className="font-medium">{engagement.supervisor.name}</p>
-                <p className="text-sm text-muted-foreground">{engagement.supervisor.email}</p>
-                <Badge variant="outline">{ROLE_DISPLAY_NAMES[engagement.supervisor.role] ?? engagement.supervisor.role}</Badge>
-              </div>
-            ) : (
-              <p className="text-muted-foreground" data-testid="text-supervisor-fallback">
-                Supervisor information is not available yet.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="xl:col-span-3">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Offer Letter
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {documentsQuery.isLoading ? (
-              <p className="text-muted-foreground">Loading offer letter...</p>
-            ) : !offerLetter ? (
-              <p className="text-muted-foreground" data-testid="text-no-offer-letter">
-                No offer letter is available yet.
-              </p>
-            ) : offerLetter.status === "voided" ? (
-              <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground" data-testid="text-offer-letter-voided">
-                This offer letter is no longer available.
-              </p>
-            ) : (
-              <div className="space-y-4" data-testid="card-offer-letter">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-medium">{offerLetter.title}</h2>
-                      <Badge variant={getOfferLetterStatusVariant(offerLetter.status)}>{offerLetter.status}</Badge>
-                      <Badge variant="outline">v{offerLetter.version}</Badge>
-                    </div>
-                    {offerLetter.accepted_at && (
-                      <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-                        <CheckCircle2 className="h-4 w-4" />
-                        Accepted {formatDateTime(offerLetter.accepted_at)}
-                      </p>
-                    )}
-                  </div>
-                  <Button
-                    variant="outline"
-                    onClick={() => downloadOfferLetter(offerLetter)}
-                    data-testid="button-download-offer-letter"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Download PDF
-                  </Button>
-                </div>
-
-                <div className="rounded-md border border-border bg-muted/20 p-4">
-                  <p className="whitespace-pre-wrap text-sm leading-6">{offerLetter.body}</p>
-                </div>
-
-                {offerLetter.status === "accepted" ? (
-                  <Button disabled data-testid="button-offer-letter-accepted">
-                    Accepted
-                  </Button>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <Card className="xl:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <GraduationCap className="h-5 w-5" />
+                  Current Engagement
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {engagementQuery.isLoading ? (
+                  <p className="text-muted-foreground">Loading engagement...</p>
+                ) : !engagement ? (
+                  <p className="text-muted-foreground">No current engagement is available yet.</p>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center space-x-2">
-                      <Checkbox
-                        id="offer-letter-acknowledgement"
-                        checked={offerAcceptedAcknowledgement}
-                        onCheckedChange={(checked) => setOfferAcceptedAcknowledgement(checked === true)}
-                        data-testid="checkbox-offer-letter-acknowledgement"
-                      />
-                      <Label htmlFor="offer-letter-acknowledgement" className="text-sm">
-                        I have read and accept this offer letter.
-                      </Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="card-current-engagement">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Engagement Type</p>
+                      <p className="font-medium capitalize">{formatValue(engagement.engagement_type)}</p>
                     </div>
-                    <Button
-                      onClick={() => acceptOfferLetterMutation.mutate(offerLetter.id)}
-                      disabled={!offerAcceptedAcknowledgement || acceptOfferLetterMutation.isPending}
-                      data-testid="button-accept-offer-letter"
-                    >
-                      {acceptOfferLetterMutation.isPending ? "Accepting..." : "Accept Offer Letter"}
-                    </Button>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Status</p>
+                      <Badge variant={engagement.status === "active" ? "default" : "secondary"}>{engagement.status}</Badge>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Start Date</p>
+                      <p className="font-medium">{formatDate(engagement.start_date)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">End Date</p>
+                      <p className="font-medium">{formatDate(engagement.end_date)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Schedule Type</p>
+                      <p className="font-medium capitalize">{formatValue(engagement.schedule_type)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Expected Hours Per Week</p>
+                      <p className="font-medium">{formatValue(engagement.expected_hours_per_week)}</p>
+                    </div>
+                    <div className="md:col-span-2">
+                      <p className="text-sm text-muted-foreground">Work Scope</p>
+                      <p className="font-medium whitespace-pre-wrap">{formatValue(engagement.work_scope)}</p>
+                    </div>
                   </div>
                 )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+              </CardContent>
+            </Card>
 
-      {hasAcceptedOffer && (
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <Card className="xl:col-span-1">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ClipboardList className="h-5 w-5" />
-              Activity Log
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4" data-testid="form-activity-log">
-              <p className="text-sm text-muted-foreground">
-                Use this to record training, office hours, learning activities, or supervised draft work. This is not a payroll timesheet.
-              </p>
-
-              {!canSubmitActivity && (
-                <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground" data-testid="text-activity-disabled">
-                  Activity log submission is available only when your engagement is active.
-                </p>
-              )}
-
-              <div>
-                <Label htmlFor="activity-type">Activity Type</Label>
-                <Select value={activityType} onValueChange={(value) => setActivityType(value as AdminActivityType)}>
-                  <SelectTrigger id="activity-type" data-testid="select-activity-type">
-                    <SelectValue placeholder="Select activity type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {activityTypes.map((type) => (
-                      <SelectItem key={type} value={type}>{ACTIVITY_TYPE_LABELS[type]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <Label htmlFor="activity-date">Activity Date</Label>
-                <Input
-                  id="activity-date"
-                  type="date"
-                  value={activityDate}
-                  onChange={(event) => setActivityDate(event.target.value)}
-                  data-testid="input-activity-date"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="duration-minutes">Duration Minutes</Label>
-                <Input
-                  id="duration-minutes"
-                  type="number"
-                  min="1"
-                  max="480"
-                  value={durationMinutes}
-                  onChange={(event) => setDurationMinutes(event.target.value)}
-                  placeholder="Optional"
-                  data-testid="input-duration-minutes"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="activity-summary">Summary</Label>
-                <Textarea
-                  id="activity-summary"
-                  value={summary}
-                  onChange={(event) => setSummary(event.target.value)}
-                  maxLength={2000}
-                  placeholder="Summarize the activity"
-                  data-testid="textarea-activity-summary"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="learning-objective">Learning Objective</Label>
-                <Textarea
-                  id="learning-objective"
-                  value={learningObjective}
-                  onChange={(event) => setLearningObjective(event.target.value)}
-                  maxLength={1000}
-                  placeholder="Optional"
-                  data-testid="textarea-learning-objective"
-                />
-              </div>
-
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={!canSubmitActivity || createActivityLogMutation.isPending}
-                data-testid="button-submit-activity-log"
-              >
-                {createActivityLogMutation.isPending ? "Submitting..." : "Submit Activity Log"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card className="xl:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CalendarDays className="h-5 w-5" />
-              Recent Activity Logs
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {activityLogsQuery.isLoading ? (
-              <p className="text-muted-foreground">Loading activity logs...</p>
-            ) : logs.length === 0 ? (
-              <p className="text-muted-foreground" data-testid="text-no-activity-logs">No activity logs submitted yet.</p>
-            ) : (
-              <div className="space-y-4" data-testid="list-activity-logs">
-                {logs.map((log) => (
-                  <div key={log.id} className="rounded-md border border-border p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-                      <div>
-                        <p className="font-medium">{ACTIVITY_TYPE_LABELS[log.activity_type]}</p>
-                        <p className="text-sm text-muted-foreground">{formatDate(log.activity_date)}</p>
-                      </div>
-                      <Badge variant={log.status === "reviewed" ? "default" : "secondary"}>{log.status}</Badge>
-                    </div>
-                    <p className="text-sm whitespace-pre-wrap">{log.summary}</p>
-                    {log.duration_minutes && (
-                      <p className="text-xs text-muted-foreground mt-2">Duration: {log.duration_minutes} minutes</p>
-                    )}
-                    {log.learning_objective && (
-                      <p className="text-xs text-muted-foreground mt-2">Learning objective: {log.learning_objective}</p>
-                    )}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <UserRound className="h-5 w-5" />
+                  Supervisor
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {engagement?.supervisor ? (
+                  <div className="space-y-2" data-testid="card-supervisor-details">
+                    <p className="font-medium">{engagement.supervisor.name}</p>
+                    <p className="text-sm text-muted-foreground">{engagement.supervisor.email}</p>
+                    <Badge variant="outline">{ROLE_DISPLAY_NAMES[engagement.supervisor.role] ?? engagement.supervisor.role}</Badge>
                   </div>
-                ))}
+                ) : (
+                  <p className="text-muted-foreground" data-testid="text-supervisor-fallback">
+                    Supervisor information is not available yet.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="offer-letter" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5" />
+                Offer Letter
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {documentsQuery.isLoading ? (
+                <p className="text-muted-foreground">Loading offer letter...</p>
+              ) : !offerLetter ? (
+                <p className="text-muted-foreground" data-testid="text-no-offer-letter">
+                  No offer letter is available yet.
+                </p>
+              ) : offerLetter.status === "voided" ? (
+                <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground" data-testid="text-offer-letter-voided">
+                  This offer letter is no longer available.
+                </p>
+              ) : (
+                <div className="space-y-4" data-testid="card-offer-letter">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-lg font-medium">{offerLetter.title}</h2>
+                        <Badge variant={getOfferLetterStatusVariant(offerLetter.status)}>{offerLetter.status}</Badge>
+                        <Badge variant="outline">v{offerLetter.version}</Badge>
+                      </div>
+                      {offerLetter.accepted_at && (
+                        <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                          <CheckCircle2 className="h-4 w-4" />
+                          Accepted {formatDateTime(offerLetter.accepted_at)}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => downloadOfferLetter(offerLetter)}
+                      data-testid="button-download-offer-letter"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Download PDF
+                    </Button>
+                  </div>
+
+                  <div className="rounded-md border border-border bg-muted/20 p-4">
+                    <p className="whitespace-pre-wrap text-sm leading-6">{offerLetter.body}</p>
+                  </div>
+
+                  {offerLetter.status === "accepted" ? (
+                    <Button disabled data-testid="button-offer-letter-accepted">
+                      Accepted
+                    </Button>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="offer-letter-acknowledgement"
+                          checked={offerAcceptedAcknowledgement}
+                          onCheckedChange={(checked) => setOfferAcceptedAcknowledgement(checked === true)}
+                          data-testid="checkbox-offer-letter-acknowledgement"
+                        />
+                        <Label htmlFor="offer-letter-acknowledgement" className="text-sm">
+                          I have read and accept this offer letter.
+                        </Label>
+                      </div>
+                      <Button
+                        onClick={() => acceptOfferLetterMutation.mutate(offerLetter.id)}
+                        disabled={!offerAcceptedAcknowledgement || acceptOfferLetterMutation.isPending}
+                        data-testid="button-accept-offer-letter"
+                      >
+                        {acceptOfferLetterMutation.isPending ? "Accepting..." : "Accept Offer Letter"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="check-ins" className="space-y-6">
+          {!hasAcceptedOffer ? (
+            <Card className="border-primary/40">
+              <CardContent className="pt-6 text-sm text-muted-foreground">
+                Accept your offer letter before setting up feedback meetings or submitting Learning Activity Logs.
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <Card className="xl:col-span-1">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <CalendarDays className="h-5 w-5" />
+                      Feedback Meeting Schedule
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {checkInsQuery.isLoading ? (
+                      <p className="text-muted-foreground">Loading feedback meeting options...</p>
+                    ) : selectedSchedule ? (
+                      <div className="space-y-4" data-testid="card-feedback-schedule">
+                        <div className="rounded-md border border-border p-3">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <Badge variant={selectedSchedule.status === "confirmed" ? "default" : "outline"}>
+                              {selectedSchedule.status === "change_requested" ? "Change Requested" : "Confirmed"}
+                            </Badge>
+                            <span className="text-sm text-muted-foreground">
+                              {selectedSchedule.frequency_per_week} per week
+                            </span>
+                          </div>
+                          <div className="space-y-1 text-sm">
+                            {selectedSchedule.selected_slots.map((slot) => (
+                              <p key={slot.id}>{formatFeedbackSlot(slot)}</p>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="schedule-change-note">Request Schedule Change</Label>
+                          <Textarea
+                            id="schedule-change-note"
+                            value={scheduleChangeNote}
+                            onChange={(event) => setScheduleChangeNote(event.target.value)}
+                            maxLength={1000}
+                            placeholder="Optional note"
+                            data-testid="textarea-schedule-change-note"
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={() => requestScheduleChangeMutation.mutate()}
+                            disabled={requestScheduleChangeMutation.isPending || selectedSchedule.status === "change_requested"}
+                            data-testid="button-request-schedule-change"
+                          >
+                            {requestScheduleChangeMutation.isPending ? "Requesting..." : "Request Change"}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4" data-testid="form-feedback-schedule">
+                        <p className="text-sm text-muted-foreground">
+                          Select recurring Feedback Meeting times from your supervisor's available slots. This required setup should be completed within 7 days after accepting the offer.
+                        </p>
+                        <div>
+                          <Label htmlFor="feedback-frequency">Frequency</Label>
+                          <Select value={frequencyPerWeek} onValueChange={updateFrequency}>
+                            <SelectTrigger id="feedback-frequency" data-testid="select-feedback-frequency">
+                              <SelectValue placeholder="Select frequency" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="1">1 per week</SelectItem>
+                              <SelectItem value="2">2 per week</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label htmlFor="feedback-timezone">Timezone</Label>
+                          <Input
+                            id="feedback-timezone"
+                            value={feedbackTimezone}
+                            onChange={(event) => setFeedbackTimezone(event.target.value)}
+                            data-testid="input-feedback-timezone"
+                          />
+                        </div>
+                        {Array.from({ length: Number(frequencyPerWeek) }, (_, index) => (
+                          <div key={index}>
+                            <Label>Feedback Meeting Slot {index + 1}</Label>
+                            <Select
+                              value={selectedFeedbackSlotIds[index] ?? ""}
+                              onValueChange={(value) => updateSelectedFeedbackSlot(index, value)}
+                            >
+                              <SelectTrigger data-testid={`select-feedback-slot-${index}`}>
+                                <SelectValue placeholder="Select available slot" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {feedbackSlots.map((slot) => (
+                                  <SelectItem
+                                    key={slot.id}
+                                    value={String(slot.id)}
+                                    disabled={selectedFeedbackSlotIds.includes(String(slot.id)) && selectedFeedbackSlotIds[index] !== String(slot.id)}
+                                  >
+                                    {formatFeedbackSlot(slot)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ))}
+                        {feedbackSlots.length === 0 && (
+                          <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                            No supervisor-defined Feedback Meeting slots are available yet.
+                          </p>
+                        )}
+                        <Button
+                          onClick={() => confirmFeedbackScheduleMutation.mutate()}
+                          disabled={!canConfirmFeedbackSchedule || confirmFeedbackScheduleMutation.isPending}
+                          data-testid="button-confirm-feedback-schedule"
+                        >
+                          {confirmFeedbackScheduleMutation.isPending ? "Confirming..." : "Confirm Feedback Meeting Schedule"}
+                        </Button>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="xl:col-span-2">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <CalendarDays className="h-5 w-5" />
+                      Upcoming Feedback Meetings
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {checkInsQuery.isLoading ? (
+                      <p className="text-muted-foreground">Loading feedback meetings...</p>
+                    ) : upcomingMeetingOccurrences.length === 0 ? (
+                      <p className="text-muted-foreground" data-testid="text-no-feedback-meetings">
+                        No upcoming Feedback Meetings are scheduled yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-4" data-testid="list-feedback-meetings">
+                        {upcomingMeetingOccurrences.map((occurrence) => {
+                          const form = absenceForms[occurrence.id] ?? { reason: "", note: "" };
+                          const canRequestAbsence = occurrence.status === "scheduled";
+                          return (
+                            <div key={occurrence.id} className="rounded-md border border-border p-4">
+                              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-medium">{formatDate(occurrence.occurrence_date)}</p>
+                                  <p className="text-sm text-muted-foreground">
+                                    {occurrence.start_time}-{occurrence.end_time} {occurrence.timezone}
+                                  </p>
+                                </div>
+                                <Badge variant={getMeetingStatusVariant(occurrence.status)}>
+                                  {MEETING_STATUS_LABELS[occurrence.status]}
+                                </Badge>
+                              </div>
+                              {occurrence.absence_reason && (
+                                <p className="mb-3 rounded-md bg-muted/40 p-3 text-sm">
+                                  Absence Request: {occurrence.absence_reason}
+                                </p>
+                              )}
+                              {canRequestAbsence && (
+                                <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+                                  <Input
+                                    value={form.reason}
+                                    onChange={(event) => updateAbsenceForm(occurrence.id, "reason", event.target.value)}
+                                    placeholder="Absence request reason"
+                                    data-testid={`input-absence-reason-${occurrence.id}`}
+                                  />
+                                  <Input
+                                    value={form.note}
+                                    onChange={(event) => updateAbsenceForm(occurrence.id, "note", event.target.value)}
+                                    placeholder="Optional note"
+                                    data-testid={`input-absence-note-${occurrence.id}`}
+                                  />
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => requestAbsenceMutation.mutate(occurrence.id)}
+                                    disabled={!form.reason.trim() || requestAbsenceMutation.isPending}
+                                    data-testid={`button-request-absence-${occurrence.id}`}
+                                  >
+                                    Absence Request
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-      )}
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <Card className="xl:col-span-1">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <ClipboardList className="h-5 w-5" />
+                      Learning Activity Log
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <form onSubmit={handleSubmit} className="space-y-4" data-testid="form-activity-log">
+                      <p className="text-sm text-muted-foreground">
+                        Record training, office hours, learning activities, or supervised draft work for your engagement record.
+                      </p>
+
+                      {!canSubmitActivity && (
+                        <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground" data-testid="text-activity-disabled">
+                          Learning Activity Log submission is available when your engagement is active.
+                        </p>
+                      )}
+
+                      <div>
+                        <Label htmlFor="activity-type">Activity Type</Label>
+                        <Select value={activityType} onValueChange={(value) => setActivityType(value as AdminActivityType)}>
+                          <SelectTrigger id="activity-type" data-testid="select-activity-type">
+                            <SelectValue placeholder="Select activity type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {activityTypes.map((type) => (
+                              <SelectItem key={type} value={type}>{ACTIVITY_TYPE_LABELS[type]}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div>
+                        <Label htmlFor="activity-date">Activity Date</Label>
+                        <Input
+                          id="activity-date"
+                          type="date"
+                          value={activityDate}
+                          onChange={(event) => setActivityDate(event.target.value)}
+                          data-testid="input-activity-date"
+                        />
+                      </div>
+
+                      <div>
+                        <Label htmlFor="duration-minutes">Duration Minutes</Label>
+                        <Input
+                          id="duration-minutes"
+                          type="number"
+                          min="1"
+                          max="480"
+                          value={durationMinutes}
+                          onChange={(event) => setDurationMinutes(event.target.value)}
+                          placeholder="Optional"
+                          data-testid="input-duration-minutes"
+                        />
+                      </div>
+
+                      <div>
+                        <Label htmlFor="activity-summary">Summary</Label>
+                        <Textarea
+                          id="activity-summary"
+                          value={summary}
+                          onChange={(event) => setSummary(event.target.value)}
+                          maxLength={2000}
+                          placeholder="Summarize the activity"
+                          data-testid="textarea-activity-summary"
+                        />
+                      </div>
+
+                      <div>
+                        <Label htmlFor="learning-objective">Learning Objective</Label>
+                        <Textarea
+                          id="learning-objective"
+                          value={learningObjective}
+                          onChange={(event) => setLearningObjective(event.target.value)}
+                          maxLength={1000}
+                          placeholder="Optional"
+                          data-testid="textarea-learning-objective"
+                        />
+                      </div>
+
+                      <Button
+                        type="submit"
+                        className="w-full"
+                        disabled={!canSubmitActivity || createActivityLogMutation.isPending}
+                        data-testid="button-submit-activity-log"
+                      >
+                        {createActivityLogMutation.isPending ? "Submitting..." : "Submit Learning Activity Log"}
+                      </Button>
+                    </form>
+                  </CardContent>
+                </Card>
+
+                <Card className="xl:col-span-2">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <ClipboardList className="h-5 w-5" />
+                      Recent Learning Activity Logs
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {activityLogsQuery.isLoading ? (
+                      <p className="text-muted-foreground">Loading Learning Activity Logs...</p>
+                    ) : logs.length === 0 ? (
+                      <p className="text-muted-foreground" data-testid="text-no-activity-logs">No Learning Activity Logs submitted yet.</p>
+                    ) : (
+                      <div className="space-y-4" data-testid="list-activity-logs">
+                        {logs.map((log) => (
+                          <div key={log.id} className="rounded-md border border-border p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                              <div>
+                                <p className="font-medium">{ACTIVITY_TYPE_LABELS[log.activity_type]}</p>
+                                <p className="text-sm text-muted-foreground">{formatDate(log.activity_date)}</p>
+                              </div>
+                              <Badge variant={log.status === "reviewed" ? "default" : "secondary"}>{log.status}</Badge>
+                            </div>
+                            <p className="text-sm whitespace-pre-wrap">{log.summary}</p>
+                            {log.duration_minutes && (
+                              <p className="text-xs text-muted-foreground mt-2">Duration: {log.duration_minutes} minutes</p>
+                            )}
+                            {log.learning_objective && (
+                              <p className="text-xs text-muted-foreground mt-2">Learning objective: {log.learning_objective}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </>
+          )}
+        </TabsContent>
+      </Tabs>
 
       {canEndEngagement && (
         <Card>

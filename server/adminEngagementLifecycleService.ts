@@ -2,13 +2,14 @@ import { storage, type IStorage } from "./storage";
 
 export interface EngagementLifecycleTransitionError {
   engagementId: number;
-  phase: "activation" | "offboarding";
+  phase: "activation" | "offboarding" | "feedback_schedule";
   message: string;
 }
 
 export interface EngagementLifecycleTransitionResult {
   activatedCount: number;
   offboardedCount: number;
+  voidedOfferLetterCount: number;
   errors: EngagementLifecycleTransitionError[];
 }
 
@@ -76,16 +77,44 @@ export async function offboardExpiredEngagements(
   return { offboardedCount, errors };
 }
 
+export async function voidOffersMissingFeedbackSchedule(
+  now = new Date(),
+  lifecycleStorage: IStorage = storage
+): Promise<{ voidedOfferLetterCount: number; errors: EngagementLifecycleTransitionError[] }> {
+  const overdueDocuments = await lifecycleStorage.listAcceptedOfferLettersMissingFeedbackSchedule(now);
+  let voidedOfferLetterCount = 0;
+  const errors: EngagementLifecycleTransitionError[] = [];
+
+  for (const document of overdueDocuments) {
+    try {
+      const voided = await lifecycleStorage.voidOfferLetterForMissingFeedbackSchedule(document.id, now);
+      if (voided) {
+        voidedOfferLetterCount += 1;
+      }
+    } catch (error) {
+      errors.push({
+        engagementId: document.engagementId,
+        phase: "feedback_schedule",
+        message: errorMessage(error),
+      });
+    }
+  }
+
+  return { voidedOfferLetterCount, errors };
+}
+
 export async function runEngagementLifecycleTransitions(
   now = new Date(),
   lifecycleStorage: IStorage = storage
 ): Promise<EngagementLifecycleTransitionResult> {
+  const missingFeedbackSchedules = await voidOffersMissingFeedbackSchedule(now, lifecycleStorage);
   const activation = await activateDueEngagements(now, lifecycleStorage);
   const offboarding = await offboardExpiredEngagements(now, lifecycleStorage);
 
   return {
     activatedCount: activation.activatedCount,
     offboardedCount: offboarding.offboardedCount,
-    errors: [...activation.errors, ...offboarding.errors],
+    voidedOfferLetterCount: missingFeedbackSchedules.voidedOfferLetterCount,
+    errors: [...missingFeedbackSchedules.errors, ...activation.errors, ...offboarding.errors],
   };
 }

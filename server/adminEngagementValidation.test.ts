@@ -827,19 +827,23 @@ test("trainee login redirects to trainee workspace and app defines safe route", 
   assert.match(protectedRouteSource, /accessGroups\.includes\(accessGroup\)/);
   assert.match(protectedRouteSource, /allowedRoles/);
   assert.match(traineePageSource, /Trainee Workspace/);
+  assert.match(traineePageSource, /TabsTrigger value="overview"/);
+  assert.match(traineePageSource, /TabsTrigger value="offer-letter"/);
+  assert.match(traineePageSource, /TabsTrigger value="check-ins"/);
   assert.match(traineePageSource, /Current Engagement/);
-  assert.match(traineePageSource, /Activity Log/);
-  assert.match(traineePageSource, /Recent Activity Logs/);
+  assert.match(traineePageSource, /Feedback Meeting Schedule/);
+  assert.match(traineePageSource, /Absence Request/);
+  assert.match(traineePageSource, /Learning Activity Log/);
+  assert.match(traineePageSource, /Recent Learning Activity Logs/);
   assert.match(traineePageSource, /Please review and accept your offer letter to unlock the Trainee Workspace/);
-  assert.match(traineePageSource, /Your offer has been accepted\. Activity logs will be available when your engagement becomes active/);
+  assert.match(traineePageSource, /Your offer has been accepted\. Learning Activity Logs will be available when your engagement becomes active/);
   assert.match(traineePageSource, /enabled: hasAcceptedOffer/);
-  assert.match(traineePageSource, /This is not a payroll timesheet/);
-  assert.match(traineePageSource, /Activity log submission is available only when your engagement is active/);
-  assert.match(traineePageSource, /No activity logs submitted yet/);
+  assert.match(traineePageSource, /Learning Activity Log submission is available when your engagement is active/);
+  assert.match(traineePageSource, /No Learning Activity Logs submitted yet/);
   assert.match(traineePageSource, /Could not load your trainee workspace/);
   assert.match(traineePageSource, /End My Trainee Access/);
   assert.match(traineePageSource, /This will disable your trainee access/);
-  assert.doesNotMatch(traineePageSource, /delete account|Delete Account|Clock In|Clock Out/);
+  assert.doesNotMatch(traineePageSource, /delete account|Delete Account|Clock In|Clock Out|\bPTO\b|\btimesheet\b|\bpayroll\b|\bshift\b/i);
 });
 
 test("backend sensitive routes and engagement management APIs do not allow trainee access", async () => {
@@ -1185,6 +1189,26 @@ test("trainee workspace APIs are scoped to authenticated trainee", async () => {
       route: '"/api/trainee/me/activity-logs"',
       access: /requireAccessGroup\('trainee_workspace'\)/,
     },
+    {
+      method: "get",
+      route: '"/api/trainee/me/check-ins"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
+    {
+      method: "post",
+      route: '"/api/trainee/me/feedback-schedule"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
+    {
+      method: "post",
+      route: '"/api/trainee/me/feedback-schedule/change-request"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
+    {
+      method: "post",
+      route: '"/api/trainee/me/feedback-meetings/:occurrenceId/absence-request"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
   ];
 
   for (const { method, route, access } of routeExpectations) {
@@ -1222,6 +1246,58 @@ test("trainee workspace APIs are scoped to authenticated trainee", async () => {
   assert.match(endBlock, /selfOffboardTraineeEngagement/);
   assert.match(endBlock, /adminUserId: req\.adminUser\.id/);
   assert.doesNotMatch(endBlock, /req\.params|req\.body\.adminUserId|req\.body\.engagementId|req\.body\.status|req\.body\.eventType/);
+});
+
+test("admin and assigned supervisor check-in APIs use scoped admin staff access", async () => {
+  const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.match(source, /const adminStaffAccessGroups: AdminAccessGroup\[\]/);
+  assert.match(source, /function canAccessEngagementCheckIns/);
+  assert.match(source, /adminUser\?\.role === 'super_admin' \|\| engagement\.supervisorAdminId === adminUser\?\.id/);
+
+  const scopedRoutes = [
+    '"/api/admin/engagements/:engagementId/check-ins"',
+    '"/api/admin/feedback-slots"',
+    '"/api/admin/feedback-slots/:slotId"',
+    '"/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status"',
+  ];
+
+  for (const route of scopedRoutes) {
+    const routeStart = source.indexOf(route);
+    assert.notEqual(routeStart, -1, `${route} should exist`);
+    const appStart = source.lastIndexOf("app.", routeStart);
+    const end = source.indexOf('\n  app.', routeStart + 1);
+    const block = source.slice(appStart, end === -1 ? source.length : end);
+    assert.match(block, /requireAuth/);
+    assert.match(block, /requireAnyAccessGroup\(adminStaffAccessGroups\)/);
+    assert.doesNotMatch(block, /requireRole\(\['super_admin'\]\)/);
+  }
+
+  const checkInsRoute = source.slice(
+    source.indexOf('"/api/admin/engagements/:engagementId/check-ins"'),
+    source.indexOf('"/api/admin/feedback-slots"'),
+  );
+  assert.match(checkInsRoute, /canAccessEngagementCheckIns\(req\.adminUser, engagement\)/);
+
+  const createSlotRoute = source.slice(
+    source.indexOf('"/api/admin/feedback-slots"'),
+    source.indexOf('"/api/admin/feedback-slots/:slotId"'),
+  );
+  assert.match(createSlotRoute, /payload\.supervisorAdminId !== req\.adminUser\.id/);
+  assert.match(createSlotRoute, /supervisor\.role === "trainee_access"/);
+
+  const updateSlotRoute = source.slice(
+    source.indexOf('"/api/admin/feedback-slots/:slotId"'),
+    source.indexOf('"/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status"'),
+  );
+  assert.match(updateSlotRoute, /listFeedbackSlotsForSupervisor\(req\.adminUser\.id\)/);
+
+  const statusRoute = source.slice(
+    source.indexOf('"/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status"'),
+    source.indexOf('app.get\("/api/admin/company-brand-defaults"', source.indexOf('"/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status"')),
+  );
+  assert.match(statusRoute, /canAccessEngagementCheckIns\(req\.adminUser, engagement\)/);
+  assert.match(statusRoute, /listFeedbackMeetingOccurrencesForEngagement\(engagementId\)/);
 });
 
 test("trainee engagement empty state and lifecycle metadata are sanitized", async () => {

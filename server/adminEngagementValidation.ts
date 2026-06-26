@@ -44,6 +44,10 @@ export const lifecycleEventTypeSchema = z.enum([
   'offer_letter_accepted',
   'offer_letter_declined',
   'offer_letter_voided',
+  'feedback_schedule_confirmed',
+  'feedback_schedule_change_requested',
+  'meeting_absence_requested',
+  'meeting_status_updated',
 ]);
 
 export const engagementDocumentTypeSchema = z.enum(['offer_letter']);
@@ -239,6 +243,78 @@ export const traineeEndEngagementPayloadSchema = z.object({
     (value) => typeof value === "string" && value.trim() === "" ? null : value,
     z.string().trim().max(1000).nullable().optional()
   ),
+}).strict();
+
+const timeOfDaySchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM time");
+const timezoneSchema = z.string().trim().min(1).max(100);
+
+export const feedbackMeetingStatusSchema = z.enum([
+  'scheduled',
+  'absence_requested',
+  'excused',
+  'completed',
+  'missed',
+  'cancelled',
+]);
+
+export const feedbackSlotPayloadSchema = z.object({
+  supervisorAdminId: z.number().int().positive(),
+  dayOfWeek: z.number().int().min(0).max(6),
+  startTime: timeOfDaySchema,
+  endTime: timeOfDaySchema,
+  timezone: timezoneSchema,
+}).superRefine((data, ctx) => {
+  if (data.endTime <= data.startTime) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['endTime'],
+      message: 'End time must be after start time',
+    });
+  }
+});
+
+export const feedbackSlotUpdatePayloadSchema = z.object({
+  status: z.enum(['active', 'inactive']),
+}).strict();
+
+export const feedbackSchedulePayloadSchema = z.object({
+  frequencyPerWeek: z.number().int().min(1).max(2),
+  slotIds: z.array(z.number().int().positive()).min(1).max(2),
+  timezone: timezoneSchema,
+}).superRefine((data, ctx) => {
+  if (data.slotIds.length !== data.frequencyPerWeek) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['slotIds'],
+      message: 'Select one slot per weekly feedback meeting',
+    });
+  }
+  if (new Set(data.slotIds).size !== data.slotIds.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['slotIds'],
+      message: 'Selected feedback meeting slots must be unique',
+    });
+  }
+});
+
+export const feedbackScheduleChangeRequestPayloadSchema = z.object({
+  note: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? null : value,
+    z.string().trim().max(1000).nullable().optional()
+  ),
+}).strict();
+
+export const meetingAbsenceRequestPayloadSchema = z.object({
+  reason: z.string().trim().min(1, "Reason is required").max(500),
+  note: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? null : value,
+    z.string().trim().max(1000).nullable().optional()
+  ),
+}).strict();
+
+export const meetingStatusUpdatePayloadSchema = z.object({
+  status: feedbackMeetingStatusSchema,
 }).strict();
 
 const manualTemplateMergeValuesSchema = {

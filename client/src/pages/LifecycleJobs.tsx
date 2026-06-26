@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 type LifecycleTransitionResult = {
   activated_count: number;
   offboarded_count: number;
+  voided_offer_letters_count?: number;
   errors?: Array<{ engagementId?: number; phase?: string; message?: string }>;
 };
 
@@ -25,7 +26,7 @@ export default function LifecycleJobs() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       toast({
         title: "Lifecycle transitions run",
-        description: `Activated ${result.activated_count}, offboarded ${result.offboarded_count}.`,
+        description: `Activated ${result.activated_count}, offboarded ${result.offboarded_count}, voided offers ${result.voided_offer_letters_count ?? 0}.`,
         variant: result.errors && result.errors.length > 0 ? "warning" : "default",
       });
     },
@@ -61,7 +62,7 @@ export default function LifecycleJobs() {
         </CardHeader>
         <CardContent className="space-y-5">
           <p className="text-sm text-muted-foreground">
-            Checks all due trainee engagements, not only one user. Due starts are activated, and expired engagements are offboarded.
+            Checks all due trainee engagements, not only one user. Due starts are activated, expired engagements are offboarded, and accepted offers missing a required feedback meeting schedule after 7 days are voided.
           </p>
 
           <Button
@@ -77,6 +78,7 @@ export default function LifecycleJobs() {
             <div className="flex flex-wrap gap-3" data-testid="lifecycle-job-result">
               <Badge variant="outline">Activated {result.activated_count}</Badge>
               <Badge variant="outline">Offboarded {result.offboarded_count}</Badge>
+              <Badge variant="outline">Voided offers {result.voided_offer_letters_count ?? 0}</Badge>
               <Badge variant={errors.length > 0 ? "destructive" : "secondary"}>Errors {errors.length}</Badge>
             </div>
           )}

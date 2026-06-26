@@ -7,6 +7,9 @@ const REQUIRED_TABLES = [
   "admin_engagement_documents",
   "admin_document_templates",
   "admin_user_access_grants",
+  "supervisor_feedback_slots",
+  "engagement_feedback_schedules",
+  "feedback_meeting_occurrences",
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -38,6 +41,22 @@ const REQUIRED_COLUMNS = [
   ["admin_document_templates", "body_template"],
   ["admin_document_templates", "allowed_variables"],
   ["admin_document_templates", "content_format"],
+  ["supervisor_feedback_slots", "supervisor_admin_id"],
+  ["supervisor_feedback_slots", "day_of_week"],
+  ["supervisor_feedback_slots", "start_time"],
+  ["supervisor_feedback_slots", "end_time"],
+  ["supervisor_feedback_slots", "timezone"],
+  ["supervisor_feedback_slots", "status"],
+  ["engagement_feedback_schedules", "engagement_id"],
+  ["engagement_feedback_schedules", "frequency_per_week"],
+  ["engagement_feedback_schedules", "timezone"],
+  ["engagement_feedback_schedules", "selected_slots"],
+  ["engagement_feedback_schedules", "status"],
+  ["feedback_meeting_occurrences", "schedule_id"],
+  ["feedback_meeting_occurrences", "occurrence_date"],
+  ["feedback_meeting_occurrences", "timezone"],
+  ["feedback_meeting_occurrences", "status"],
+  ["feedback_meeting_occurrences", "absence_reason"],
 ] as const;
 
 const REQUIRED_LIFECYCLE_EVENT_TYPES = [
@@ -55,6 +74,10 @@ const REQUIRED_LIFECYCLE_EVENT_TYPES = [
   "offer_letter_accepted",
   "offer_letter_declined",
   "offer_letter_voided",
+  "feedback_schedule_confirmed",
+  "feedback_schedule_change_requested",
+  "meeting_absence_requested",
+  "meeting_status_updated",
 ] as const;
 
 export class SchemaNotReadyError extends Error {

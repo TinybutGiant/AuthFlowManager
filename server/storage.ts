@@ -6,6 +6,9 @@ import {
   adminEngagements,
   adminLifecycleEvents,
   adminActivityLogs,
+  supervisorFeedbackSlots,
+  engagementFeedbackSchedules,
+  feedbackMeetingOccurrences,
   adminEngagementDocuments,
   adminDocumentTemplates,
   type User,
@@ -20,6 +23,12 @@ import {
   type InsertAdminLifecycleEvent,
   type AdminActivityLog,
   type InsertAdminActivityLog,
+  type SupervisorFeedbackSlot,
+  type InsertSupervisorFeedbackSlot,
+  type EngagementFeedbackSchedule,
+  type InsertEngagementFeedbackSchedule,
+  type FeedbackMeetingOccurrence,
+  type InsertFeedbackMeetingOccurrence,
   type AdminEngagementDocument,
   type InsertAdminEngagementDocument,
   type AdminDocumentTemplate,
@@ -129,6 +138,32 @@ export interface IStorage {
     activityLog: InsertAdminActivityLog,
     event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
   ): Promise<AdminActivityLog>;
+  listFeedbackSlotsForSupervisor(supervisorAdminId: number): Promise<SupervisorFeedbackSlot[]>;
+  createFeedbackSlot(slot: InsertSupervisorFeedbackSlot): Promise<SupervisorFeedbackSlot>;
+  updateFeedbackSlot(id: number, updates: Partial<SupervisorFeedbackSlot>): Promise<SupervisorFeedbackSlot | undefined>;
+  getActiveFeedbackScheduleForEngagement(engagementId: number): Promise<EngagementFeedbackSchedule | undefined>;
+  listFeedbackSchedulesForEngagement(engagementId: number): Promise<EngagementFeedbackSchedule[]>;
+  confirmFeedbackScheduleWithOccurrences(
+    schedule: InsertEngagementFeedbackSchedule,
+    occurrences: Omit<InsertFeedbackMeetingOccurrence, "scheduleId">[],
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<{ schedule: EngagementFeedbackSchedule; occurrences: FeedbackMeetingOccurrence[] }>;
+  requestFeedbackScheduleChange(
+    engagementId: number,
+    adminUserId: number,
+    input: { note?: string | null; now?: Date }
+  ): Promise<EngagementFeedbackSchedule | undefined>;
+  listFeedbackMeetingOccurrencesForEngagement(engagementId: number): Promise<FeedbackMeetingOccurrence[]>;
+  requestFeedbackMeetingAbsence(
+    occurrenceId: number,
+    engagementId: number,
+    adminUserId: number,
+    input: { reason: string; note?: string | null; now?: Date }
+  ): Promise<FeedbackMeetingOccurrence | undefined>;
+  updateFeedbackMeetingOccurrenceStatus(
+    occurrenceId: number,
+    input: { status: string; actorAdminId: number; now?: Date }
+  ): Promise<FeedbackMeetingOccurrence | undefined>;
   listAdminEngagementDocuments(engagementId: number): Promise<AdminEngagementDocument[]>;
   listTraineeEngagementDocuments(adminUserId: number): Promise<AdminEngagementDocument[]>;
   listAdminDocumentTemplates(filters?: { documentType?: string }): Promise<AdminDocumentTemplate[]>;
@@ -168,6 +203,8 @@ export interface IStorage {
     input: { now: Date; ip?: string | null; userAgent?: string | null }
   ): Promise<AdminEngagementDocument | undefined>;
   hasAcceptedOfferLetterForEngagement(engagementId: number): Promise<boolean>;
+  listAcceptedOfferLettersMissingFeedbackSchedule(now: Date): Promise<AdminEngagementDocument[]>;
+  voidOfferLetterForMissingFeedbackSchedule(documentId: number, now: Date): Promise<boolean>;
   listDueTraineeEngagementsForActivation(now: Date): Promise<AdminEngagement[]>;
   listExpiredActiveTraineeEngagements(now: Date): Promise<AdminEngagement[]>;
   activateTraineeEngagementLifecycle(engagementId: number, now: Date): Promise<boolean>;
@@ -519,6 +556,26 @@ export class DatabaseStorage implements IStorage {
             inArray(adminLifecycleEvents.engagementId, ownedEngagementIds),
           )
         : eq(adminLifecycleEvents.adminUserId, id);
+      const ownedFeedbackScheduleFilter = ownedEngagementIds.length > 0
+        ? or(
+            eq(engagementFeedbackSchedules.adminUserId, id),
+            eq(engagementFeedbackSchedules.supervisorAdminId, id),
+            inArray(engagementFeedbackSchedules.engagementId, ownedEngagementIds),
+          )
+        : or(
+            eq(engagementFeedbackSchedules.adminUserId, id),
+            eq(engagementFeedbackSchedules.supervisorAdminId, id),
+          );
+      const ownedFeedbackOccurrenceFilter = ownedEngagementIds.length > 0
+        ? or(
+            eq(feedbackMeetingOccurrences.adminUserId, id),
+            eq(feedbackMeetingOccurrences.supervisorAdminId, id),
+            inArray(feedbackMeetingOccurrences.engagementId, ownedEngagementIds),
+          )
+        : or(
+            eq(feedbackMeetingOccurrences.adminUserId, id),
+            eq(feedbackMeetingOccurrences.supervisorAdminId, id),
+          );
 
       await tx
         .update(adminUsers)
@@ -546,6 +603,16 @@ export class DatabaseStorage implements IStorage {
         .where(eq(adminActivityLogs.reviewedBy, id));
 
       await tx
+        .update(supervisorFeedbackSlots)
+        .set({ createdBy: null, updatedAt: new Date() })
+        .where(eq(supervisorFeedbackSlots.createdBy, id));
+
+      await tx
+        .update(feedbackMeetingOccurrences)
+        .set({ statusUpdatedBy: null, updatedAt: new Date() })
+        .where(eq(feedbackMeetingOccurrences.statusUpdatedBy, id));
+
+      await tx
         .update(adminEngagementDocuments)
         .set({ acceptedBy: null, voidedBy: null, createdBy: null, updatedAt: new Date() })
         .where(or(
@@ -561,6 +628,9 @@ export class DatabaseStorage implements IStorage {
 
       await tx.delete(adminEngagementDocuments).where(ownedDocumentFilter);
       await tx.delete(adminActivityLogs).where(ownedActivityLogFilter);
+      await tx.delete(feedbackMeetingOccurrences).where(ownedFeedbackOccurrenceFilter);
+      await tx.delete(engagementFeedbackSchedules).where(ownedFeedbackScheduleFilter);
+      await tx.delete(supervisorFeedbackSlots).where(eq(supervisorFeedbackSlots.supervisorAdminId, id));
       await tx.delete(adminLifecycleEvents).where(ownedLifecycleEventFilter);
       await tx.delete(adminUserAccessGrants).where(eq(adminUserAccessGrants.adminUserId, id));
       await tx.delete(adminUserApprovals).where(eq(adminUserApprovals.targetAdminId, id));
@@ -947,6 +1017,238 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async listFeedbackSlotsForSupervisor(supervisorAdminId: number): Promise<SupervisorFeedbackSlot[]> {
+    return await db
+      .select()
+      .from(supervisorFeedbackSlots)
+      .where(eq(supervisorFeedbackSlots.supervisorAdminId, supervisorAdminId))
+      .orderBy(supervisorFeedbackSlots.dayOfWeek, supervisorFeedbackSlots.startTime);
+  }
+
+  async createFeedbackSlot(slot: InsertSupervisorFeedbackSlot): Promise<SupervisorFeedbackSlot> {
+    const [created] = await db
+      .insert(supervisorFeedbackSlots)
+      .values(slot)
+      .returning();
+    return created;
+  }
+
+  async updateFeedbackSlot(
+    id: number,
+    updates: Partial<SupervisorFeedbackSlot>
+  ): Promise<SupervisorFeedbackSlot | undefined> {
+    const [slot] = await db
+      .update(supervisorFeedbackSlots)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(supervisorFeedbackSlots.id, id))
+      .returning();
+    return slot;
+  }
+
+  async getActiveFeedbackScheduleForEngagement(
+    engagementId: number
+  ): Promise<EngagementFeedbackSchedule | undefined> {
+    const [schedule] = await db
+      .select()
+      .from(engagementFeedbackSchedules)
+      .where(
+        and(
+          eq(engagementFeedbackSchedules.engagementId, engagementId),
+          inArray(engagementFeedbackSchedules.status, ["confirmed", "change_requested"])
+        )
+      )
+      .orderBy(desc(engagementFeedbackSchedules.createdAt))
+      .limit(1);
+    return schedule;
+  }
+
+  async listFeedbackSchedulesForEngagement(engagementId: number): Promise<EngagementFeedbackSchedule[]> {
+    return await db
+      .select()
+      .from(engagementFeedbackSchedules)
+      .where(eq(engagementFeedbackSchedules.engagementId, engagementId))
+      .orderBy(desc(engagementFeedbackSchedules.createdAt));
+  }
+
+  async confirmFeedbackScheduleWithOccurrences(
+    schedule: InsertEngagementFeedbackSchedule,
+    occurrences: Omit<InsertFeedbackMeetingOccurrence, "scheduleId">[],
+    event: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
+  ): Promise<{ schedule: EngagementFeedbackSchedule; occurrences: FeedbackMeetingOccurrence[] }> {
+    return await db.transaction(async (tx) => {
+      await tx
+        .update(engagementFeedbackSchedules)
+        .set({ status: "cancelled", updatedAt: schedule.confirmedAt ?? new Date() })
+        .where(
+          and(
+            eq(engagementFeedbackSchedules.engagementId, schedule.engagementId),
+            inArray(engagementFeedbackSchedules.status, ["confirmed", "change_requested"])
+          )
+        );
+
+      const [createdSchedule] = await tx
+        .insert(engagementFeedbackSchedules)
+        .values(schedule)
+        .returning();
+
+      const createdOccurrences = occurrences.length
+        ? await tx
+            .insert(feedbackMeetingOccurrences)
+            .values(occurrences.map((occurrence) => ({
+              ...occurrence,
+              scheduleId: createdSchedule.id,
+            })))
+            .returning()
+        : [];
+
+      await tx.insert(adminLifecycleEvents).values({
+        ...event,
+        adminUserId: createdSchedule.adminUserId,
+        engagementId: createdSchedule.engagementId,
+      });
+
+      return { schedule: createdSchedule, occurrences: createdOccurrences };
+    });
+  }
+
+  async requestFeedbackScheduleChange(
+    engagementId: number,
+    adminUserId: number,
+    input: { note?: string | null; now?: Date }
+  ): Promise<EngagementFeedbackSchedule | undefined> {
+    const now = input.now ?? new Date();
+    return await db.transaction(async (tx) => {
+      const [schedule] = await tx
+        .update(engagementFeedbackSchedules)
+        .set({
+          status: "change_requested",
+          changeRequestNote: input.note ?? null,
+          changeRequestedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(engagementFeedbackSchedules.engagementId, engagementId),
+            eq(engagementFeedbackSchedules.adminUserId, adminUserId),
+            eq(engagementFeedbackSchedules.status, "confirmed")
+          )
+        )
+        .returning();
+
+      if (!schedule) {
+        return undefined;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId,
+        engagementId,
+        eventType: "feedback_schedule_change_requested",
+        occurredAt: now,
+        actorAdminId: adminUserId,
+        metadata: { feedback_schedule_id: schedule.id },
+        notes: input.note ?? null,
+      });
+
+      return schedule;
+    });
+  }
+
+  async listFeedbackMeetingOccurrencesForEngagement(
+    engagementId: number
+  ): Promise<FeedbackMeetingOccurrence[]> {
+    return await db
+      .select()
+      .from(feedbackMeetingOccurrences)
+      .where(eq(feedbackMeetingOccurrences.engagementId, engagementId))
+      .orderBy(feedbackMeetingOccurrences.occurrenceDate, feedbackMeetingOccurrences.startTime);
+  }
+
+  async requestFeedbackMeetingAbsence(
+    occurrenceId: number,
+    engagementId: number,
+    adminUserId: number,
+    input: { reason: string; note?: string | null; now?: Date }
+  ): Promise<FeedbackMeetingOccurrence | undefined> {
+    const now = input.now ?? new Date();
+    return await db.transaction(async (tx) => {
+      const [occurrence] = await tx
+        .update(feedbackMeetingOccurrences)
+        .set({
+          status: "absence_requested",
+          absenceReason: input.reason,
+          absenceNote: input.note ?? null,
+          absenceRequestedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(feedbackMeetingOccurrences.id, occurrenceId),
+            eq(feedbackMeetingOccurrences.engagementId, engagementId),
+            eq(feedbackMeetingOccurrences.adminUserId, adminUserId),
+            eq(feedbackMeetingOccurrences.status, "scheduled")
+          )
+        )
+        .returning();
+
+      if (!occurrence) {
+        return undefined;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId,
+        engagementId,
+        eventType: "meeting_absence_requested",
+        occurredAt: now,
+        actorAdminId: adminUserId,
+        metadata: {
+          feedback_meeting_occurrence_id: occurrence.id,
+          occurrence_date: occurrence.occurrenceDate,
+        },
+        notes: input.reason,
+      });
+
+      return occurrence;
+    });
+  }
+
+  async updateFeedbackMeetingOccurrenceStatus(
+    occurrenceId: number,
+    input: { status: string; actorAdminId: number; now?: Date }
+  ): Promise<FeedbackMeetingOccurrence | undefined> {
+    const now = input.now ?? new Date();
+    return await db.transaction(async (tx) => {
+      const [occurrence] = await tx
+        .update(feedbackMeetingOccurrences)
+        .set({
+          status: input.status,
+          statusUpdatedBy: input.actorAdminId,
+          statusUpdatedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(feedbackMeetingOccurrences.id, occurrenceId))
+        .returning();
+
+      if (!occurrence) {
+        return undefined;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId: occurrence.adminUserId,
+        engagementId: occurrence.engagementId,
+        eventType: "meeting_status_updated",
+        occurredAt: now,
+        actorAdminId: input.actorAdminId,
+        metadata: {
+          feedback_meeting_occurrence_id: occurrence.id,
+          status: occurrence.status,
+        },
+        notes: null,
+      });
+
+      return occurrence;
+    });
+  }
+
   async listAdminDocumentTemplates(filters?: { documentType?: string }): Promise<AdminDocumentTemplate[]> {
     if (filters?.documentType) {
       return await db
@@ -1282,6 +1584,135 @@ export class DatabaseStorage implements IStorage {
       .limit(1);
 
     return Boolean(row);
+  }
+
+  async listAcceptedOfferLettersMissingFeedbackSchedule(now: Date): Promise<AdminEngagementDocument[]> {
+    const overdueCutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select({ document: adminEngagementDocuments })
+      .from(adminEngagementDocuments)
+      .innerJoin(adminEngagements, eq(adminEngagements.id, adminEngagementDocuments.engagementId))
+      .innerJoin(adminUsers, eq(adminUsers.id, adminEngagementDocuments.adminUserId))
+      .where(
+        and(
+          eq(adminUsers.role, 'trainee_access'),
+          eq(adminEngagementDocuments.documentType, "offer_letter"),
+          eq(adminEngagementDocuments.status, "accepted"),
+          isNull(adminEngagementDocuments.voidedAt),
+          sql`${adminEngagementDocuments.acceptedAt} IS NOT NULL`,
+          lte(adminEngagementDocuments.acceptedAt, overdueCutoff),
+          sql`not exists (
+            select 1
+            from engagement_feedback_schedules s
+            where s.engagement_id = ${adminEngagementDocuments.engagementId}
+              and s.status in ('confirmed', 'change_requested')
+          )`,
+        )
+      )
+      .orderBy(adminEngagementDocuments.acceptedAt);
+
+    return rows.map((row) => row.document);
+  }
+
+  async voidOfferLetterForMissingFeedbackSchedule(documentId: number, now: Date): Promise<boolean> {
+    return await db.transaction(async (tx) => {
+      const [document] = await tx
+        .update(adminEngagementDocuments)
+        .set({
+          status: "voided",
+          voidedAt: now,
+          voidedBy: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminEngagementDocuments.id, documentId),
+            eq(adminEngagementDocuments.status, "accepted"),
+            isNull(adminEngagementDocuments.voidedAt),
+            sql`not exists (
+              select 1
+              from engagement_feedback_schedules s
+              where s.engagement_id = ${adminEngagementDocuments.engagementId}
+                and s.status in ('confirmed', 'change_requested')
+            )`
+          )
+        )
+        .returning();
+
+      if (!document) {
+        return false;
+      }
+
+      await tx.insert(adminLifecycleEvents).values({
+        adminUserId: document.adminUserId,
+        engagementId: document.engagementId,
+        eventType: "offer_letter_voided",
+        occurredAt: now,
+        actorAdminId: null,
+        metadata: this.safeDocumentEventMetadata(document, {
+          reason: "feedback_schedule_not_confirmed",
+        }),
+        notes: "Feedback meeting schedule was not confirmed within 7 days.",
+      });
+
+      const [candidateEngagement] = await tx
+        .select()
+        .from(adminEngagements)
+        .where(
+          and(
+            eq(adminEngagements.id, document.engagementId),
+            inArray(adminEngagements.status, ['draft', 'invited', 'active'])
+          )
+        );
+
+      const [engagement] = await tx
+        .update(adminEngagements)
+        .set({
+          status: "cancelled",
+          endedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminEngagements.id, document.engagementId),
+            inArray(adminEngagements.status, ['draft', 'invited', 'active'])
+          )
+        )
+        .returning();
+
+      if (engagement) {
+        await tx.insert(adminLifecycleEvents).values({
+          adminUserId: document.adminUserId,
+          engagementId: document.engagementId,
+          eventType: "engagement_cancelled",
+          occurredAt: now,
+          actorAdminId: null,
+          metadata: {
+            previous_status: candidateEngagement?.status ?? null,
+            new_status: "cancelled",
+            reason: "feedback_schedule_not_confirmed",
+          },
+          notes: null,
+        });
+      }
+
+      await tx
+        .update(adminUsers)
+        .set({
+          status: 'inactive',
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(adminUsers.id, document.adminUserId),
+            eq(adminUsers.role, 'trainee_access')
+          )
+        );
+
+      await this.revokeActiveTraineeAccessGrants(tx, document.adminUserId, { now });
+
+      return true;
+    });
   }
 
   async listDueTraineeEngagementsForActivation(now: Date): Promise<AdminEngagement[]> {

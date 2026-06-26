@@ -16,8 +16,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeftRight, Delete, CheckCircle, Download, Edit, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
-import { AdminEngagement, AdminEngagementDocument, AdminLifecycleEvent, AdminUser, ROLE_DISPLAY_NAMES } from "@/types/admin";
+import { ArrowLeftRight, CalendarDays, Delete, CheckCircle, Download, Edit, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
+import {
+  AdminEngagement,
+  AdminEngagementDocument,
+  AdminLifecycleEvent,
+  AdminUser,
+  CheckInBundle,
+  FeedbackMeetingStatus,
+  FeedbackSlot,
+  ROLE_DISPLAY_NAMES,
+} from "@/types/admin";
 import { apiRequest, getApiErrorMessage, tokenManager } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -40,6 +49,39 @@ interface EngagementEditForm {
 interface ProfileEditForm {
   name: string;
   email: string;
+}
+
+interface FeedbackSlotForm {
+  dayOfWeek: string;
+  startTime: string;
+  endTime: string;
+  timezone: string;
+}
+
+const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MEETING_STATUS_LABELS: Record<FeedbackMeetingStatus, string> = {
+  scheduled: "Scheduled",
+  absence_requested: "Absence Requested",
+  excused: "Excused Absence",
+  completed: "Completed",
+  missed: "Missed",
+  cancelled: "Cancelled",
+};
+
+function defaultFeedbackSlotForm(): FeedbackSlotForm {
+  return {
+    dayOfWeek: "1",
+    startTime: "10:00",
+    endTime: "10:30",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  };
+}
+
+function formatFeedbackSlot(slot: FeedbackSlot | { dayOfWeek: number; startTime: string; endTime: string; timezone: string }) {
+  const dayOfWeek = "day_of_week" in slot ? slot.day_of_week : slot.dayOfWeek;
+  const startTime = "start_time" in slot ? slot.start_time : slot.startTime;
+  const endTime = "end_time" in slot ? slot.end_time : slot.endTime;
+  return `${DAY_LABELS[dayOfWeek]} ${startTime}-${endTime} ${slot.timezone}`;
 }
 
 function engagementToEditForm(engagement: AdminEngagement): EngagementEditForm {
@@ -73,6 +115,7 @@ export default function AdminProfile() {
   const [profileEditForm, setProfileEditForm] = useState<ProfileEditForm | null>(null);
   const [editingEngagement, setEditingEngagement] = useState<AdminEngagement | null>(null);
   const [engagementEditForm, setEngagementEditForm] = useState<EngagementEditForm | null>(null);
+  const [feedbackSlotForms, setFeedbackSlotForms] = useState<Record<number, FeedbackSlotForm>>({});
 
   const { data: admin, isLoading } = useQuery<AdminUser>({
     queryKey: ["/api/admin/users", adminId],
@@ -115,6 +158,29 @@ export default function AdminProfile() {
           const response = await apiRequest("GET", `/api/admin/engagements/${engagement.id}/documents`);
           const documents = await response.json() as AdminEngagementDocument[];
           return [engagement.id, documents] as const;
+        })
+      );
+      return Object.fromEntries(entries);
+    },
+  });
+
+  const checkInQueryKey = [
+    "/api/admin/users",
+    adminId,
+    "check-ins",
+    engagements.map((engagement) => engagement.id).join(","),
+  ];
+
+  const { data: checkInsByEngagement = {} } = useQuery<Record<number, CheckInBundle>>({
+    queryKey: checkInQueryKey,
+    enabled: engagements.length > 0,
+    retry: false,
+    queryFn: async () => {
+      const entries = await Promise.all(
+        engagements.map(async (engagement) => {
+          const response = await apiRequest("GET", `/api/admin/engagements/${engagement.id}/check-ins`);
+          const checkIns = await response.json() as CheckInBundle;
+          return [engagement.id, checkIns] as const;
         })
       );
       return Object.fromEntries(entries);
@@ -306,6 +372,86 @@ export default function AdminProfile() {
     },
   });
 
+  const createFeedbackSlotMutation = useMutation({
+    mutationFn: async (engagement: AdminEngagement) => {
+      if (!engagement.supervisorAdminId) {
+        throw new Error("Set a supervisor before adding Feedback Meeting slots.");
+      }
+      const form = feedbackSlotForms[engagement.id] ?? defaultFeedbackSlotForm();
+      const response = await apiRequest("POST", "/api/admin/feedback-slots", {
+        supervisorAdminId: engagement.supervisorAdminId,
+        dayOfWeek: Number(form.dayOfWeek),
+        startTime: form.startTime,
+        endTime: form.endTime,
+        timezone: form.timezone,
+      });
+      return response.json() as Promise<FeedbackSlot>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: checkInQueryKey });
+      toast({
+        title: "Feedback Meeting slot added",
+        description: "The trainee can select this slot from the Trainee Workspace.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not add Feedback Meeting slot",
+        description: getApiErrorMessage(error, "Please check the slot values and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deactivateFeedbackSlotMutation = useMutation({
+    mutationFn: async (slotId: number) => {
+      const response = await apiRequest("PATCH", `/api/admin/feedback-slots/${slotId}`, {
+        status: "inactive",
+      });
+      return response.json() as Promise<FeedbackSlot>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: checkInQueryKey });
+      toast({
+        title: "Feedback Meeting slot updated",
+        description: "The slot is no longer available for new selections.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not update Feedback Meeting slot",
+        description: getApiErrorMessage(error, "Please try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateMeetingStatusMutation = useMutation({
+    mutationFn: async (input: { engagementId: number; occurrenceId: number; status: FeedbackMeetingStatus }) => {
+      const response = await apiRequest(
+        "PATCH",
+        `/api/admin/engagements/${input.engagementId}/feedback-meetings/${input.occurrenceId}/status`,
+        { status: input.status },
+      );
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: checkInQueryKey });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", adminId, "lifecycle-events"] });
+      toast({
+        title: "Feedback Meeting status updated",
+        description: "The engagement check-in record has been updated.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not update Feedback Meeting status",
+        description: getApiErrorMessage(error, "Please try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
   const openEditEngagement = (engagement: AdminEngagement) => {
     setEditingEngagement(engagement);
     setEngagementEditForm(engagementToEditForm(engagement));
@@ -319,6 +465,20 @@ export default function AdminProfile() {
 
   const updateEngagementField = (field: keyof EngagementEditForm, value: string) => {
     setEngagementEditForm((current) => current ? { ...current, [field]: value } : current);
+  };
+
+  const feedbackSlotFormFor = (engagementId: number) => {
+    return feedbackSlotForms[engagementId] ?? defaultFeedbackSlotForm();
+  };
+
+  const updateFeedbackSlotForm = (engagementId: number, field: keyof FeedbackSlotForm, value: string) => {
+    setFeedbackSlotForms((current) => ({
+      ...current,
+      [engagementId]: {
+        ...(current[engagementId] ?? defaultFeedbackSlotForm()),
+        [field]: value,
+      },
+    }));
   };
 
   const openEditProfile = () => {
@@ -440,6 +600,19 @@ export default function AdminProfile() {
     } as const;
 
     return <Badge variant={variants[status as keyof typeof variants] || "secondary"}>{status}</Badge>;
+  };
+
+  const getMeetingStatusBadge = (status: FeedbackMeetingStatus) => {
+    const variants = {
+      scheduled: "secondary",
+      absence_requested: "outline",
+      excused: "default",
+      completed: "default",
+      missed: "destructive",
+      cancelled: "destructive",
+    } as const;
+
+    return <Badge variant={variants[status] || "secondary"}>{MEETING_STATUS_LABELS[status]}</Badge>;
   };
 
   const currentOfferLetterFor = (engagementId: number) => {
@@ -825,6 +998,181 @@ export default function AdminProfile() {
                                     )}
                                   </div>
                                 )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                      {admin.role === "trainee_access" && (
+                        <div className="mt-4 rounded-md border border-border p-4" data-testid={`card-check-ins-${engagement.id}`}>
+                          {(() => {
+                            const checkIns = checkInsByEngagement[engagement.id];
+                            const slotForm = feedbackSlotFormFor(engagement.id);
+                            const selectedSchedule = checkIns?.selected_schedule;
+                            const occurrences = checkIns?.meeting_occurrences ?? [];
+                            const absenceRequests = occurrences.filter((occurrence) => (
+                              occurrence.status === "absence_requested" || occurrence.absence_reason
+                            ));
+                            return (
+                              <div className="space-y-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                                      <p className="font-medium">Check-ins & Logs</p>
+                                    </div>
+                                    <p className="mt-1 text-sm text-muted-foreground">
+                                      Feedback Meeting schedule, Absence Requests, and Learning Activity Logs.
+                                    </p>
+                                  </div>
+                                  {selectedSchedule ? (
+                                    <Badge variant={selectedSchedule.status === "confirmed" ? "default" : "outline"}>
+                                      {selectedSchedule.status === "change_requested" ? "Schedule Change Requested" : "Schedule Confirmed"}
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="secondary">No Feedback Meeting Schedule</Badge>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                                  <div className="rounded-md border border-border p-3">
+                                    <p className="mb-2 text-sm font-medium">Supervisor Available Slots</p>
+                                    {checkIns?.available_slots?.length ? (
+                                      <div className="space-y-2">
+                                        {checkIns.available_slots.map((slot) => (
+                                          <div key={slot.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                            <span>{formatFeedbackSlot(slot)}</span>
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              onClick={() => deactivateFeedbackSlotMutation.mutate(slot.id)}
+                                              disabled={deactivateFeedbackSlotMutation.isPending}
+                                              data-testid={`button-deactivate-feedback-slot-${slot.id}`}
+                                            >
+                                              Disable
+                                            </Button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-sm text-muted-foreground">No active Feedback Meeting slots have been defined for this supervisor.</p>
+                                    )}
+
+                                    {engagement.supervisorAdminId ? (
+                                      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-5">
+                                        <Select
+                                          value={slotForm.dayOfWeek}
+                                          onValueChange={(value) => updateFeedbackSlotForm(engagement.id, "dayOfWeek", value)}
+                                        >
+                                          <SelectTrigger data-testid={`select-feedback-slot-day-${engagement.id}`}>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {DAY_LABELS.map((label, index) => (
+                                              <SelectItem key={label} value={String(index)}>{label}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                        <Input
+                                          type="time"
+                                          value={slotForm.startTime}
+                                          onChange={(event) => updateFeedbackSlotForm(engagement.id, "startTime", event.target.value)}
+                                          data-testid={`input-feedback-slot-start-${engagement.id}`}
+                                        />
+                                        <Input
+                                          type="time"
+                                          value={slotForm.endTime}
+                                          onChange={(event) => updateFeedbackSlotForm(engagement.id, "endTime", event.target.value)}
+                                          data-testid={`input-feedback-slot-end-${engagement.id}`}
+                                        />
+                                        <Input
+                                          value={slotForm.timezone}
+                                          onChange={(event) => updateFeedbackSlotForm(engagement.id, "timezone", event.target.value)}
+                                          data-testid={`input-feedback-slot-timezone-${engagement.id}`}
+                                        />
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => createFeedbackSlotMutation.mutate(engagement)}
+                                          disabled={createFeedbackSlotMutation.isPending}
+                                          data-testid={`button-add-feedback-slot-${engagement.id}`}
+                                        >
+                                          Add Slot
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <p className="mt-3 text-sm text-muted-foreground">Set a supervisor before adding Feedback Meeting slots.</p>
+                                    )}
+                                  </div>
+
+                                  <div className="rounded-md border border-border p-3">
+                                    <p className="mb-2 text-sm font-medium">Selected Feedback Meeting Schedule</p>
+                                    {selectedSchedule ? (
+                                      <div className="space-y-2 text-sm">
+                                        <div className="flex flex-wrap gap-2">
+                                          <Badge variant="outline">{selectedSchedule.frequency_per_week} per week</Badge>
+                                          <Badge variant="outline">{selectedSchedule.timezone}</Badge>
+                                        </div>
+                                        {selectedSchedule.selected_slots.map((slot) => (
+                                          <p key={slot.id}>{formatFeedbackSlot(slot)}</p>
+                                        ))}
+                                        {selectedSchedule.change_request_note && (
+                                          <p className="rounded-md bg-muted/40 p-2">
+                                            Change request: {selectedSchedule.change_request_note}
+                                          </p>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <p className="text-sm text-muted-foreground">The trainee has not selected a recurring Feedback Meeting schedule.</p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-md border border-border p-3">
+                                  <p className="mb-2 text-sm font-medium">Upcoming Feedback Meetings and Absence Requests</p>
+                                  {occurrences.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No Feedback Meeting occurrences have been generated yet.</p>
+                                  ) : (
+                                    <div className="space-y-3">
+                                      {occurrences.slice(0, 8).map((occurrence) => (
+                                        <div key={occurrence.id} className="grid grid-cols-1 gap-2 rounded-md bg-muted/30 p-3 text-sm md:grid-cols-[1fr_auto_auto]">
+                                          <div>
+                                            <p className="font-medium">{occurrence.occurrence_date} {occurrence.start_time}-{occurrence.end_time}</p>
+                                            {occurrence.absence_reason && (
+                                              <p className="text-muted-foreground">
+                                                Absence Request: {occurrence.absence_reason}
+                                                {occurrence.absence_note ? ` - ${occurrence.absence_note}` : ""}
+                                              </p>
+                                            )}
+                                          </div>
+                                          <div>{getMeetingStatusBadge(occurrence.status)}</div>
+                                          <Select
+                                            value={occurrence.status}
+                                            onValueChange={(status) => updateMeetingStatusMutation.mutate({
+                                              engagementId: engagement.id,
+                                              occurrenceId: occurrence.id,
+                                              status: status as FeedbackMeetingStatus,
+                                            })}
+                                          >
+                                            <SelectTrigger data-testid={`select-feedback-meeting-status-${occurrence.id}`}>
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {(Object.keys(MEETING_STATUS_LABELS) as FeedbackMeetingStatus[]).map((status) => (
+                                                <SelectItem key={status} value={status}>{MEETING_STATUS_LABELS[status]}</SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {absenceRequests.length > 0 && (
+                                    <p className="mt-3 text-xs text-muted-foreground">
+                                      {absenceRequests.length} Absence Request{absenceRequests.length === 1 ? "" : "s"} recorded for this engagement.
+                                    </p>
+                                  )}
+                                </div>
                               </div>
                             );
                           })()}

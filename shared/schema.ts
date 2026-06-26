@@ -171,6 +171,82 @@ export const adminActivityLogs = pgTable("admin_activity_logs", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const supervisorFeedbackSlots = pgTable(
+  "supervisor_feedback_slots",
+  {
+    id: serial("id").primaryKey(),
+    supervisorAdminId: integer("supervisor_admin_id").notNull().references(() => adminUsers.id),
+    dayOfWeek: integer("day_of_week").notNull(),
+    startTime: text("start_time").notNull(),
+    endTime: text("end_time").notNull(),
+    timezone: text("timezone").notNull(),
+    status: text("status").notNull().default("active"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_supervisor_feedback_slots_supervisor").on(table.supervisorAdminId),
+    index("idx_supervisor_feedback_slots_status").on(table.status),
+  ],
+);
+
+export const engagementFeedbackSchedules = pgTable(
+  "engagement_feedback_schedules",
+  {
+    id: serial("id").primaryKey(),
+    engagementId: integer("engagement_id").notNull().references(() => adminEngagements.id),
+    adminUserId: integer("admin_user_id").notNull().references(() => adminUsers.id),
+    supervisorAdminId: integer("supervisor_admin_id").notNull().references(() => adminUsers.id),
+    frequencyPerWeek: integer("frequency_per_week").notNull(),
+    timezone: text("timezone").notNull(),
+    selectedSlots: jsonb("selected_slots").notNull().default(sql`'[]'::jsonb`),
+    status: text("status").notNull().default("confirmed"),
+    changeRequestNote: text("change_request_note"),
+    confirmedAt: timestamp("confirmed_at"),
+    changeRequestedAt: timestamp("change_requested_at"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_engagement_feedback_schedules_engagement").on(table.engagementId),
+    index("idx_engagement_feedback_schedules_admin_user").on(table.adminUserId),
+    index("idx_engagement_feedback_schedules_supervisor").on(table.supervisorAdminId),
+    index("idx_engagement_feedback_schedules_status").on(table.status),
+  ],
+);
+
+export const feedbackMeetingOccurrences = pgTable(
+  "feedback_meeting_occurrences",
+  {
+    id: serial("id").primaryKey(),
+    scheduleId: integer("schedule_id").notNull().references(() => engagementFeedbackSchedules.id),
+    engagementId: integer("engagement_id").notNull().references(() => adminEngagements.id),
+    adminUserId: integer("admin_user_id").notNull().references(() => adminUsers.id),
+    supervisorAdminId: integer("supervisor_admin_id").notNull().references(() => adminUsers.id),
+    occurrenceDate: date("occurrence_date").notNull(),
+    startTime: text("start_time").notNull(),
+    endTime: text("end_time").notNull(),
+    timezone: text("timezone").notNull(),
+    status: text("status").notNull().default("scheduled"),
+    absenceReason: text("absence_reason"),
+    absenceNote: text("absence_note"),
+    absenceRequestedAt: timestamp("absence_requested_at"),
+    statusUpdatedBy: integer("status_updated_by").references(() => adminUsers.id),
+    statusUpdatedAt: timestamp("status_updated_at"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_feedback_meeting_occurrences_schedule").on(table.scheduleId),
+    index("idx_feedback_meeting_occurrences_engagement").on(table.engagementId),
+    index("idx_feedback_meeting_occurrences_admin_user").on(table.adminUserId),
+    index("idx_feedback_meeting_occurrences_supervisor").on(table.supervisorAdminId),
+    index("idx_feedback_meeting_occurrences_status").on(table.status),
+    index("idx_feedback_meeting_occurrences_date").on(table.occurrenceDate),
+  ],
+);
+
 export const adminDocumentTemplates = pgTable("admin_document_templates", {
   id: serial("id").primaryKey(),
   documentType: text("document_type").notNull().default("offer_letter"),
@@ -237,6 +313,12 @@ export const adminUsersRelations = relations(adminUsers, ({ one, many }) => ({
   lifecycleEvents: many(adminLifecycleEvents, { relationName: "eventAdmin" }),
   activityLogs: many(adminActivityLogs, { relationName: "activityLogAdmin" }),
   accessGrants: many(adminUserAccessGrants, { relationName: "accessGrantAdmin" }),
+  supervisorFeedbackSlots: many(supervisorFeedbackSlots, { relationName: "supervisorFeedbackSlotAdmin" }),
+  feedbackSchedulesAsTrainee: many(engagementFeedbackSchedules, { relationName: "feedbackScheduleTraineeAdmin" }),
+  feedbackSchedulesAsSupervisor: many(engagementFeedbackSchedules, { relationName: "feedbackScheduleSupervisorAdmin" }),
+  feedbackMeetingOccurrencesAsTrainee: many(feedbackMeetingOccurrences, { relationName: "feedbackMeetingTraineeAdmin" }),
+  feedbackMeetingOccurrencesAsSupervisor: many(feedbackMeetingOccurrences, { relationName: "feedbackMeetingSupervisorAdmin" }),
+  feedbackMeetingStatusUpdates: many(feedbackMeetingOccurrences, { relationName: "feedbackMeetingStatusUpdaterAdmin" }),
 }));
 
 export const adminUserApprovalsRelations = relations(adminUserApprovals, ({ one }) => ({
@@ -294,6 +376,8 @@ export const adminEngagementsRelations = relations(adminEngagements, ({ one, man
   lifecycleEvents: many(adminLifecycleEvents, { relationName: "engagementEvents" }),
   activityLogs: many(adminActivityLogs, { relationName: "engagementActivityLogs" }),
   engagementDocuments: many(adminEngagementDocuments, { relationName: "engagementDocuments" }),
+  feedbackSchedules: many(engagementFeedbackSchedules, { relationName: "engagementFeedbackSchedules" }),
+  feedbackMeetingOccurrences: many(feedbackMeetingOccurrences, { relationName: "engagementFeedbackMeetingOccurrences" }),
 }));
 
 export const adminLifecycleEventsRelations = relations(adminLifecycleEvents, ({ one }) => ({
@@ -329,6 +413,66 @@ export const adminActivityLogsRelations = relations(adminActivityLogs, ({ one })
     fields: [adminActivityLogs.reviewedBy],
     references: [adminUsers.id],
     relationName: "activityLogReviewer",
+  }),
+}));
+
+export const supervisorFeedbackSlotsRelations = relations(supervisorFeedbackSlots, ({ one }) => ({
+  supervisor: one(adminUsers, {
+    fields: [supervisorFeedbackSlots.supervisorAdminId],
+    references: [adminUsers.id],
+    relationName: "supervisorFeedbackSlotAdmin",
+  }),
+  createdByUser: one(adminUsers, {
+    fields: [supervisorFeedbackSlots.createdBy],
+    references: [adminUsers.id],
+    relationName: "createdBy",
+  }),
+}));
+
+export const engagementFeedbackSchedulesRelations = relations(engagementFeedbackSchedules, ({ one, many }) => ({
+  engagement: one(adminEngagements, {
+    fields: [engagementFeedbackSchedules.engagementId],
+    references: [adminEngagements.id],
+    relationName: "engagementFeedbackSchedules",
+  }),
+  trainee: one(adminUsers, {
+    fields: [engagementFeedbackSchedules.adminUserId],
+    references: [adminUsers.id],
+    relationName: "feedbackScheduleTraineeAdmin",
+  }),
+  supervisor: one(adminUsers, {
+    fields: [engagementFeedbackSchedules.supervisorAdminId],
+    references: [adminUsers.id],
+    relationName: "feedbackScheduleSupervisorAdmin",
+  }),
+  occurrences: many(feedbackMeetingOccurrences, { relationName: "feedbackScheduleOccurrences" }),
+}));
+
+export const feedbackMeetingOccurrencesRelations = relations(feedbackMeetingOccurrences, ({ one }) => ({
+  schedule: one(engagementFeedbackSchedules, {
+    fields: [feedbackMeetingOccurrences.scheduleId],
+    references: [engagementFeedbackSchedules.id],
+    relationName: "feedbackScheduleOccurrences",
+  }),
+  engagement: one(adminEngagements, {
+    fields: [feedbackMeetingOccurrences.engagementId],
+    references: [adminEngagements.id],
+    relationName: "engagementFeedbackMeetingOccurrences",
+  }),
+  trainee: one(adminUsers, {
+    fields: [feedbackMeetingOccurrences.adminUserId],
+    references: [adminUsers.id],
+    relationName: "feedbackMeetingTraineeAdmin",
+  }),
+  supervisor: one(adminUsers, {
+    fields: [feedbackMeetingOccurrences.supervisorAdminId],
+    references: [adminUsers.id],
+    relationName: "feedbackMeetingSupervisorAdmin",
+  }),
+  statusUpdatedByUser: one(adminUsers, {
+    fields: [feedbackMeetingOccurrences.statusUpdatedBy],
+    references: [adminUsers.id],
+    relationName: "feedbackMeetingStatusUpdaterAdmin",
   }),
 }));
 
@@ -412,6 +556,24 @@ export const insertAdminActivityLogSchema = createInsertSchema(adminActivityLogs
   updatedAt: true,
 });
 
+export const insertSupervisorFeedbackSlotSchema = createInsertSchema(supervisorFeedbackSlots).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertEngagementFeedbackScheduleSchema = createInsertSchema(engagementFeedbackSchedules).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertFeedbackMeetingOccurrenceSchema = createInsertSchema(feedbackMeetingOccurrences).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertAdminDocumentTemplateSchema = createInsertSchema(adminDocumentTemplates).omit({
   id: true,
   createdAt: true,
@@ -437,6 +599,12 @@ export type AdminLifecycleEvent = typeof adminLifecycleEvents.$inferSelect;
 export type InsertAdminLifecycleEvent = z.infer<typeof insertAdminLifecycleEventSchema>;
 export type AdminActivityLog = typeof adminActivityLogs.$inferSelect;
 export type InsertAdminActivityLog = z.infer<typeof insertAdminActivityLogSchema>;
+export type SupervisorFeedbackSlot = typeof supervisorFeedbackSlots.$inferSelect;
+export type InsertSupervisorFeedbackSlot = z.infer<typeof insertSupervisorFeedbackSlotSchema>;
+export type EngagementFeedbackSchedule = typeof engagementFeedbackSchedules.$inferSelect;
+export type InsertEngagementFeedbackSchedule = z.infer<typeof insertEngagementFeedbackScheduleSchema>;
+export type FeedbackMeetingOccurrence = typeof feedbackMeetingOccurrences.$inferSelect;
+export type InsertFeedbackMeetingOccurrence = z.infer<typeof insertFeedbackMeetingOccurrenceSchema>;
 export type AdminDocumentTemplate = typeof adminDocumentTemplates.$inferSelect;
 export type InsertAdminDocumentTemplate = z.infer<typeof insertAdminDocumentTemplateSchema>;
 export type AdminEngagementDocument = typeof adminEngagementDocuments.$inferSelect;

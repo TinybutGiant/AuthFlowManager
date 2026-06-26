@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireRole, requireAccessGroup, requireAnyAccessGroup, jwtUtils } from "./jwtAuth";
-import { insertAdminUserApprovalSchema, type AdminRole } from "@shared/schema";
+import { insertAdminUserApprovalSchema, type AdminAccessGroup, type AdminRole } from "@shared/schema";
 import {
   insertGuideApplicationApprovalSchema,
   updateGuideApplicationLiteSchema,
@@ -35,6 +35,12 @@ import {
   documentTemplateUpdatePayloadSchema,
   engagementPayloadSchema,
   engagementTypeSchema,
+  feedbackScheduleChangeRequestPayloadSchema,
+  feedbackSchedulePayloadSchema,
+  feedbackSlotPayloadSchema,
+  feedbackSlotUpdatePayloadSchema,
+  meetingAbsenceRequestPayloadSchema,
+  meetingStatusUpdatePayloadSchema,
   offerLetterPayloadSchema,
   lifecycleEventPayloadSchema,
   templatePreviewPayloadSchema,
@@ -87,6 +93,18 @@ const createAdminUserSchema = z.object({
   engagement: z.unknown().optional(),
   deferSetupEmail: z.boolean().optional(),
 });
+
+const adminStaffAccessGroups: AdminAccessGroup[] = [
+  'super_admin',
+  'admin_operations',
+  'finance_admin',
+  'verifier_admin',
+  'support_admin',
+];
+
+function canAccessEngagementCheckIns(adminUser: any, engagement: any) {
+  return adminUser?.role === 'super_admin' || engagement.supervisorAdminId === adminUser?.id;
+}
 
 function errorField(error: unknown, field: string): string {
   if (!error || typeof error !== "object" || !(field in error)) {
@@ -192,6 +210,10 @@ function sanitizeTraineeLifecycleMetadata(metadata: unknown) {
     'purpose',
     'source',
     'already_inactive',
+    'feedback_schedule_id',
+    'feedback_meeting_occurrence_id',
+    'occurrence_date',
+    'status',
   ]);
 
   return Object.fromEntries(
@@ -210,6 +232,134 @@ function sanitizeActivityLog(log: any) {
     status: log.status,
     reviewed_at: log.reviewedAt,
     created_at: log.createdAt,
+  };
+}
+
+function sanitizeFeedbackSlot(slot: any) {
+  return {
+    id: slot.id,
+    supervisor_admin_id: slot.supervisorAdminId,
+    day_of_week: slot.dayOfWeek,
+    start_time: slot.startTime,
+    end_time: slot.endTime,
+    timezone: slot.timezone,
+    status: slot.status,
+    created_at: slot.createdAt,
+    updated_at: slot.updatedAt,
+  };
+}
+
+function sanitizeFeedbackSchedule(schedule: any) {
+  if (!schedule) return null;
+  return {
+    id: schedule.id,
+    engagement_id: schedule.engagementId,
+    admin_user_id: schedule.adminUserId,
+    supervisor_admin_id: schedule.supervisorAdminId,
+    frequency_per_week: schedule.frequencyPerWeek,
+    timezone: schedule.timezone,
+    selected_slots: Array.isArray(schedule.selectedSlots) ? schedule.selectedSlots : [],
+    status: schedule.status,
+    change_request_note: schedule.changeRequestNote,
+    confirmed_at: schedule.confirmedAt,
+    change_requested_at: schedule.changeRequestedAt,
+    created_at: schedule.createdAt,
+    updated_at: schedule.updatedAt,
+  };
+}
+
+function sanitizeFeedbackMeetingOccurrence(occurrence: any) {
+  return {
+    id: occurrence.id,
+    schedule_id: occurrence.scheduleId,
+    engagement_id: occurrence.engagementId,
+    admin_user_id: occurrence.adminUserId,
+    supervisor_admin_id: occurrence.supervisorAdminId,
+    occurrence_date: safeDateOnly(occurrence.occurrenceDate),
+    start_time: occurrence.startTime,
+    end_time: occurrence.endTime,
+    timezone: occurrence.timezone,
+    status: occurrence.status,
+    absence_reason: occurrence.absenceReason,
+    absence_note: occurrence.absenceNote,
+    absence_requested_at: occurrence.absenceRequestedAt,
+    status_updated_by: occurrence.statusUpdatedBy,
+    status_updated_at: occurrence.statusUpdatedAt,
+    created_at: occurrence.createdAt,
+    updated_at: occurrence.updatedAt,
+  };
+}
+
+function dateOnly(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function dateOnlyToUtc(value: string) {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+
+function addUtcDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function maxDateOnly(a: string, b?: string | null) {
+  if (!b || b < a) return a;
+  return b;
+}
+
+function generateFeedbackMeetingOccurrences(input: {
+  engagement: any;
+  selectedSlots: Array<{ id: number; dayOfWeek: number; startTime: string; endTime: string }>;
+  timezone: string;
+  now?: Date;
+}) {
+  const today = dateOnly(input.now ?? new Date());
+  const startDate = maxDateOnly(today, safeDateOnly(input.engagement.startDate));
+  const endDate = input.engagement.endDate ? safeDateOnly(input.engagement.endDate) : null;
+  const generationEnd = dateOnly(addUtcDays(dateOnlyToUtc(startDate), 56));
+  const boundedEnd = endDate && endDate < generationEnd ? endDate : generationEnd;
+
+  return input.selectedSlots.flatMap((slot) => {
+    const first = dateOnlyToUtc(startDate);
+    const daysUntilSlot = (slot.dayOfWeek - first.getUTCDay() + 7) % 7;
+    let occurrenceDate = addUtcDays(first, daysUntilSlot);
+    const occurrences = [];
+
+    while (dateOnly(occurrenceDate) <= boundedEnd) {
+      occurrences.push({
+        engagementId: input.engagement.id,
+        adminUserId: input.engagement.adminUserId,
+        supervisorAdminId: input.engagement.supervisorAdminId,
+        occurrenceDate: dateOnly(occurrenceDate),
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        timezone: input.timezone,
+        status: "scheduled",
+      });
+      occurrenceDate = addUtcDays(occurrenceDate, 7);
+    }
+
+    return occurrences;
+  }).sort((a, b) => (
+    a.occurrenceDate === b.occurrenceDate
+      ? a.startTime.localeCompare(b.startTime)
+      : a.occurrenceDate.localeCompare(b.occurrenceDate)
+  ));
+}
+
+async function buildCheckInBundle(engagement: any) {
+  const slots = engagement.supervisorAdminId
+    ? await storage.listFeedbackSlotsForSupervisor(engagement.supervisorAdminId)
+    : [];
+  const schedule = await storage.getActiveFeedbackScheduleForEngagement(engagement.id);
+  const occurrences = await storage.listFeedbackMeetingOccurrencesForEngagement(engagement.id);
+
+  return {
+    available_slots: slots.filter((slot) => slot.status === "active").map(sanitizeFeedbackSlot),
+    selected_schedule: sanitizeFeedbackSchedule(schedule),
+    meeting_occurrences: occurrences.map(sanitizeFeedbackMeetingOccurrence),
   };
 }
 
@@ -607,6 +757,145 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/trainee/me/check-ins", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
+    try {
+      const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
+      if (!engagement) {
+        return res.json({
+          available_slots: [],
+          selected_schedule: null,
+          meeting_occurrences: [],
+        });
+      }
+
+      const hasAcceptedOffer = await storage.hasAcceptedOfferLetterForEngagement(engagement.id);
+      if (!hasAcceptedOffer) {
+        return res.status(403).json({ message: "Offer acceptance is required to view check-ins." });
+      }
+
+      res.json(await buildCheckInBundle(engagement));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch feedback meeting check-ins" });
+    }
+  });
+
+  app.post("/api/trainee/me/feedback-schedule", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
+    try {
+      const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
+      if (!engagement) {
+        return res.status(404).json({ message: "Current engagement not found" });
+      }
+      if (!engagement.supervisorAdminId) {
+        return res.status(400).json({ message: "A supervisor is required before selecting a feedback meeting schedule." });
+      }
+      const hasAcceptedOffer = await storage.hasAcceptedOfferLetterForEngagement(engagement.id);
+      if (!hasAcceptedOffer) {
+        return res.status(403).json({ message: "Offer acceptance is required before selecting a feedback meeting schedule." });
+      }
+
+      const payload = feedbackSchedulePayloadSchema.parse(req.body);
+      const supervisorSlots = await storage.listFeedbackSlotsForSupervisor(engagement.supervisorAdminId);
+      const selectedSlots = payload.slotIds.map((slotId) => supervisorSlots.find((slot) => (
+        slot.id === slotId && slot.status === "active"
+      )));
+      if (selectedSlots.some((slot) => !slot)) {
+        return res.status(400).json({ message: "Selected feedback meeting slots must belong to the engagement supervisor." });
+      }
+
+      const slotSnapshots = selectedSlots.map((slot) => ({
+        id: slot!.id,
+        dayOfWeek: slot!.dayOfWeek,
+        startTime: slot!.startTime,
+        endTime: slot!.endTime,
+        timezone: slot!.timezone,
+      }));
+      const now = new Date();
+      const occurrences = generateFeedbackMeetingOccurrences({
+        engagement,
+        selectedSlots: slotSnapshots,
+        timezone: payload.timezone,
+        now,
+      });
+
+      const result = await storage.confirmFeedbackScheduleWithOccurrences(
+        {
+          engagementId: engagement.id,
+          adminUserId: req.adminUser.id,
+          supervisorAdminId: engagement.supervisorAdminId,
+          frequencyPerWeek: payload.frequencyPerWeek,
+          timezone: payload.timezone,
+          selectedSlots: slotSnapshots,
+          status: "confirmed",
+          confirmedAt: now,
+        },
+        occurrences,
+        {
+          eventType: "feedback_schedule_confirmed",
+          actorAdminId: req.adminUser.id,
+          occurredAt: now,
+          metadata: {
+            frequency_per_week: payload.frequencyPerWeek,
+            timezone: payload.timezone,
+          },
+          notes: null,
+        },
+      );
+
+      res.status(201).json({
+        selected_schedule: sanitizeFeedbackSchedule(result.schedule),
+        meeting_occurrences: result.occurrences.map(sanitizeFeedbackMeetingOccurrence),
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to confirm feedback meeting schedule", error: error?.message });
+    }
+  });
+
+  app.post("/api/trainee/me/feedback-schedule/change-request", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
+    try {
+      const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
+      if (!engagement) {
+        return res.status(404).json({ message: "Current engagement not found" });
+      }
+      const payload = feedbackScheduleChangeRequestPayloadSchema.parse(req.body ?? {});
+      const schedule = await storage.requestFeedbackScheduleChange(
+        engagement.id,
+        req.adminUser.id,
+        { note: payload.note ?? null },
+      );
+      if (!schedule) {
+        return res.status(404).json({ message: "Confirmed feedback meeting schedule not found" });
+      }
+      res.json(sanitizeFeedbackSchedule(schedule));
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to request feedback meeting schedule change", error: error?.message });
+    }
+  });
+
+  app.post("/api/trainee/me/feedback-meetings/:occurrenceId/absence-request", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
+    try {
+      const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
+      if (!engagement) {
+        return res.status(404).json({ message: "Current engagement not found" });
+      }
+      const payload = meetingAbsenceRequestPayloadSchema.parse(req.body);
+      const occurrence = await storage.requestFeedbackMeetingAbsence(
+        parseInt(req.params.occurrenceId),
+        engagement.id,
+        req.adminUser.id,
+        {
+          reason: payload.reason,
+          note: payload.note ?? null,
+        },
+      );
+      if (!occurrence) {
+        return res.status(404).json({ message: "Scheduled feedback meeting not found" });
+      }
+      res.json(sanitizeFeedbackMeetingOccurrence(occurrence));
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to submit absence request", error: error?.message });
+    }
+  });
+
   app.post(
     "/api/trainee/me/end-engagement",
     requireAuth,
@@ -859,6 +1148,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(400).json({ message: "Failed to update admin engagement", error: error?.message });
     }
   });
+
+  app.get("/api/admin/engagements/:engagementId/check-ins", requireAuth, requireAnyAccessGroup(adminStaffAccessGroups), async (req: any, res) => {
+    try {
+      const engagementId = parseInt(req.params.engagementId);
+      const engagement = await storage.getAdminEngagement(engagementId);
+      if (!engagement) {
+        return res.status(404).json({ message: "Admin engagement not found" });
+      }
+      if (!canAccessEngagementCheckIns(req.adminUser, engagement)) {
+        return res.status(403).json({ message: "Insufficient permissions" });
+      }
+
+      res.json(await buildCheckInBundle(engagement));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch engagement check-ins" });
+    }
+  });
+
+  app.post("/api/admin/feedback-slots", requireAuth, requireAnyAccessGroup(adminStaffAccessGroups), async (req: any, res) => {
+    try {
+      const payload = feedbackSlotPayloadSchema.parse(req.body);
+      if (req.adminUser.role !== "super_admin" && payload.supervisorAdminId !== req.adminUser.id) {
+        return res.status(403).json({ message: "Feedback meeting slots can only be created for your own supervisor schedule." });
+      }
+      const supervisor = await storage.getAdminUser(payload.supervisorAdminId);
+      if (!supervisor || supervisor.status !== "active" || supervisor.role === "trainee_access") {
+        return res.status(400).json({ message: "Feedback meeting slots must be tied to an active supervisor." });
+      }
+      const slot = await storage.createFeedbackSlot({
+        supervisorAdminId: payload.supervisorAdminId,
+        dayOfWeek: payload.dayOfWeek,
+        startTime: payload.startTime,
+        endTime: payload.endTime,
+        timezone: payload.timezone,
+        status: "active",
+        createdBy: req.adminUser.id,
+      });
+      res.status(201).json(sanitizeFeedbackSlot(slot));
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to create feedback meeting slot", error: error?.message });
+    }
+  });
+
+  app.patch("/api/admin/feedback-slots/:slotId", requireAuth, requireAnyAccessGroup(adminStaffAccessGroups), async (req: any, res) => {
+    try {
+      const payload = feedbackSlotUpdatePayloadSchema.parse(req.body);
+      const slotId = parseInt(req.params.slotId);
+      if (req.adminUser.role !== "super_admin") {
+        const ownSlots = await storage.listFeedbackSlotsForSupervisor(req.adminUser.id);
+        if (!ownSlots.some((slot) => slot.id === slotId)) {
+          return res.status(404).json({ message: "Feedback meeting slot not found" });
+        }
+      }
+      const slot = await storage.updateFeedbackSlot(slotId, {
+        status: payload.status,
+      });
+      if (!slot) {
+        return res.status(404).json({ message: "Feedback meeting slot not found" });
+      }
+      res.json(sanitizeFeedbackSlot(slot));
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to update feedback meeting slot", error: error?.message });
+    }
+  });
+
+  app.patch(
+    "/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status",
+    requireAuth,
+    requireAnyAccessGroup(adminStaffAccessGroups),
+    async (req: any, res) => {
+      try {
+        const engagementId = parseInt(req.params.engagementId);
+        const occurrenceId = parseInt(req.params.occurrenceId);
+        const payload = meetingStatusUpdatePayloadSchema.parse(req.body);
+        const engagement = await storage.getAdminEngagement(engagementId);
+        if (!engagement) {
+          return res.status(404).json({ message: "Admin engagement not found" });
+        }
+        if (!canAccessEngagementCheckIns(req.adminUser, engagement)) {
+          return res.status(403).json({ message: "Insufficient permissions" });
+        }
+        const occurrences = await storage.listFeedbackMeetingOccurrencesForEngagement(engagementId);
+        if (!occurrences.some((occurrence) => occurrence.id === occurrenceId)) {
+          return res.status(404).json({ message: "Feedback meeting occurrence not found" });
+        }
+        const occurrence = await storage.updateFeedbackMeetingOccurrenceStatus(occurrenceId, {
+          status: payload.status,
+          actorAdminId: req.adminUser.id,
+        });
+        if (!occurrence) {
+          return res.status(404).json({ message: "Feedback meeting occurrence not found" });
+        }
+        res.json(sanitizeFeedbackMeetingOccurrence(occurrence));
+      } catch (error: any) {
+        res.status(400).json({ message: "Failed to update feedback meeting status", error: error?.message });
+      }
+    }
+  );
 
   app.get("/api/admin/company-brand-defaults", requireAuth, requireRole(['super_admin']), async (_req: any, res) => {
     res.json(publicCompanyBrandDefaults());
@@ -1165,6 +1552,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         activated_count: result.activatedCount,
         offboarded_count: result.offboardedCount,
+        voided_offer_letters_count: result.voidedOfferLetterCount,
         errors: result.errors,
       });
     } catch (error: any) {
