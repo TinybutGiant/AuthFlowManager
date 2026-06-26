@@ -1122,10 +1122,10 @@ test("document template management uses Admin Operations access group and render
   const adminOperationsBlock = sidebarSource.slice(adminOperationsStart, adminOperationsEnd);
   assert.match(adminOperationsBlock, /title: "Document Templates"/);
   assert.match(adminOperationsBlock, /href: "\/admin-operations\/document-templates"/);
-  assert.match(adminOperationsBlock, /accessGroups: \['super_admin', 'admin_operations', 'document_templates', 'lifecycle_jobs'\]/);
+  assert.match(adminOperationsBlock, /accessGroups: \['super_admin', 'admin_operations', 'document_templates', 'lifecycle_jobs', 'finance_admin', 'verifier_admin', 'support_admin'\]/);
   assert.match(adminOperationsBlock, /accessGroups: \['super_admin', 'document_templates'\]/);
   assert.match(sidebarSource, /visibleChildren\.length === 0/);
-  assert.doesNotMatch(adminOperationsBlock, /roles: \['super_admin'\]|trainee_access|trainee_offer_portal|trainee_workspace|finance_admin|verifier_admin|support_admin/);
+  assert.doesNotMatch(adminOperationsBlock, /roles: \['super_admin'\]|trainee_access|trainee_offer_portal|trainee_workspace/);
 
   assert.match(documentTemplatesSource, /\/api\/admin\/document-templates/);
   assert.match(documentTemplatesSource, /Edit \/ Create New Version/);
@@ -1298,6 +1298,38 @@ test("admin and assigned supervisor check-in APIs use scoped admin staff access"
   );
   assert.match(statusRoute, /canAccessEngagementCheckIns\(req\.adminUser, engagement\)/);
   assert.match(statusRoute, /listFeedbackMeetingOccurrencesForEngagement\(engagementId\)/);
+});
+
+test("feedback meeting slot settings are centralized outside trainee profile", async () => {
+  const appSource = await readFile(new URL("../client/src/App.tsx", import.meta.url), "utf8");
+  const sidebarSource = await readFile(new URL("../client/src/components/Sidebar.tsx", import.meta.url), "utf8");
+  const profileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
+  const settingsSource = await readFile(new URL("../client/src/pages/FeedbackMeetingSlots.tsx", import.meta.url), "utf8");
+  const managerSource = await readFile(new URL("../client/src/components/checkins/FeedbackSlotManager.tsx", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.match(appSource, /path="\/admin-operations\/feedback-meeting-slots"/);
+  assert.match(appSource, /<FeedbackMeetingSlots \/>/);
+  assert.match(sidebarSource, /title: "Feedback Meeting Slots"/);
+  assert.match(sidebarSource, /href: "\/admin-operations\/feedback-meeting-slots"/);
+
+  assert.match(profileSource, /link-feedback-slot-settings/);
+  assert.match(profileSource, /\/admin-operations\/feedback-meeting-slots\?supervisorAdminId=/);
+  assert.match(profileSource, /<FeedbackSlotManager/);
+  assert.match(profileSource, /Supervisor Available Slots/);
+  assert.match(profileSource, /Selected Feedback Meeting Schedule/);
+  assert.doesNotMatch(profileSource, /button-add-feedback-slot|button-deactivate-feedback-slot|input-feedback-slot-start|select-feedback-slot-day/);
+
+  assert.match(settingsSource, /querySupervisorIdFromLocation/);
+  assert.match(settingsSource, /requestedSupervisorId/);
+  assert.match(settingsSource, /select-feedback-slot-supervisor/);
+  assert.match(settingsSource, /<FeedbackSlotManager supervisorAdminId=\{selectedSupervisorId\} mode="manage" \/>/);
+  assert.match(managerSource, /button-add-feedback-slot/);
+  assert.match(managerSource, /button-toggle-feedback-slot/);
+  assert.match(managerSource, /GET", `\/api\/admin\/feedback-slots\?supervisorAdminId=/);
+
+  assert.match(routesSource, /app\.get\("\/api\/admin\/feedback-slots", requireAuth, requireAnyAccessGroup\(adminStaffAccessGroups\)/);
+  assert.match(routesSource, /supervisorAdminId !== req\.adminUser\.id/);
 });
 
 test("trainee engagement empty state and lifecycle metadata are sanitized", async () => {

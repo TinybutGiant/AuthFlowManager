@@ -14,6 +14,7 @@ import {
   Wallet,
   UserRound,
   Bot,
+  CalendarDays,
   ChevronDown,
   ChevronRight,
   ClipboardList,
@@ -92,8 +93,14 @@ const menuItems: MenuItem[] = [
   {
     title: "Admin Operations",
     icon: RefreshCw,
-    accessGroups: ['super_admin', 'admin_operations', 'document_templates', 'lifecycle_jobs'],
+    accessGroups: ['super_admin', 'admin_operations', 'document_templates', 'lifecycle_jobs', 'finance_admin', 'verifier_admin', 'support_admin'],
     children: [
+      {
+        title: "Feedback Meeting Slots",
+        href: "/admin-operations/feedback-meeting-slots",
+        icon: CalendarDays,
+        accessGroups: ['super_admin', 'finance_admin', 'verifier_admin', 'support_admin'],
+      },
       {
         title: "Lifecycle Jobs",
         href: "/admin-operations/lifecycle-jobs",

@@ -1166,6 +1166,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/feedback-slots", requireAuth, requireAnyAccessGroup(adminStaffAccessGroups), async (req: any, res) => {
+    try {
+      const supervisorAdminId = req.query.supervisorAdminId
+        ? parseInt(String(req.query.supervisorAdminId))
+        : req.adminUser.id;
+      if (!Number.isInteger(supervisorAdminId) || supervisorAdminId <= 0) {
+        return res.status(400).json({ message: "Invalid supervisor id" });
+      }
+      if (req.adminUser.role !== "super_admin" && supervisorAdminId !== req.adminUser.id) {
+        return res.status(403).json({ message: "Feedback meeting slots can only be viewed for your own supervisor schedule." });
+      }
+      const supervisor = await storage.getAdminUser(supervisorAdminId);
+      if (!supervisor || supervisor.status !== "active" || supervisor.role === "trainee_access") {
+        return res.status(404).json({ message: "Supervisor not found" });
+      }
+      const slots = await storage.listFeedbackSlotsForSupervisor(supervisorAdminId);
+      res.json(slots.map(sanitizeFeedbackSlot));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch feedback meeting slots" });
+    }
+  });
+
   app.post("/api/admin/feedback-slots", requireAuth, requireAnyAccessGroup(adminStaffAccessGroups), async (req: any, res) => {
     try {
       const payload = feedbackSlotPayloadSchema.parse(req.body);

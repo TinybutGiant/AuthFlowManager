@@ -30,6 +30,7 @@ import CancellationReviewDetail from "@/pages/CancellationReviewDetail";
 import TraineeWorkspace from "@/pages/TraineeWorkspace";
 import LifecycleJobs from "@/pages/LifecycleJobs";
 import DocumentTemplates from "@/pages/DocumentTemplates";
+import FeedbackMeetingSlots from "@/pages/FeedbackMeetingSlots";
 import NotFound from "@/pages/not-found";
 
 function VerifierApplicationDetailRoute() {
@@ -173,6 +174,21 @@ function Router() {
             <ProtectedRoute allowedAccessGroups={["super_admin", "document_templates"]}>
               <AdminLayout>
                 <DocumentTemplates />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
+          <Route path="/admin-operations/feedback-meeting-slots">
+            <ProtectedRoute
+              allowedRoles={[
+                "super_admin",
+                "admin_finance",
+                "admin_verifier",
+                "admin_support",
+              ]}
+            >
+              <AdminLayout>
+                <FeedbackMeetingSlots />
               </AdminLayout>
             </ProtectedRoute>
           </Route>

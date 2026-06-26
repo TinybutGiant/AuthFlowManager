@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import FeedbackSlotManager, { formatFeedbackSlot } from "@/components/checkins/FeedbackSlotManager";
 import { ArrowLeftRight, CalendarDays, Delete, CheckCircle, Download, Edit, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
 import {
   AdminEngagement,
@@ -24,7 +25,6 @@ import {
   AdminUser,
   CheckInBundle,
   FeedbackMeetingStatus,
-  FeedbackSlot,
   ROLE_DISPLAY_NAMES,
 } from "@/types/admin";
 import { apiRequest, getApiErrorMessage, tokenManager } from "@/lib/queryClient";
@@ -51,14 +51,6 @@ interface ProfileEditForm {
   email: string;
 }
 
-interface FeedbackSlotForm {
-  dayOfWeek: string;
-  startTime: string;
-  endTime: string;
-  timezone: string;
-}
-
-const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MEETING_STATUS_LABELS: Record<FeedbackMeetingStatus, string> = {
   scheduled: "Scheduled",
   absence_requested: "Absence Requested",
@@ -67,22 +59,6 @@ const MEETING_STATUS_LABELS: Record<FeedbackMeetingStatus, string> = {
   missed: "Missed",
   cancelled: "Cancelled",
 };
-
-function defaultFeedbackSlotForm(): FeedbackSlotForm {
-  return {
-    dayOfWeek: "1",
-    startTime: "10:00",
-    endTime: "10:30",
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-  };
-}
-
-function formatFeedbackSlot(slot: FeedbackSlot | { dayOfWeek: number; startTime: string; endTime: string; timezone: string }) {
-  const dayOfWeek = "day_of_week" in slot ? slot.day_of_week : slot.dayOfWeek;
-  const startTime = "start_time" in slot ? slot.start_time : slot.startTime;
-  const endTime = "end_time" in slot ? slot.end_time : slot.endTime;
-  return `${DAY_LABELS[dayOfWeek]} ${startTime}-${endTime} ${slot.timezone}`;
-}
 
 function engagementToEditForm(engagement: AdminEngagement): EngagementEditForm {
   return {
@@ -115,7 +91,6 @@ export default function AdminProfile() {
   const [profileEditForm, setProfileEditForm] = useState<ProfileEditForm | null>(null);
   const [editingEngagement, setEditingEngagement] = useState<AdminEngagement | null>(null);
   const [engagementEditForm, setEngagementEditForm] = useState<EngagementEditForm | null>(null);
-  const [feedbackSlotForms, setFeedbackSlotForms] = useState<Record<number, FeedbackSlotForm>>({});
 
   const { data: admin, isLoading } = useQuery<AdminUser>({
     queryKey: ["/api/admin/users", adminId],
@@ -372,60 +347,6 @@ export default function AdminProfile() {
     },
   });
 
-  const createFeedbackSlotMutation = useMutation({
-    mutationFn: async (engagement: AdminEngagement) => {
-      if (!engagement.supervisorAdminId) {
-        throw new Error("Set a supervisor before adding Feedback Meeting slots.");
-      }
-      const form = feedbackSlotForms[engagement.id] ?? defaultFeedbackSlotForm();
-      const response = await apiRequest("POST", "/api/admin/feedback-slots", {
-        supervisorAdminId: engagement.supervisorAdminId,
-        dayOfWeek: Number(form.dayOfWeek),
-        startTime: form.startTime,
-        endTime: form.endTime,
-        timezone: form.timezone,
-      });
-      return response.json() as Promise<FeedbackSlot>;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: checkInQueryKey });
-      toast({
-        title: "Feedback Meeting slot added",
-        description: "The trainee can select this slot from the Trainee Workspace.",
-      });
-    },
-    onError: (error) => {
-      toast({
-        title: "Could not add Feedback Meeting slot",
-        description: getApiErrorMessage(error, "Please check the slot values and try again."),
-        variant: "destructive",
-      });
-    },
-  });
-
-  const deactivateFeedbackSlotMutation = useMutation({
-    mutationFn: async (slotId: number) => {
-      const response = await apiRequest("PATCH", `/api/admin/feedback-slots/${slotId}`, {
-        status: "inactive",
-      });
-      return response.json() as Promise<FeedbackSlot>;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: checkInQueryKey });
-      toast({
-        title: "Feedback Meeting slot updated",
-        description: "The slot is no longer available for new selections.",
-      });
-    },
-    onError: (error) => {
-      toast({
-        title: "Could not update Feedback Meeting slot",
-        description: getApiErrorMessage(error, "Please try again."),
-        variant: "destructive",
-      });
-    },
-  });
-
   const updateMeetingStatusMutation = useMutation({
     mutationFn: async (input: { engagementId: number; occurrenceId: number; status: FeedbackMeetingStatus }) => {
       const response = await apiRequest(
@@ -465,20 +386,6 @@ export default function AdminProfile() {
 
   const updateEngagementField = (field: keyof EngagementEditForm, value: string) => {
     setEngagementEditForm((current) => current ? { ...current, [field]: value } : current);
-  };
-
-  const feedbackSlotFormFor = (engagementId: number) => {
-    return feedbackSlotForms[engagementId] ?? defaultFeedbackSlotForm();
-  };
-
-  const updateFeedbackSlotForm = (engagementId: number, field: keyof FeedbackSlotForm, value: string) => {
-    setFeedbackSlotForms((current) => ({
-      ...current,
-      [engagementId]: {
-        ...(current[engagementId] ?? defaultFeedbackSlotForm()),
-        [field]: value,
-      },
-    }));
   };
 
   const openEditProfile = () => {
@@ -1007,7 +914,6 @@ export default function AdminProfile() {
                         <div className="mt-4 rounded-md border border-border p-4" data-testid={`card-check-ins-${engagement.id}`}>
                           {(() => {
                             const checkIns = checkInsByEngagement[engagement.id];
-                            const slotForm = feedbackSlotFormFor(engagement.id);
                             const selectedSchedule = checkIns?.selected_schedule;
                             const occurrences = checkIns?.meeting_occurrences ?? [];
                             const absenceRequests = occurrences.filter((occurrence) => (
@@ -1036,73 +942,22 @@ export default function AdminProfile() {
 
                                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                                   <div className="rounded-md border border-border p-3">
-                                    <p className="mb-2 text-sm font-medium">Supervisor Available Slots</p>
-                                    {checkIns?.available_slots?.length ? (
-                                      <div className="space-y-2">
-                                        {checkIns.available_slots.map((slot) => (
-                                          <div key={slot.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                                            <span>{formatFeedbackSlot(slot)}</span>
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              onClick={() => deactivateFeedbackSlotMutation.mutate(slot.id)}
-                                              disabled={deactivateFeedbackSlotMutation.isPending}
-                                              data-testid={`button-deactivate-feedback-slot-${slot.id}`}
-                                            >
-                                              Disable
-                                            </Button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <p className="text-sm text-muted-foreground">No active Feedback Meeting slots have been defined for this supervisor.</p>
-                                    )}
-
-                                    {engagement.supervisorAdminId ? (
-                                      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-5">
-                                        <Select
-                                          value={slotForm.dayOfWeek}
-                                          onValueChange={(value) => updateFeedbackSlotForm(engagement.id, "dayOfWeek", value)}
-                                        >
-                                          <SelectTrigger data-testid={`select-feedback-slot-day-${engagement.id}`}>
-                                            <SelectValue />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {DAY_LABELS.map((label, index) => (
-                                              <SelectItem key={label} value={String(index)}>{label}</SelectItem>
-                                            ))}
-                                          </SelectContent>
-                                        </Select>
-                                        <Input
-                                          type="time"
-                                          value={slotForm.startTime}
-                                          onChange={(event) => updateFeedbackSlotForm(engagement.id, "startTime", event.target.value)}
-                                          data-testid={`input-feedback-slot-start-${engagement.id}`}
-                                        />
-                                        <Input
-                                          type="time"
-                                          value={slotForm.endTime}
-                                          onChange={(event) => updateFeedbackSlotForm(engagement.id, "endTime", event.target.value)}
-                                          data-testid={`input-feedback-slot-end-${engagement.id}`}
-                                        />
-                                        <Input
-                                          value={slotForm.timezone}
-                                          onChange={(event) => updateFeedbackSlotForm(engagement.id, "timezone", event.target.value)}
-                                          data-testid={`input-feedback-slot-timezone-${engagement.id}`}
-                                        />
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => createFeedbackSlotMutation.mutate(engagement)}
-                                          disabled={createFeedbackSlotMutation.isPending}
-                                          data-testid={`button-add-feedback-slot-${engagement.id}`}
-                                        >
-                                          Add Slot
+                                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                      <p className="text-sm font-medium">Supervisor Available Slots</p>
+                                      <Link href={engagement.supervisorAdminId
+                                        ? `/admin-operations/feedback-meeting-slots?supervisorAdminId=${engagement.supervisorAdminId}`
+                                        : "/admin-operations/feedback-meeting-slots"}
+                                      >
+                                        <Button variant="outline" size="sm" data-testid={`link-feedback-slot-settings-${engagement.id}`}>
+                                          Settings
                                         </Button>
-                                      </div>
-                                    ) : (
-                                      <p className="mt-3 text-sm text-muted-foreground">Set a supervisor before adding Feedback Meeting slots.</p>
-                                    )}
+                                      </Link>
+                                    </div>
+                                    <FeedbackSlotManager
+                                      supervisorAdminId={engagement.supervisorAdminId}
+                                      mode="readonly"
+                                      emptyMessage="No active Feedback Meeting slots have been defined for this supervisor."
+                                    />
                                   </div>
 
                                   <div className="rounded-md border border-border p-3">
