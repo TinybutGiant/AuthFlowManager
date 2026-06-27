@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { CalendarDays } from "lucide-react";
-import FeedbackSlotManager from "@/components/checkins/FeedbackSlotManager";
+import FeedbackAvailabilityEditor from "@/components/checkins/FeedbackAvailabilityEditor";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/hooks/useAuth";
 import type { AdminUser } from "@/types/admin";
 
@@ -55,35 +54,18 @@ export default function FeedbackMeetingSlots() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-foreground">Feedback Meeting Slots</h1>
-        <p className="text-muted-foreground">Supervisor availability for trainee Feedback Meeting schedules.</p>
+        <h1 className="text-3xl font-bold text-foreground">Feedback Meeting Availability</h1>
+        <p className="text-muted-foreground">Supervisor recurring availability windows for trainee Feedback Meeting schedules.</p>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CalendarDays className="h-5 w-5" />
-            Supervisor Availability
+            Supervisor Availability Editor
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {isSuperAdmin && (
-            <div className="max-w-md">
-              <Select value={selectedSupervisorId} onValueChange={setSelectedSupervisorId}>
-                <SelectTrigger data-testid="select-feedback-slot-supervisor">
-                  <SelectValue placeholder="Select supervisor" />
-                </SelectTrigger>
-                <SelectContent>
-                  {supervisorOptions.map((admin) => (
-                    <SelectItem key={admin.id} value={String(admin.id)}>
-                      {admin.name} - {admin.email}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
           {selectedSupervisor && (
             <div className="rounded-md border border-border p-3 text-sm">
               <span className="text-muted-foreground">Supervisor: </span>
@@ -92,7 +74,14 @@ export default function FeedbackMeetingSlots() {
             </div>
           )}
 
-          <FeedbackSlotManager supervisorAdminId={selectedSupervisorId} mode="manage" />
+          <FeedbackAvailabilityEditor
+            supervisorAdminId={selectedSupervisorId}
+            mode="manage"
+            supervisorOptions={supervisorOptions}
+            selectedSupervisorId={selectedSupervisorId}
+            onSupervisorChange={setSelectedSupervisorId}
+            showSupervisorSelector={isSuperAdmin}
+          />
         </CardContent>
       </Card>
     </div>

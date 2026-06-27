@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, CheckCircle2, ClipboardList, Download, FileText, GraduationCap, UserRound } from "lucide-react";
+import { CalendarDays, CalendarPlus, CheckCircle2, ClipboardList, Download, FileText, GraduationCap, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,7 +91,7 @@ function getMeetingStatusVariant(status: FeedbackMeetingStatus) {
   return "secondary" as const;
 }
 
-function formatFeedbackSlot(slot: FeedbackSlot | { dayOfWeek: number; startTime: string; endTime: string; timezone: string }) {
+function formatFeedbackMeetingTime(slot: FeedbackSlot | { dayOfWeek: number; startTime: string; endTime: string; timezone: string }) {
   const dayOfWeek = "day_of_week" in slot ? slot.day_of_week : slot.dayOfWeek;
   const startTime = "start_time" in slot ? slot.start_time : slot.startTime;
   const endTime = "end_time" in slot ? slot.end_time : slot.endTime;
@@ -159,6 +159,7 @@ export default function TraineeWorkspace() {
   const upcomingMeetingOccurrences = meetingOccurrences.filter((occurrence) => (
     occurrence.status !== "cancelled" && occurrence.occurrence_date >= new Date().toISOString().slice(0, 10)
   ));
+  const hasExportableFeedbackMeetings = meetingOccurrences.some((occurrence) => occurrence.status === "scheduled");
   const canSubmitActivity = hasAcceptedOffer && engagement?.status === "active";
   const canEndEngagement = Boolean(engagement && !["ended", "cancelled"].includes(engagement.status));
 
@@ -220,7 +221,7 @@ export default function TraineeWorkspace() {
     onError: (error) => {
       toast({
         title: "Could not confirm feedback meeting schedule",
-        description: getApiErrorMessage(error, "Please select available feedback meeting slots and try again."),
+        description: getApiErrorMessage(error, "Please select availability windows and exact Feedback Meeting times, then try again."),
         variant: "destructive",
       });
     },
@@ -376,6 +377,31 @@ export default function TraineeWorkspace() {
       toast({
         title: "Could not download offer letter",
         description: getApiErrorMessage(error, "Please try again."),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const downloadFeedbackMeetingsCalendar = async () => {
+    try {
+      const token = tokenManager.getToken();
+      const response = await fetch("/api/trainee/me/feedback-meetings/calendar.ics", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = window.document.createElement("a");
+      anchor.href = url;
+      anchor.download = "feedback-meetings.ics";
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast({
+        title: "Could not download calendar file",
+        description: getApiErrorMessage(error, "Please try again after confirming your Feedback Meeting schedule."),
         variant: "destructive",
       });
     }
@@ -712,9 +738,20 @@ export default function TraineeWorkspace() {
                           </div>
                           <div className="space-y-1 text-sm">
                             {selectedSchedule.selected_slots.map((slot) => (
-                              <p key={slot.id}>{formatFeedbackSlot(slot)}</p>
+                              <p key={slot.id}>{formatFeedbackMeetingTime(slot)}</p>
                             ))}
                           </div>
+                          <Button
+                            className="mt-3"
+                            variant="outline"
+                            size="sm"
+                            onClick={downloadFeedbackMeetingsCalendar}
+                            disabled={!hasExportableFeedbackMeetings}
+                            data-testid="button-download-feedback-calendar"
+                          >
+                            <CalendarPlus className="mr-2 h-4 w-4" />
+                            Add to Calendar (.ics)
+                          </Button>
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="schedule-change-note">Request Schedule Change</Label>
@@ -739,7 +776,7 @@ export default function TraineeWorkspace() {
                     ) : (
                       <div className="space-y-4" data-testid="form-feedback-schedule">
                         <p className="text-sm text-muted-foreground">
-                          Select recurring Feedback Meeting times from your supervisor's available slots. This required setup should be completed within 7 days after accepting the offer.
+                          Select a supervisor Availability Window, then enter the exact recurring Feedback Meeting start and end time inside that window. This required setup should be completed within 7 days after accepting the offer.
                         </p>
                         <div>
                           <Label htmlFor="feedback-frequency">Frequency</Label>
@@ -768,7 +805,7 @@ export default function TraineeWorkspace() {
                           const shouldShowSelectionError = Boolean(selection.slotId || selection.startTime || selection.endTime);
                           return (
                             <div key={index} className="space-y-2">
-                              <Label>Feedback Meeting Range {index + 1}</Label>
+                              <Label>Availability Window {index + 1}</Label>
                               <Select
                                 value={selection.slotId}
                                 onValueChange={(value) => updateSelectedFeedbackSlot(index, value)}
@@ -779,7 +816,7 @@ export default function TraineeWorkspace() {
                                 <SelectContent>
                                   {feedbackSlots.map((slot) => (
                                     <SelectItem key={slot.id} value={String(slot.id)}>
-                                      {formatFeedbackSlot(slot)}
+                                      {formatFeedbackMeetingTime(slot)}
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
@@ -833,7 +870,7 @@ export default function TraineeWorkspace() {
                         )}
                         {feedbackSlots.length === 0 && (
                           <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-                            No supervisor-defined Feedback Meeting slots are available yet.
+                            No supervisor-defined Feedback Meeting availability windows are available yet.
                           </p>
                         )}
                         <Button

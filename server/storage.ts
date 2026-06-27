@@ -138,9 +138,12 @@ export interface IStorage {
     activityLog: InsertAdminActivityLog,
     event?: Omit<InsertAdminLifecycleEvent, "adminUserId" | "engagementId">
   ): Promise<AdminActivityLog>;
+  getFeedbackSlot(id: number): Promise<SupervisorFeedbackSlot | undefined>;
   listFeedbackSlotsForSupervisor(supervisorAdminId: number): Promise<SupervisorFeedbackSlot[]>;
   createFeedbackSlot(slot: InsertSupervisorFeedbackSlot): Promise<SupervisorFeedbackSlot>;
   updateFeedbackSlot(id: number, updates: Partial<SupervisorFeedbackSlot>): Promise<SupervisorFeedbackSlot | undefined>;
+  deleteFeedbackSlot(id: number): Promise<SupervisorFeedbackSlot | undefined>;
+  countFeedbackSchedulesReferencingSlot(slotId: number): Promise<number>;
   getActiveFeedbackScheduleForEngagement(engagementId: number): Promise<EngagementFeedbackSchedule | undefined>;
   listFeedbackSchedulesForEngagement(engagementId: number): Promise<EngagementFeedbackSchedule[]>;
   confirmFeedbackScheduleWithOccurrences(
@@ -1017,6 +1020,15 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async getFeedbackSlot(id: number): Promise<SupervisorFeedbackSlot | undefined> {
+    const [slot] = await db
+      .select()
+      .from(supervisorFeedbackSlots)
+      .where(eq(supervisorFeedbackSlots.id, id))
+      .limit(1);
+    return slot;
+  }
+
   async listFeedbackSlotsForSupervisor(supervisorAdminId: number): Promise<SupervisorFeedbackSlot[]> {
     return await db
       .select()
@@ -1037,12 +1049,33 @@ export class DatabaseStorage implements IStorage {
     id: number,
     updates: Partial<SupervisorFeedbackSlot>
   ): Promise<SupervisorFeedbackSlot | undefined> {
+    const cleanUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([, value]) => value !== undefined)
+    );
     const [slot] = await db
       .update(supervisorFeedbackSlots)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...cleanUpdates, updatedAt: new Date() })
       .where(eq(supervisorFeedbackSlots.id, id))
       .returning();
     return slot;
+  }
+
+  async deleteFeedbackSlot(id: number): Promise<SupervisorFeedbackSlot | undefined> {
+    const [slot] = await db
+      .delete(supervisorFeedbackSlots)
+      .where(eq(supervisorFeedbackSlots.id, id))
+      .returning();
+    return slot;
+  }
+
+  async countFeedbackSchedulesReferencingSlot(slotId: number): Promise<number> {
+    const [result] = await db
+      .select({
+        count: sql<number>`count(*)`,
+      })
+      .from(engagementFeedbackSchedules)
+      .where(sql`${engagementFeedbackSchedules.selectedSlots} @> ${JSON.stringify([{ id: slotId }])}::jsonb`);
+    return Number(result?.count ?? 0);
   }
 
   async getActiveFeedbackScheduleForEngagement(

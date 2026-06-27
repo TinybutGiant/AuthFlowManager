@@ -274,8 +274,26 @@ export const feedbackSlotPayloadSchema = z.object({
 });
 
 export const feedbackSlotUpdatePayloadSchema = z.object({
-  status: z.enum(['active', 'inactive']),
-}).strict();
+  dayOfWeek: z.number().int().min(0).max(6).optional(),
+  startTime: timeOfDaySchema.optional(),
+  endTime: timeOfDaySchema.optional(),
+  timezone: timezoneSchema.optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+}).strict().superRefine((data, ctx) => {
+  if (Object.keys(data).length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'At least one availability window field is required',
+    });
+  }
+  if (data.startTime && data.endTime && data.endTime <= data.startTime) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['endTime'],
+      message: 'End time must be after start time',
+    });
+  }
+});
 
 const feedbackScheduleSelectionPayloadSchema = z.object({
   slotId: z.number().int().positive(),

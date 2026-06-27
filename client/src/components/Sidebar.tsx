@@ -96,7 +96,7 @@ const menuItems: MenuItem[] = [
     accessGroups: ['super_admin', 'admin_operations', 'document_templates', 'lifecycle_jobs', 'finance_admin', 'verifier_admin', 'support_admin'],
     children: [
       {
-        title: "Feedback Meeting Slots",
+        title: "Feedback Meeting Availability",
         href: "/admin-operations/feedback-meeting-slots",
         icon: CalendarDays,
         accessGroups: ['super_admin', 'finance_admin', 'verifier_admin', 'support_admin'],

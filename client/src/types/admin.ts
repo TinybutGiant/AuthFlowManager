@@ -175,6 +175,8 @@ export interface FeedbackSlot {
   end_time: string;
   timezone: string;
   status: 'active' | 'inactive';
+  schedule_reference_count?: number;
+  has_schedule_references?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }

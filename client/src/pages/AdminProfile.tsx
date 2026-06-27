@@ -16,7 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import FeedbackSlotManager, { formatFeedbackSlot } from "@/components/checkins/FeedbackSlotManager";
+import FeedbackAvailabilityEditor, { formatFeedbackAvailabilityWindow } from "@/components/checkins/FeedbackAvailabilityEditor";
 import { ArrowLeftRight, CalendarDays, Delete, CheckCircle, Download, Edit, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
 import {
   AdminEngagement,
@@ -943,7 +943,7 @@ export default function AdminProfile() {
                                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                                   <div className="rounded-md border border-border p-3">
                                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                      <p className="text-sm font-medium">Supervisor Available Slots</p>
+                                      <p className="text-sm font-medium">Supervisor Availability Windows</p>
                                       <Link href={engagement.supervisorAdminId
                                         ? `/admin-operations/feedback-meeting-slots?supervisorAdminId=${engagement.supervisorAdminId}`
                                         : "/admin-operations/feedback-meeting-slots"}
@@ -953,10 +953,10 @@ export default function AdminProfile() {
                                         </Button>
                                       </Link>
                                     </div>
-                                    <FeedbackSlotManager
+                                    <FeedbackAvailabilityEditor
                                       supervisorAdminId={engagement.supervisorAdminId}
                                       mode="readonly"
-                                      emptyMessage="No active Feedback Meeting slots have been defined for this supervisor."
+                                      emptyMessage="No active Feedback Meeting availability windows have been defined for this supervisor."
                                     />
                                   </div>
 
@@ -969,7 +969,7 @@ export default function AdminProfile() {
                                           <Badge variant="outline">{selectedSchedule.timezone}</Badge>
                                         </div>
                                         {selectedSchedule.selected_slots.map((slot) => (
-                                          <p key={slot.id}>{formatFeedbackSlot(slot)}</p>
+                                          <p key={slot.id}>{formatFeedbackAvailabilityWindow(slot)}</p>
                                         ))}
                                         {selectedSchedule.change_request_note && (
                                           <p className="rounded-md bg-muted/40 p-2">

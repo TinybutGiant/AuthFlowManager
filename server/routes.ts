@@ -235,7 +235,7 @@ function sanitizeActivityLog(log: any) {
   };
 }
 
-function sanitizeFeedbackSlot(slot: any) {
+function sanitizeFeedbackSlot(slot: any, scheduleReferenceCount = 0) {
   return {
     id: slot.id,
     supervisor_admin_id: slot.supervisorAdminId,
@@ -244,9 +244,45 @@ function sanitizeFeedbackSlot(slot: any) {
     end_time: slot.endTime,
     timezone: slot.timezone,
     status: slot.status,
+    schedule_reference_count: scheduleReferenceCount,
+    has_schedule_references: scheduleReferenceCount > 0,
     created_at: slot.createdAt,
     updated_at: slot.updatedAt,
   };
+}
+
+async function sanitizeFeedbackSlotsWithReferences(slots: any[]) {
+  return await Promise.all(slots.map(async (slot) => (
+    sanitizeFeedbackSlot(slot, await storage.countFeedbackSchedulesReferencingSlot(slot.id))
+  )));
+}
+
+function availabilityWindowsOverlap(
+  first: { dayOfWeek: number; startTime: string; endTime: string; timezone: string },
+  second: { dayOfWeek: number; startTime: string; endTime: string; timezone: string },
+) {
+  return (
+    first.dayOfWeek === second.dayOfWeek &&
+    first.timezone === second.timezone &&
+    first.startTime < second.endTime &&
+    second.startTime < first.endTime
+  );
+}
+
+async function findOverlappingActiveFeedbackSlot(input: {
+  supervisorAdminId: number;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  timezone: string;
+  excludeSlotId?: number;
+}) {
+  const slots = await storage.listFeedbackSlotsForSupervisor(input.supervisorAdminId);
+  return slots.find((slot) => (
+    slot.status === "active" &&
+    slot.id !== input.excludeSlotId &&
+    availabilityWindowsOverlap(input, slot)
+  ));
 }
 
 function sanitizeFeedbackSchedule(schedule: any) {
@@ -296,6 +332,79 @@ function dateOnly(value: Date) {
 
 function dateOnlyToUtc(value: string) {
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+function formatIcsTimestamp(value = new Date()) {
+  return value.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function formatIcsLocalDateTime(date: string, time: string) {
+  return `${date.replace(/-/g, "")}T${time.replace(":", "")}00`;
+}
+
+function escapeIcsText(value: string) {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\r?\n/g, "\\n")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,");
+}
+
+function foldIcsLine(line: string) {
+  const maxLength = 75;
+  if (line.length <= maxLength) return line;
+  const segments = [];
+  let remaining = line;
+  while (remaining.length > maxLength) {
+    segments.push(remaining.slice(0, maxLength));
+    remaining = ` ${remaining.slice(maxLength)}`;
+  }
+  segments.push(remaining);
+  return segments.join("\r\n");
+}
+
+function buildFeedbackMeetingsIcs(input: {
+  traineeName: string;
+  supervisorName: string;
+  occurrences: any[];
+}) {
+  const now = formatIcsTimestamp();
+  const calendarName = `Feedback Meetings - ${input.traineeName}`;
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Yaotu Technologies//Feedback Meetings//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    `X-WR-CALNAME:${escapeIcsText(calendarName)}`,
+  ];
+
+  for (const occurrence of input.occurrences) {
+    const timezone = occurrence.timezone || "UTC";
+    const occurrenceDate = safeDateOnly(occurrence.occurrenceDate);
+    if (!occurrenceDate) continue;
+    const description = [
+      `Trainee: ${input.traineeName}`,
+      `Supervisor: ${input.supervisorName}`,
+      `Timezone: ${timezone}`,
+      "Description: Recurring Feedback Meeting scheduled in the Trainee Workspace.",
+    ].join("\n");
+
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:feedback-meeting-${occurrence.id}@yaotu-technologies`,
+      `DTSTAMP:${now}`,
+      `DTSTART;TZID=${timezone}:${formatIcsLocalDateTime(occurrenceDate, occurrence.startTime)}`,
+      `DTEND;TZID=${timezone}:${formatIcsLocalDateTime(occurrenceDate, occurrence.endTime)}`,
+      `SUMMARY:${escapeIcsText(`Feedback Meeting with ${input.supervisorName}`)}`,
+      `DESCRIPTION:${escapeIcsText(description)}`,
+      `STATUS:${occurrence.status === "cancelled" ? "CANCELLED" : "CONFIRMED"}`,
+      "END:VEVENT",
+    );
+  }
+
+  lines.push("END:VCALENDAR");
+  return `${lines.map(foldIcsLine).join("\r\n")}\r\n`;
 }
 
 function addUtcDays(value: Date, days: number) {
@@ -779,6 +888,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/trainee/me/feedback-meetings/calendar.ics", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
+    try {
+      const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
+      if (!engagement) {
+        return res.status(404).json({ message: "Current engagement not found" });
+      }
+      const hasAcceptedOffer = await storage.hasAcceptedOfferLetterForEngagement(engagement.id);
+      if (!hasAcceptedOffer) {
+        return res.status(403).json({ message: "Offer acceptance is required before exporting feedback meetings." });
+      }
+      const schedule = await storage.getActiveFeedbackScheduleForEngagement(engagement.id);
+      if (!schedule) {
+        return res.status(404).json({ message: "Confirmed Feedback Meeting schedule not found" });
+      }
+      const supervisor = engagement.supervisorAdminId
+        ? await storage.getAdminUser(engagement.supervisorAdminId)
+        : null;
+      const occurrences = await storage.listFeedbackMeetingOccurrencesForEngagement(engagement.id);
+      const exportableOccurrences = occurrences.filter((occurrence) => occurrence.status === "scheduled");
+      const ics = buildFeedbackMeetingsIcs({
+        traineeName: req.adminUser.name,
+        supervisorName: supervisor?.name ?? "Supervisor",
+        occurrences: exportableOccurrences,
+      });
+
+      res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Content-Disposition", 'attachment; filename="feedback-meetings.ics"');
+      res.send(ics);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to export Feedback Meeting calendar" });
+    }
+  });
+
   app.post("/api/trainee/me/feedback-schedule", requireAuth, requireAccessGroup('trainee_workspace'), async (req: any, res) => {
     try {
       const engagement = await storage.getCurrentTraineeEngagement(req.adminUser.id);
@@ -817,7 +960,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
       if (slotSnapshots.some((slot) => !slot)) {
-        return res.status(400).json({ message: "Selected Feedback Meeting times must be within active supervisor slots." });
+        return res.status(400).json({ message: "Selected Feedback Meeting times must be within active supervisor availability windows." });
       }
       const selectedTimeKeys = slotSnapshots.map((slot) => (
         `${slot!.dayOfWeek}:${slot!.startTime}-${slot!.endTime}:${slot!.timezone}`
@@ -1209,16 +1352,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid supervisor id" });
       }
       if (req.adminUser.role !== "super_admin" && supervisorAdminId !== req.adminUser.id) {
-        return res.status(403).json({ message: "Feedback meeting slots can only be viewed for your own supervisor schedule." });
+        return res.status(403).json({ message: "Feedback Meeting availability can only be viewed for your own supervisor schedule." });
       }
       const supervisor = await storage.getAdminUser(supervisorAdminId);
       if (!supervisor || supervisor.status !== "active" || supervisor.role === "trainee_access") {
         return res.status(404).json({ message: "Supervisor not found" });
       }
       const slots = await storage.listFeedbackSlotsForSupervisor(supervisorAdminId);
-      res.json(slots.map(sanitizeFeedbackSlot));
+      res.json(await sanitizeFeedbackSlotsWithReferences(slots));
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch feedback meeting slots" });
+      res.status(500).json({ message: "Failed to fetch Feedback Meeting availability" });
     }
   });
 
@@ -1226,11 +1369,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const payload = feedbackSlotPayloadSchema.parse(req.body);
       if (req.adminUser.role !== "super_admin" && payload.supervisorAdminId !== req.adminUser.id) {
-        return res.status(403).json({ message: "Feedback meeting slots can only be created for your own supervisor schedule." });
+        return res.status(403).json({ message: "Feedback Meeting availability can only be created for your own supervisor schedule." });
       }
       const supervisor = await storage.getAdminUser(payload.supervisorAdminId);
       if (!supervisor || supervisor.status !== "active" || supervisor.role === "trainee_access") {
-        return res.status(400).json({ message: "Feedback meeting slots must be tied to an active supervisor." });
+        return res.status(400).json({ message: "Feedback Meeting availability must be tied to an active supervisor." });
+      }
+      const overlappingSlot = await findOverlappingActiveFeedbackSlot({
+        supervisorAdminId: payload.supervisorAdminId,
+        dayOfWeek: payload.dayOfWeek,
+        startTime: payload.startTime,
+        endTime: payload.endTime,
+        timezone: payload.timezone,
+      });
+      if (overlappingSlot) {
+        return res.status(409).json({ message: "Availability window overlaps an existing active window for this supervisor, weekday, and timezone." });
       }
       const slot = await storage.createFeedbackSlot({
         supervisorAdminId: payload.supervisorAdminId,
@@ -1243,7 +1396,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       res.status(201).json(sanitizeFeedbackSlot(slot));
     } catch (error: any) {
-      res.status(400).json({ message: "Failed to create feedback meeting slot", error: error?.message });
+      res.status(400).json({ message: "Failed to create Feedback Meeting availability", error: error?.message });
     }
   });
 
@@ -1251,21 +1404,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const payload = feedbackSlotUpdatePayloadSchema.parse(req.body);
       const slotId = parseInt(req.params.slotId);
-      if (req.adminUser.role !== "super_admin") {
-        const ownSlots = await storage.listFeedbackSlotsForSupervisor(req.adminUser.id);
-        if (!ownSlots.some((slot) => slot.id === slotId)) {
-          return res.status(404).json({ message: "Feedback meeting slot not found" });
+      const existing = await storage.getFeedbackSlot(slotId);
+      if (!existing || (req.adminUser.role !== "super_admin" && existing.supervisorAdminId !== req.adminUser.id)) {
+        return res.status(404).json({ message: "Feedback Meeting availability window not found" });
+      }
+      const merged = {
+        supervisorAdminId: existing.supervisorAdminId,
+        dayOfWeek: payload.dayOfWeek ?? existing.dayOfWeek,
+        startTime: payload.startTime ?? existing.startTime,
+        endTime: payload.endTime ?? existing.endTime,
+        timezone: payload.timezone ?? existing.timezone,
+        status: payload.status ?? existing.status,
+      };
+      if (merged.endTime <= merged.startTime) {
+        return res.status(400).json({ message: "End time must be after start time" });
+      }
+      if (merged.status === "active") {
+        const overlappingSlot = await findOverlappingActiveFeedbackSlot({
+          ...merged,
+          excludeSlotId: slotId,
+        });
+        if (overlappingSlot) {
+          return res.status(409).json({ message: "Availability window overlaps an existing active window for this supervisor, weekday, and timezone." });
         }
       }
       const slot = await storage.updateFeedbackSlot(slotId, {
+        dayOfWeek: payload.dayOfWeek,
+        startTime: payload.startTime,
+        endTime: payload.endTime,
+        timezone: payload.timezone,
         status: payload.status,
       });
       if (!slot) {
-        return res.status(404).json({ message: "Feedback meeting slot not found" });
+        return res.status(404).json({ message: "Feedback Meeting availability window not found" });
       }
-      res.json(sanitizeFeedbackSlot(slot));
+      const referenceCount = await storage.countFeedbackSchedulesReferencingSlot(slot.id);
+      res.json(sanitizeFeedbackSlot(slot, referenceCount));
     } catch (error: any) {
-      res.status(400).json({ message: "Failed to update feedback meeting slot", error: error?.message });
+      res.status(400).json({ message: "Failed to update Feedback Meeting availability", error: error?.message });
+    }
+  });
+
+  app.delete("/api/admin/feedback-slots/:slotId", requireAuth, requireAnyAccessGroup(adminStaffAccessGroups), async (req: any, res) => {
+    try {
+      const slotId = parseInt(req.params.slotId);
+      const existing = await storage.getFeedbackSlot(slotId);
+      if (!existing || (req.adminUser.role !== "super_admin" && existing.supervisorAdminId !== req.adminUser.id)) {
+        return res.status(404).json({ message: "Feedback Meeting availability window not found" });
+      }
+      const referenceCount = await storage.countFeedbackSchedulesReferencingSlot(slotId);
+      if (referenceCount > 0) {
+        return res.status(409).json({
+          message: "This availability window is referenced by trainee Feedback Meeting schedules. Deactivate it instead.",
+          scheduleReferenceCount: referenceCount,
+        });
+      }
+      const deleted = await storage.deleteFeedbackSlot(slotId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Feedback Meeting availability window not found" });
+      }
+      res.json({ deleted: true, id: slotId });
+    } catch (error: any) {
+      res.status(400).json({ message: "Failed to delete Feedback Meeting availability", error: error?.message });
     }
   });
 

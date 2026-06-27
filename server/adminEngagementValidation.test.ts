@@ -1195,6 +1195,11 @@ test("trainee workspace APIs are scoped to authenticated trainee", async () => {
       access: /requireAccessGroup\('trainee_workspace'\)/,
     },
     {
+      method: "get",
+      route: '"/api/trainee/me/feedback-meetings/calendar.ics"',
+      access: /requireAccessGroup\('trainee_workspace'\)/,
+    },
+    {
       method: "post",
       route: '"/api/trainee/me/feedback-schedule"',
       access: /requireAccessGroup\('trainee_workspace'\)/,
@@ -1259,6 +1264,7 @@ test("admin and assigned supervisor check-in APIs use scoped admin staff access"
     '"/api/admin/engagements/:engagementId/check-ins"',
     '"/api/admin/feedback-slots"',
     '"/api/admin/feedback-slots/:slotId"',
+    '"/api/admin/feedback-slots/:slotId"',
     '"/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status"',
   ];
 
@@ -1290,7 +1296,10 @@ test("admin and assigned supervisor check-in APIs use scoped admin staff access"
     source.indexOf('"/api/admin/feedback-slots/:slotId"'),
     source.indexOf('"/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status"'),
   );
-  assert.match(updateSlotRoute, /listFeedbackSlotsForSupervisor\(req\.adminUser\.id\)/);
+  assert.match(updateSlotRoute, /storage\.getFeedbackSlot\(slotId\)/);
+  assert.match(updateSlotRoute, /findOverlappingActiveFeedbackSlot/);
+  assert.match(updateSlotRoute, /storage\.countFeedbackSchedulesReferencingSlot/);
+  assert.match(updateSlotRoute, /storage\.deleteFeedbackSlot/);
 
   const statusRoute = source.slice(
     source.indexOf('"/api/admin/engagements/:engagementId/feedback-meetings/:occurrenceId/status"'),
@@ -1306,6 +1315,8 @@ test("trainee feedback schedule captures exact meeting times inside supervisor r
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
 
   assert.match(traineePageSource, /SelectValue placeholder="Select available range"/);
+  assert.match(traineePageSource, /Availability Window/);
+  assert.match(traineePageSource, /exact recurring Feedback Meeting start and end time inside that window/);
   assert.match(traineePageSource, /Available range:/);
   assert.match(traineePageSource, /input-feedback-meeting-start/);
   assert.match(traineePageSource, /input-feedback-meeting-end/);
@@ -1326,36 +1337,63 @@ test("trainee feedback schedule captures exact meeting times inside supervisor r
   assert.match(routesSource, /endTime: selection\.endTime/);
 });
 
-test("feedback meeting slot settings are centralized outside trainee profile", async () => {
+test("feedback meeting availability settings are centralized outside trainee profile", async () => {
   const appSource = await readFile(new URL("../client/src/App.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("../client/src/components/Sidebar.tsx", import.meta.url), "utf8");
   const profileSource = await readFile(new URL("../client/src/pages/AdminProfile.tsx", import.meta.url), "utf8");
   const settingsSource = await readFile(new URL("../client/src/pages/FeedbackMeetingSlots.tsx", import.meta.url), "utf8");
-  const managerSource = await readFile(new URL("../client/src/components/checkins/FeedbackSlotManager.tsx", import.meta.url), "utf8");
+  const editorSource = await readFile(new URL("../client/src/components/checkins/FeedbackAvailabilityEditor.tsx", import.meta.url), "utf8");
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
 
   assert.match(appSource, /path="\/admin-operations\/feedback-meeting-slots"/);
   assert.match(appSource, /<FeedbackMeetingSlots \/>/);
-  assert.match(sidebarSource, /title: "Feedback Meeting Slots"/);
+  assert.match(sidebarSource, /title: "Feedback Meeting Availability"/);
   assert.match(sidebarSource, /href: "\/admin-operations\/feedback-meeting-slots"/);
 
   assert.match(profileSource, /link-feedback-slot-settings/);
   assert.match(profileSource, /\/admin-operations\/feedback-meeting-slots\?supervisorAdminId=/);
-  assert.match(profileSource, /<FeedbackSlotManager/);
-  assert.match(profileSource, /Supervisor Available Slots/);
+  assert.match(profileSource, /<FeedbackAvailabilityEditor/);
+  assert.match(profileSource, /Supervisor Availability Windows/);
   assert.match(profileSource, /Selected Feedback Meeting Schedule/);
-  assert.doesNotMatch(profileSource, /button-add-feedback-slot|button-deactivate-feedback-slot|input-feedback-slot-start|select-feedback-slot-day/);
+  assert.doesNotMatch(profileSource, /button-add-feedback-availability|input-feedback-availability-start|checkbox-feedback-availability-day/);
 
   assert.match(settingsSource, /querySupervisorIdFromLocation/);
   assert.match(settingsSource, /requestedSupervisorId/);
-  assert.match(settingsSource, /select-feedback-slot-supervisor/);
-  assert.match(settingsSource, /<FeedbackSlotManager supervisorAdminId=\{selectedSupervisorId\} mode="manage" \/>/);
-  assert.match(managerSource, /button-add-feedback-slot/);
-  assert.match(managerSource, /button-toggle-feedback-slot/);
-  assert.match(managerSource, /GET", `\/api\/admin\/feedback-slots\?supervisorAdminId=/);
+  assert.match(settingsSource, /Feedback Meeting Availability/);
+  assert.match(settingsSource, /<FeedbackAvailabilityEditor/);
+  assert.match(editorSource, /Add Availability Windows/);
+  assert.match(editorSource, /Show inactive windows/);
+  assert.match(editorSource, /formatAvailabilityTimeRange/);
+  assert.match(editorSource, /End of Day/);
+  assert.match(editorSource, /button-edit-feedback-availability/);
+  assert.match(editorSource, /button-toggle-feedback-availability/);
+  assert.match(editorSource, /button-delete-feedback-availability/);
+  assert.match(editorSource, /Existing confirmed trainee schedules remain unchanged/);
+  assert.match(editorSource, /GET", `\/api\/admin\/feedback-slots\?supervisorAdminId=/);
 
   assert.match(routesSource, /app\.get\("\/api\/admin\/feedback-slots", requireAuth, requireAnyAccessGroup\(adminStaffAccessGroups\)/);
   assert.match(routesSource, /supervisorAdminId !== req\.adminUser\.id/);
+  assert.match(routesSource, /findOverlappingActiveFeedbackSlot/);
+  assert.match(routesSource, /storage\.deleteFeedbackSlot/);
+  assert.match(routesSource, /This availability window is referenced by trainee Feedback Meeting schedules/);
+});
+
+test("trainee feedback meeting calendar export is an ICS download from exact occurrences", async () => {
+  const traineePageSource = await readFile(new URL("../client/src/pages/TraineeWorkspace.tsx", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.match(traineePageSource, /button-download-feedback-calendar/);
+  assert.match(traineePageSource, /Add to Calendar \(\.ics\)/);
+  assert.match(traineePageSource, /\/api\/trainee\/me\/feedback-meetings\/calendar\.ics/);
+
+  assert.match(routesSource, /app\.get\("\/api\/trainee\/me\/feedback-meetings\/calendar\.ics"/);
+  assert.match(routesSource, /buildFeedbackMeetingsIcs/);
+  assert.match(routesSource, /Content-Type", "text\/calendar; charset=utf-8"/);
+  assert.match(routesSource, /DTSTART;TZID=/);
+  assert.match(routesSource, /DTEND;TZID=/);
+  assert.match(routesSource, /Trainee: /);
+  assert.match(routesSource, /Supervisor: /);
+  assert.match(routesSource, /occurrence\.status === "scheduled"/);
 });
 
 test("trainee engagement empty state and lifecycle metadata are sanitized", async () => {
