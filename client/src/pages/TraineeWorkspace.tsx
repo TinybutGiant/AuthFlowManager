@@ -57,6 +57,12 @@ const MEETING_STATUS_LABELS: Record<FeedbackMeetingStatus, string> = {
   cancelled: "Cancelled",
 };
 
+interface FeedbackMeetingTimeSelection {
+  slotId: string;
+  startTime: string;
+  endTime: string;
+}
+
 function formatValue(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") return "Not set";
   return String(value).replace(/_/g, " ");
@@ -92,6 +98,14 @@ function formatFeedbackSlot(slot: FeedbackSlot | { dayOfWeek: number; startTime:
   return `${DAY_LABELS[dayOfWeek]} ${startTime}-${endTime} ${slot.timezone}`;
 }
 
+function defaultFeedbackMeetingTimeSelection(): FeedbackMeetingTimeSelection {
+  return {
+    slotId: "",
+    startTime: "",
+    endTime: "",
+  };
+}
+
 export default function TraineeWorkspace() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -103,7 +117,9 @@ export default function TraineeWorkspace() {
   const [endReason, setEndReason] = useState("");
   const [offerAcceptedAcknowledgement, setOfferAcceptedAcknowledgement] = useState(false);
   const [frequencyPerWeek, setFrequencyPerWeek] = useState("1");
-  const [selectedFeedbackSlotIds, setSelectedFeedbackSlotIds] = useState<string[]>([""]);
+  const [feedbackMeetingSelections, setFeedbackMeetingSelections] = useState<FeedbackMeetingTimeSelection[]>([
+    defaultFeedbackMeetingTimeSelection(),
+  ]);
   const [feedbackTimezone, setFeedbackTimezone] = useState(() => (
     Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
   ));
@@ -181,10 +197,14 @@ export default function TraineeWorkspace() {
 
   const confirmFeedbackScheduleMutation = useMutation({
     mutationFn: async () => {
-      const slotIds = selectedFeedbackSlotIds.filter(Boolean).map(Number);
+      const selections = feedbackMeetingSelections.map((selection) => ({
+        slotId: Number(selection.slotId),
+        startTime: selection.startTime,
+        endTime: selection.endTime,
+      }));
       const response = await apiRequest("POST", "/api/trainee/me/feedback-schedule", {
         frequencyPerWeek: Number(frequencyPerWeek),
-        slotIds,
+        selections,
         timezone: feedbackTimezone,
       });
       return response.json() as Promise<CheckInBundle>;
@@ -362,18 +382,37 @@ export default function TraineeWorkspace() {
   };
 
   const updateSelectedFeedbackSlot = (index: number, value: string) => {
-    setSelectedFeedbackSlotIds((current) => {
+    setFeedbackMeetingSelections((current) => {
       const next = [...current];
-      next[index] = value;
+      next[index] = {
+        slotId: value,
+        startTime: "",
+        endTime: "",
+      };
+      return next;
+    });
+  };
+
+  const updateFeedbackMeetingSelectionTime = (
+    index: number,
+    field: "startTime" | "endTime",
+    value: string,
+  ) => {
+    setFeedbackMeetingSelections((current) => {
+      const next = [...current];
+      next[index] = {
+        ...(next[index] ?? defaultFeedbackMeetingTimeSelection()),
+        [field]: value,
+      };
       return next;
     });
   };
 
   const updateFrequency = (value: string) => {
     setFrequencyPerWeek(value);
-    setSelectedFeedbackSlotIds((current) => {
+    setFeedbackMeetingSelections((current) => {
       const count = Number(value);
-      return Array.from({ length: count }, (_, index) => current[index] ?? "");
+      return Array.from({ length: count }, (_, index) => current[index] ?? defaultFeedbackMeetingTimeSelection());
     });
   };
 
@@ -388,10 +427,57 @@ export default function TraineeWorkspace() {
     }));
   };
 
+  const feedbackSlotForSelection = (selection: FeedbackMeetingTimeSelection) => (
+    feedbackSlots.find((slot) => String(slot.id) === selection.slotId)
+  );
+
+  useEffect(() => {
+    const firstSelectedSlot = feedbackMeetingSelections
+      .map((selection) => feedbackSlotForSelection(selection))
+      .find(Boolean);
+    if (firstSelectedSlot && feedbackTimezone !== firstSelectedSlot.timezone) {
+      setFeedbackTimezone(firstSelectedSlot.timezone);
+    }
+  }, [feedbackMeetingSelections, feedbackSlots, feedbackTimezone]);
+
+  const feedbackSelectionError = (selection: FeedbackMeetingTimeSelection) => {
+    const slot = feedbackSlotForSelection(selection);
+    if (!selection.slotId) return "Select an available range.";
+    if (!slot) return "Selected range is no longer available.";
+    if (!selection.startTime || !selection.endTime) return "Enter a Feedback Meeting start and end time.";
+    if (selection.endTime <= selection.startTime) return "End time must be after start time.";
+    if (selection.startTime < slot.start_time || selection.endTime > slot.end_time) {
+      return `Choose a time within ${slot.start_time}-${slot.end_time}.`;
+    }
+    if (slot.timezone !== feedbackTimezone.trim()) {
+      return "Selected ranges must use the same timezone.";
+    }
+    return "";
+  };
+
+  const selectedMeetingTimeKeys = feedbackMeetingSelections.map((selection) => {
+    const slot = feedbackSlotForSelection(selection);
+    return `${slot?.day_of_week ?? selection.slotId}:${selection.startTime}-${selection.endTime}:${slot?.timezone ?? feedbackTimezone}`;
+  });
+  const hasDuplicateFeedbackMeetingTime = new Set(selectedMeetingTimeKeys).size !== selectedMeetingTimeKeys.length;
+  const hasOverlappingFeedbackMeetingTime = feedbackMeetingSelections.some((selection, index) => {
+    const slot = feedbackSlotForSelection(selection);
+    if (!slot || !selection.startTime || !selection.endTime) return false;
+    return feedbackMeetingSelections.some((comparison, comparisonIndex) => {
+      if (comparisonIndex <= index) return false;
+      const comparisonSlot = feedbackSlotForSelection(comparison);
+      if (!comparisonSlot || !comparison.startTime || !comparison.endTime) return false;
+      const sameLocalMeetingDay = slot.day_of_week === comparisonSlot.day_of_week && slot.timezone === comparisonSlot.timezone;
+      return sameLocalMeetingDay && selection.startTime < comparison.endTime && comparison.startTime < selection.endTime;
+    });
+  });
+  const feedbackSelectionErrors = feedbackMeetingSelections.map(feedbackSelectionError);
   const canConfirmFeedbackSchedule =
     hasAcceptedOffer &&
-    selectedFeedbackSlotIds.filter(Boolean).length === Number(frequencyPerWeek) &&
-    new Set(selectedFeedbackSlotIds.filter(Boolean)).size === Number(frequencyPerWeek) &&
+    feedbackMeetingSelections.length === Number(frequencyPerWeek) &&
+    feedbackSelectionErrors.every((error) => !error) &&
+    !hasDuplicateFeedbackMeetingTime &&
+    !hasOverlappingFeedbackMeetingTime &&
     Boolean(feedbackTimezone.trim());
 
   const workspaceError =
@@ -672,34 +758,79 @@ export default function TraineeWorkspace() {
                           <Input
                             id="feedback-timezone"
                             value={feedbackTimezone}
-                            onChange={(event) => setFeedbackTimezone(event.target.value)}
+                            readOnly
                             data-testid="input-feedback-timezone"
                           />
                         </div>
-                        {Array.from({ length: Number(frequencyPerWeek) }, (_, index) => (
-                          <div key={index}>
-                            <Label>Feedback Meeting Slot {index + 1}</Label>
-                            <Select
-                              value={selectedFeedbackSlotIds[index] ?? ""}
-                              onValueChange={(value) => updateSelectedFeedbackSlot(index, value)}
-                            >
-                              <SelectTrigger data-testid={`select-feedback-slot-${index}`}>
-                                <SelectValue placeholder="Select available slot" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {feedbackSlots.map((slot) => (
-                                  <SelectItem
-                                    key={slot.id}
-                                    value={String(slot.id)}
-                                    disabled={selectedFeedbackSlotIds.includes(String(slot.id)) && selectedFeedbackSlotIds[index] !== String(slot.id)}
-                                  >
-                                    {formatFeedbackSlot(slot)}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        ))}
+                        {feedbackMeetingSelections.map((selection, index) => {
+                          const selectedSlot = feedbackSlotForSelection(selection);
+                          const selectionError = feedbackSelectionErrors[index];
+                          const shouldShowSelectionError = Boolean(selection.slotId || selection.startTime || selection.endTime);
+                          return (
+                            <div key={index} className="space-y-2">
+                              <Label>Feedback Meeting Range {index + 1}</Label>
+                              <Select
+                                value={selection.slotId}
+                                onValueChange={(value) => updateSelectedFeedbackSlot(index, value)}
+                              >
+                                <SelectTrigger data-testid={`select-feedback-slot-${index}`}>
+                                  <SelectValue placeholder="Select available range" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {feedbackSlots.map((slot) => (
+                                    <SelectItem key={slot.id} value={String(slot.id)}>
+                                      {formatFeedbackSlot(slot)}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              {selectedSlot && (
+                                <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                                  <p className="text-sm text-muted-foreground">
+                                    Available range: {selectedSlot.start_time}-{selectedSlot.end_time} {selectedSlot.timezone}
+                                  </p>
+                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div>
+                                      <Label htmlFor={`feedback-meeting-start-${index}`}>Meeting Start</Label>
+                                      <Input
+                                        id={`feedback-meeting-start-${index}`}
+                                        type="time"
+                                        min={selectedSlot.start_time}
+                                        max={selectedSlot.end_time}
+                                        value={selection.startTime}
+                                        onChange={(event) => updateFeedbackMeetingSelectionTime(index, "startTime", event.target.value)}
+                                        data-testid={`input-feedback-meeting-start-${index}`}
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label htmlFor={`feedback-meeting-end-${index}`}>Meeting End</Label>
+                                      <Input
+                                        id={`feedback-meeting-end-${index}`}
+                                        type="time"
+                                        min={selectedSlot.start_time}
+                                        max={selectedSlot.end_time}
+                                        value={selection.endTime}
+                                        onChange={(event) => updateFeedbackMeetingSelectionTime(index, "endTime", event.target.value)}
+                                        data-testid={`input-feedback-meeting-end-${index}`}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              {selectionError && shouldShowSelectionError && (
+                                <p className="text-sm text-destructive" data-testid={`text-feedback-meeting-selection-error-${index}`}>
+                                  {selectionError}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {hasDuplicateFeedbackMeetingTime && feedbackSelectionErrors.every((error) => !error) && (
+                          <p className="text-sm text-destructive">Selected Feedback Meeting times must be unique.</p>
+                        )}
+                        {hasOverlappingFeedbackMeetingTime && feedbackSelectionErrors.every((error) => !error) && (
+                          <p className="text-sm text-destructive">Selected Feedback Meeting times must not overlap.</p>
+                        )}
                         {feedbackSlots.length === 0 && (
                           <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
                             No supervisor-defined Feedback Meeting slots are available yet.

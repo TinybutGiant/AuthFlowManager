@@ -1300,6 +1300,32 @@ test("admin and assigned supervisor check-in APIs use scoped admin staff access"
   assert.match(statusRoute, /listFeedbackMeetingOccurrencesForEngagement\(engagementId\)/);
 });
 
+test("trainee feedback schedule captures exact meeting times inside supervisor ranges", async () => {
+  const traineePageSource = await readFile(new URL("../client/src/pages/TraineeWorkspace.tsx", import.meta.url), "utf8");
+  const validationSource = await readFile(new URL("./adminEngagementValidation.ts", import.meta.url), "utf8");
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.match(traineePageSource, /SelectValue placeholder="Select available range"/);
+  assert.match(traineePageSource, /Available range:/);
+  assert.match(traineePageSource, /input-feedback-meeting-start/);
+  assert.match(traineePageSource, /input-feedback-meeting-end/);
+  assert.match(traineePageSource, /selections,/);
+  assert.doesNotMatch(traineePageSource, /slotIds/);
+
+  assert.match(validationSource, /feedbackScheduleSelectionPayloadSchema/);
+  assert.match(validationSource, /slotId: z\.number\(\)\.int\(\)\.positive\(\)/);
+  assert.match(validationSource, /startTime: timeOfDaySchema/);
+  assert.match(validationSource, /endTime: timeOfDaySchema/);
+  assert.match(validationSource, /Selected Feedback Meeting times must be unique/);
+  assert.doesNotMatch(validationSource, /slotIds: z\.array/);
+
+  assert.match(routesSource, /selection\.startTime < slot\.startTime \|\| selection\.endTime > slot\.endTime/);
+  assert.match(routesSource, /availabilityStartTime: slot\.startTime/);
+  assert.match(routesSource, /availabilityEndTime: slot\.endTime/);
+  assert.match(routesSource, /startTime: selection\.startTime/);
+  assert.match(routesSource, /endTime: selection\.endTime/);
+});
+
 test("feedback meeting slot settings are centralized outside trainee profile", async () => {
   const appSource = await readFile(new URL("../client/src/App.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("../client/src/components/Sidebar.tsx", import.meta.url), "utf8");

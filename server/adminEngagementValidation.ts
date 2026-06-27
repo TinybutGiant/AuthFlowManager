@@ -277,23 +277,40 @@ export const feedbackSlotUpdatePayloadSchema = z.object({
   status: z.enum(['active', 'inactive']),
 }).strict();
 
-export const feedbackSchedulePayloadSchema = z.object({
-  frequencyPerWeek: z.number().int().min(1).max(2),
-  slotIds: z.array(z.number().int().positive()).min(1).max(2),
-  timezone: timezoneSchema,
+const feedbackScheduleSelectionPayloadSchema = z.object({
+  slotId: z.number().int().positive(),
+  startTime: timeOfDaySchema,
+  endTime: timeOfDaySchema,
 }).superRefine((data, ctx) => {
-  if (data.slotIds.length !== data.frequencyPerWeek) {
+  if (data.endTime <= data.startTime) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['slotIds'],
-      message: 'Select one slot per weekly feedback meeting',
+      path: ['endTime'],
+      message: 'Feedback Meeting end time must be after start time',
     });
   }
-  if (new Set(data.slotIds).size !== data.slotIds.length) {
+});
+
+export const feedbackSchedulePayloadSchema = z.object({
+  frequencyPerWeek: z.number().int().min(1).max(2),
+  selections: z.array(feedbackScheduleSelectionPayloadSchema).min(1).max(2),
+  timezone: timezoneSchema,
+}).superRefine((data, ctx) => {
+  if (data.selections.length !== data.frequencyPerWeek) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['slotIds'],
-      message: 'Selected feedback meeting slots must be unique',
+      path: ['selections'],
+      message: 'Select one Feedback Meeting time per weekly meeting',
+    });
+  }
+  const selectedTimeKeys = data.selections.map((selection) => (
+    `${selection.slotId}:${selection.startTime}-${selection.endTime}`
+  ));
+  if (new Set(selectedTimeKeys).size !== selectedTimeKeys.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['selections'],
+      message: 'Selected Feedback Meeting times must be unique',
     });
   }
 });

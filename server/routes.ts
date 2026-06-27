@@ -311,7 +311,7 @@ function maxDateOnly(a: string, b?: string | null) {
 
 function generateFeedbackMeetingOccurrences(input: {
   engagement: any;
-  selectedSlots: Array<{ id: number; dayOfWeek: number; startTime: string; endTime: string }>;
+  selectedSlots: Array<{ id: number; dayOfWeek: number; startTime: string; endTime: string; timezone: string }>;
   timezone: string;
   now?: Date;
 }) {
@@ -335,7 +335,7 @@ function generateFeedbackMeetingOccurrences(input: {
         occurrenceDate: dateOnly(occurrenceDate),
         startTime: slot.startTime,
         endTime: slot.endTime,
-        timezone: input.timezone,
+        timezone: slot.timezone || input.timezone,
         status: "scheduled",
       });
       occurrenceDate = addUtcDays(occurrenceDate, 7);
@@ -795,24 +795,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const payload = feedbackSchedulePayloadSchema.parse(req.body);
       const supervisorSlots = await storage.listFeedbackSlotsForSupervisor(engagement.supervisorAdminId);
-      const selectedSlots = payload.slotIds.map((slotId) => supervisorSlots.find((slot) => (
-        slot.id === slotId && slot.status === "active"
-      )));
-      if (selectedSlots.some((slot) => !slot)) {
-        return res.status(400).json({ message: "Selected feedback meeting slots must belong to the engagement supervisor." });
+      const slotSnapshots = payload.selections.map((selection) => {
+        const slot = supervisorSlots.find((candidate) => (
+          candidate.id === selection.slotId && candidate.status === "active"
+        ));
+        if (!slot) {
+          return null;
+        }
+        if (selection.startTime < slot.startTime || selection.endTime > slot.endTime) {
+          return null;
+        }
+        return {
+          id: slot.id,
+          dayOfWeek: slot.dayOfWeek,
+          startTime: selection.startTime,
+          endTime: selection.endTime,
+          timezone: slot.timezone,
+          availabilityStartTime: slot.startTime,
+          availabilityEndTime: slot.endTime,
+          availabilityTimezone: slot.timezone,
+        };
+      });
+      if (slotSnapshots.some((slot) => !slot)) {
+        return res.status(400).json({ message: "Selected Feedback Meeting times must be within active supervisor slots." });
       }
-
-      const slotSnapshots = selectedSlots.map((slot) => ({
-        id: slot!.id,
-        dayOfWeek: slot!.dayOfWeek,
-        startTime: slot!.startTime,
-        endTime: slot!.endTime,
-        timezone: slot!.timezone,
-      }));
+      const selectedTimeKeys = slotSnapshots.map((slot) => (
+        `${slot!.dayOfWeek}:${slot!.startTime}-${slot!.endTime}:${slot!.timezone}`
+      ));
+      if (new Set(selectedTimeKeys).size !== selectedTimeKeys.length) {
+        return res.status(400).json({ message: "Selected feedback meeting times must be unique." });
+      }
+      for (let i = 0; i < slotSnapshots.length; i += 1) {
+        for (let j = i + 1; j < slotSnapshots.length; j += 1) {
+          const first = slotSnapshots[i]!;
+          const second = slotSnapshots[j]!;
+          const sameLocalMeetingDay = first.dayOfWeek === second.dayOfWeek && first.timezone === second.timezone;
+          const overlaps = first.startTime < second.endTime && second.startTime < first.endTime;
+          if (sameLocalMeetingDay && overlaps) {
+            return res.status(400).json({ message: "Selected feedback meeting times must not overlap." });
+          }
+        }
+      }
       const now = new Date();
       const occurrences = generateFeedbackMeetingOccurrences({
         engagement,
-        selectedSlots: slotSnapshots,
+        selectedSlots: slotSnapshots.map((slot) => slot!),
         timezone: payload.timezone,
         now,
       });
@@ -824,7 +851,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           supervisorAdminId: engagement.supervisorAdminId,
           frequencyPerWeek: payload.frequencyPerWeek,
           timezone: payload.timezone,
-          selectedSlots: slotSnapshots,
+          selectedSlots: slotSnapshots.map((slot) => slot!),
           status: "confirmed",
           confirmedAt: now,
         },
@@ -836,6 +863,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           metadata: {
             frequency_per_week: payload.frequencyPerWeek,
             timezone: payload.timezone,
+            selected_times: slotSnapshots.map((slot) => ({
+              slot_id: slot!.id,
+              day_of_week: slot!.dayOfWeek,
+              start_time: slot!.startTime,
+              end_time: slot!.endTime,
+              timezone: slot!.timezone,
+            })),
           },
           notes: null,
         },

@@ -192,6 +192,9 @@ export interface FeedbackSchedule {
     startTime: string;
     endTime: string;
     timezone: string;
+    availabilityStartTime?: string;
+    availabilityEndTime?: string;
+    availabilityTimezone?: string;
   }>;
   status: 'confirmed' | 'change_requested' | 'cancelled';
   change_request_note?: string | null;
