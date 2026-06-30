@@ -64,3 +64,29 @@ test("server startup runs schema preflight before route registration", async () 
     "schema check should run before routes are registered",
   );
 });
+
+test("feedback check-in tables deny direct Supabase client access", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0016_feedback_checkins_rls.sql", import.meta.url),
+    "utf8",
+  );
+
+  for (const table of [
+    "supervisor_feedback_slots",
+    "engagement_feedback_schedules",
+    "feedback_meeting_occurrences",
+  ]) {
+    assert.match(migration, new RegExp(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`));
+    assert.match(
+      migration,
+      new RegExp(`REVOKE ALL PRIVILEGES ON TABLE "${table}" FROM anon, authenticated`),
+    );
+    assert.match(migration, new RegExp(`"${table}_no_direct_client_access"`));
+  }
+
+  assert.match(migration, /AS RESTRICTIVE/);
+  assert.match(migration, /TO anon, authenticated/);
+  assert.match(migration, /USING \(false\)/);
+  assert.match(migration, /WITH CHECK \(false\)/);
+  assert.doesNotMatch(migration, /USING \(true\)|WITH CHECK \(true\)/);
+});
