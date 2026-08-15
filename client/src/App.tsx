@@ -44,6 +44,16 @@ function VerifierApplicationDetailRoute() {
   );
 }
 
+function WaitlistManagementRoute() {
+  return (
+    <ProtectedRoute allowedAccessGroups={["super_admin", "admin_operations"]}>
+      <AdminLayout>
+        <TravelerWaitlist />
+      </AdminLayout>
+    </ProtectedRoute>
+  );
+}
+
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const [location, setLocation] = useLocation();
@@ -180,11 +190,7 @@ function Router() {
           </Route>
 
           <Route path="/admin-operations/traveler-waitlist">
-            <ProtectedRoute allowedAccessGroups={["super_admin", "admin_operations"]}>
-              <AdminLayout>
-                <TravelerWaitlist />
-              </AdminLayout>
-            </ProtectedRoute>
+            <WaitlistManagementRoute />
           </Route>
 
           <Route path="/admin-operations/feedback-meeting-slots">
@@ -233,6 +239,10 @@ function Router() {
                 <CancellationReview />
               </AdminLayout>
             </ProtectedRoute>
+          </Route>
+
+          <Route path="/waitlist-management">
+            <WaitlistManagementRoute />
           </Route>
 
           <Route path="/verifier-management">

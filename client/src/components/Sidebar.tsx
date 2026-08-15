@@ -108,12 +108,6 @@ const menuItems: MenuItem[] = [
         accessGroups: ['super_admin', 'lifecycle_jobs'],
       },
       {
-        title: "Traveler Waitlist",
-        href: "/admin-operations/traveler-waitlist",
-        icon: ClipboardList,
-        accessGroups: ['super_admin', 'admin_operations'],
-      },
-      {
         title: "Document Templates",
         href: "/admin-operations/document-templates",
         icon: FileText,
@@ -132,6 +126,12 @@ const menuItems: MenuItem[] = [
     href: "/cancellation-review",
     icon: ClipboardList,
     roles: ['super_admin', 'admin_finance'],
+  },
+  {
+    title: "Waitlist Management",
+    href: "/waitlist-management",
+    icon: ClipboardList,
+    accessGroups: ['super_admin', 'admin_operations'],
   },
   {
     title: "Verifier Management",
