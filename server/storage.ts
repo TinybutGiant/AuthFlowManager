@@ -43,6 +43,7 @@ import {
   guideApplicationsLite,
   guideApplicationApprovals,
   mainUsers,
+  waitlistSignups,
   type GuideApplicationLite,
   type InsertGuideApplicationLite,
   type UpdateGuideApplicationLite,
@@ -54,16 +55,40 @@ import {
   type MainUser,
   type InsertMainUser,
   type UpdateMainUser,
+  type WaitlistSignup,
+  type WaitlistSignupStatus,
 } from "../shared/main-schema";
 import { db } from "./db";
 import { mainDb } from "./main-db";
-import { eq, and, desc, inArray, lt, or, isNull, gt, lte, sql } from "drizzle-orm";
+import { count, eq, and, desc, inArray, lt, or, isNull, gt, lte, sql } from "drizzle-orm";
 import {
   deriveAccessGroupsFromLegacyRole,
   deriveAccountTypeFromLegacyRole,
   ROLE_DERIVED_ACCESS_GRANT_SOURCE,
   ROLE_DERIVED_ACCESS_GRANT_SOURCES,
 } from "./adminAccessModel";
+
+export type WaitlistListFilters = {
+  search?: string;
+  status?: WaitlistSignupStatus | "all";
+  page?: number;
+  pageSize?: number;
+};
+
+export type WaitlistListResult = {
+  rows: WaitlistSignup[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type WaitlistStats = {
+  total: number;
+  pending: number;
+  confirmed: number;
+  unsubscribed: number;
+  confirmationRate: number;
+};
 
 // Interface for storage operations
 export interface IStorage {
@@ -241,6 +266,11 @@ export interface IStorage {
   createGuideApplicationApproval(approval: InsertGuideApplicationApproval): Promise<GuideApplicationApproval>;
   updateGuideApplicationApproval(id: number, updates: UpdateGuideApplicationApproval): Promise<GuideApplicationApproval>;
   getApplicationApprovalHistory(applicationId: string): Promise<GuideApplicationApproval[]>;
+
+  // Traveler waitlist operations
+  listWaitlistSignups(filters?: WaitlistListFilters): Promise<WaitlistListResult>;
+  getWaitlistStats(): Promise<WaitlistStats>;
+  listWaitlistSignupsForExport(filters?: Pick<WaitlistListFilters, "search" | "status">): Promise<WaitlistSignup[]>;
   
   // User operations for main database
   getMainUser(id: number): Promise<MainUser | undefined>;
@@ -2304,6 +2334,86 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(guideApplicationApprovals.createdAt));
   }
 
+  async listWaitlistSignups(filters: WaitlistListFilters = {}): Promise<WaitlistListResult> {
+    const page = Math.max(1, Math.trunc(filters.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Math.trunc(filters.pageSize ?? 25)));
+    const offset = (page - 1) * pageSize;
+    const conditions = buildWaitlistConditions(filters);
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let countQuery = mainDb.select({ value: count() }).from(waitlistSignups).$dynamic();
+    if (where) {
+      countQuery = countQuery.where(where);
+    }
+    const [{ value }] = await countQuery;
+
+    let listQuery = mainDb
+      .select()
+      .from(waitlistSignups)
+      .$dynamic();
+
+    if (where) {
+      listQuery = listQuery.where(where);
+    }
+
+    const rows = await listQuery
+      .orderBy(desc(waitlistSignups.createdAt))
+      .limit(pageSize)
+      .offset(offset);
+
+    return {
+      rows,
+      total: Number(value ?? 0),
+      page,
+      pageSize,
+    };
+  }
+
+  async getWaitlistStats(): Promise<WaitlistStats> {
+    const rows = await mainDb
+      .select({ status: waitlistSignups.status, value: count() })
+      .from(waitlistSignups)
+      .groupBy(waitlistSignups.status);
+
+    const stats: WaitlistStats = {
+      total: 0,
+      pending: 0,
+      confirmed: 0,
+      unsubscribed: 0,
+      confirmationRate: 0,
+    };
+
+    for (const row of rows) {
+      const value = Number(row.value ?? 0);
+      stats.total += value;
+      if (row.status === "pending") stats.pending = value;
+      if (row.status === "confirmed") stats.confirmed = value;
+      if (row.status === "unsubscribed") stats.unsubscribed = value;
+    }
+
+    stats.confirmationRate = stats.total > 0 ? stats.confirmed / stats.total : 0;
+    return stats;
+  }
+
+  async listWaitlistSignupsForExport(
+    filters: Pick<WaitlistListFilters, "search" | "status"> = {}
+  ): Promise<WaitlistSignup[]> {
+    const conditions = buildWaitlistConditions(filters);
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    let query = mainDb
+      .select()
+      .from(waitlistSignups)
+      .$dynamic();
+
+    if (where) {
+      query = query.where(where);
+    }
+
+    return await query
+      .orderBy(desc(waitlistSignups.createdAt))
+      .limit(10000);
+  }
+
   // Exclusive lock operations
   async acquireApplicationLock(applicationId: string, adminId: number): Promise<GuideApplicationLite | null> {
     const now = new Date();
@@ -2414,6 +2524,26 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return updatedUser;
   }
+}
+
+function buildWaitlistConditions(filters: Pick<WaitlistListFilters, "search" | "status">) {
+  const conditions: any[] = [];
+
+  if (filters.status && filters.status !== "all") {
+    conditions.push(eq(waitlistSignups.status, filters.status));
+  }
+
+  const search = filters.search?.trim();
+  if (search) {
+    const pattern = `%${search.toLowerCase()}%`;
+    conditions.push(sql`(
+      lower(${waitlistSignups.name}) LIKE ${pattern}
+      OR lower(${waitlistSignups.emailOriginal}) LIKE ${pattern}
+      OR lower(${waitlistSignups.emailNormalized}) LIKE ${pattern}
+    )`);
+  }
+
+  return conditions;
 }
 
 export const storage = new DatabaseStorage();

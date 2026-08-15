@@ -94,6 +94,10 @@ const createAdminUserSchema = z.object({
   deferSetupEmail: z.boolean().optional(),
 });
 
+const waitlistStatusSchema = z
+  .enum(["all", "pending", "confirmed", "unsubscribed"])
+  .default("all");
+
 const adminStaffAccessGroups: AdminAccessGroup[] = [
   'super_admin',
   'admin_operations',
@@ -574,6 +578,71 @@ function handleOfferLetterRouteError(res: any, error: unknown, fallbackMessage: 
 
   console.error("[offer-letter route]", fallbackMessage, error);
   return res.status(500).json({ message: fallbackMessage });
+}
+
+function parsePositiveInt(value: unknown, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function buildWaitlistCsv(rows: Array<any>): string {
+  const headers = [
+    "Name",
+    "Email",
+    "Status",
+    "Audience",
+    "Source",
+    "Locale",
+    "UTM Source",
+    "UTM Medium",
+    "UTM Campaign",
+    "Consent Version",
+    "Created At",
+    "Confirmation Sent At",
+    "Confirmed At",
+    "Unsubscribed At",
+  ];
+  const lines = [headers.map(csvCell).join(",")];
+
+  for (const row of rows) {
+    lines.push(
+      [
+        row.name,
+        row.emailOriginal,
+        row.status,
+        row.audience,
+        row.source,
+        row.locale,
+        row.utmSource,
+        row.utmMedium,
+        row.utmCampaign,
+        row.consentVersion,
+        formatCsvDate(row.createdAt),
+        formatCsvDate(row.confirmationSentAt),
+        formatCsvDate(row.confirmedAt),
+        formatCsvDate(row.unsubscribedAt),
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function formatCsvDate(value: unknown): string {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function csvCell(value: unknown): string {
+  let text = value == null ? "" : String(value);
+  text = text.replace(/\r?\n/g, " ");
+  if (/^[=+\-@]/.test(text)) {
+    text = `'${text}`;
+  }
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 async function hasAcceptedOfferForCurrentTrainee(adminUserId: number) {
@@ -2032,6 +2101,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch stats" });
     }
   });
+
+  app.get(
+    "/api/admin/waitlist/stats",
+    requireAuth,
+    requireAnyAccessGroup(['super_admin', 'admin_operations']),
+    async (_req: any, res) => {
+      try {
+        res.json(await storage.getWaitlistStats());
+      } catch (error) {
+        console.error("Error fetching waitlist stats:", error);
+        res.status(500).json({ message: "Failed to fetch waitlist stats" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/waitlist/export.csv",
+    requireAuth,
+    requireAnyAccessGroup(['super_admin', 'admin_operations']),
+    async (req: any, res) => {
+      try {
+        const status = waitlistStatusSchema.parse(req.query.status ?? "all");
+        const rows = await storage.listWaitlistSignupsForExport({
+          search: typeof req.query.search === "string" ? req.query.search : undefined,
+          status,
+        });
+
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="traveler-waitlist.csv"'
+        );
+        res.send(buildWaitlistCsv(rows));
+      } catch (error) {
+        console.error("Error exporting waitlist:", error);
+        res.status(500).json({ message: "Failed to export waitlist" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/waitlist",
+    requireAuth,
+    requireAnyAccessGroup(['super_admin', 'admin_operations']),
+    async (req: any, res) => {
+      try {
+        const status = waitlistStatusSchema.parse(req.query.status ?? "all");
+        const page = parsePositiveInt(req.query.page, 1);
+        const pageSize = parsePositiveInt(req.query.pageSize, 25);
+
+        res.json(
+          await storage.listWaitlistSignups({
+            search: typeof req.query.search === "string" ? req.query.search : undefined,
+            status,
+            page,
+            pageSize,
+          })
+        );
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({ message: "Invalid waitlist filter" });
+        }
+        console.error("Error fetching waitlist:", error);
+        res.status(500).json({ message: "Failed to fetch waitlist" });
+      }
+    }
+  );
 
   // Role-specific management routes
   app.get("/api/admin/finance", requireAuth, requireRole(['super_admin', 'admin_finance']), async (req: any, res) => {

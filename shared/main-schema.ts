@@ -24,6 +24,12 @@ export const applicationStatusTypeEnum = pgEnum("application_status_type", [
   "rejected",
 ]);
 
+export const waitlistSignupStatusEnum = pgEnum("waitlist_signup_status", [
+  "pending",
+  "confirmed",
+  "unsubscribed",
+]);
+
 // Users table for main database
 export const mainUsers = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -74,6 +80,27 @@ export const guideApplicationApprovals = pgTable("guide_application_approvals", 
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
+});
+
+export const waitlistSignups = pgTable("waitlist_signups", {
+  id: uuid("id").primaryKey(),
+  emailOriginal: text("email_original").notNull(),
+  emailNormalized: text("email_normalized").notNull(),
+  name: text("name").notNull(),
+  audience: text("audience").notNull(),
+  source: text("source").notNull(),
+  status: waitlistSignupStatusEnum("status").notNull(),
+  locale: text("locale"),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  consentVersion: text("consent_version").notNull(),
+  confirmationSentAt: timestamp("confirmation_sent_at", { withTimezone: true }),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  unsubscribedAt: timestamp("unsubscribed_at", { withTimezone: true }),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 });
 
 // Relations
@@ -128,6 +155,9 @@ export type UpdateGuideApplicationApproval = z.infer<typeof updateGuideApplicati
 export type MainUser = typeof mainUsers.$inferSelect;
 export type InsertMainUser = typeof mainUsers.$inferInsert;
 export type UpdateMainUser = Partial<InsertMainUser>;
+
+export type WaitlistSignup = typeof waitlistSignups.$inferSelect;
+export type WaitlistSignupStatus = (typeof waitlistSignupStatusEnum.enumValues)[number];
 
 // User response schema for require_more_info cases
 export const userResponseSchema = z.object({

@@ -30,6 +30,7 @@ import CancellationReviewDetail from "@/pages/CancellationReviewDetail";
 import TraineeWorkspace from "@/pages/TraineeWorkspace";
 import LifecycleJobs from "@/pages/LifecycleJobs";
 import DocumentTemplates from "@/pages/DocumentTemplates";
+import TravelerWaitlist from "@/pages/TravelerWaitlist";
 import FeedbackMeetingSlots from "@/pages/FeedbackMeetingSlots";
 import NotFound from "@/pages/not-found";
 
@@ -174,6 +175,14 @@ function Router() {
             <ProtectedRoute allowedAccessGroups={["super_admin", "document_templates"]}>
               <AdminLayout>
                 <DocumentTemplates />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
+          <Route path="/admin-operations/traveler-waitlist">
+            <ProtectedRoute allowedAccessGroups={["super_admin", "admin_operations"]}>
+              <AdminLayout>
+                <TravelerWaitlist />
               </AdminLayout>
             </ProtectedRoute>
           </Route>

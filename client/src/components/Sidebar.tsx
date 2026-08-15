@@ -108,6 +108,12 @@ const menuItems: MenuItem[] = [
         accessGroups: ['super_admin', 'lifecycle_jobs'],
       },
       {
+        title: "Traveler Waitlist",
+        href: "/admin-operations/traveler-waitlist",
+        icon: ClipboardList,
+        accessGroups: ['super_admin', 'admin_operations'],
+      },
+      {
         title: "Document Templates",
         href: "/admin-operations/document-templates",
         icon: FileText,
