@@ -189,10 +189,6 @@ function Router() {
             </ProtectedRoute>
           </Route>
 
-          <Route path="/admin-operations/traveler-waitlist">
-            <WaitlistManagementRoute />
-          </Route>
-
           <Route path="/admin-operations/feedback-meeting-slots">
             <ProtectedRoute
               allowedRoles={[
