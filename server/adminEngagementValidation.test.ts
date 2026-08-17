@@ -697,6 +697,24 @@ test("Phase C.2 admin operations use explicit access groups without global super
   assert.match(routesSource, /"\/api\/localguide\/admin\/cancellation-requests"[\s\S]*requireRole\(\["super_admin", "admin_finance"\]\)/);
 });
 
+test("guide approval mutation delegates to LocalGuide canonical approval command", async () => {
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const routeStart = routesSource.indexOf('app.post("/api/guide-approvals"');
+  const routeEnd = routesSource.indexOf('  // Update an existing approval', routeStart);
+  const routeBlock = routesSource.slice(routeStart, routeEnd);
+
+  assert.notEqual(routeStart, -1);
+  assert.match(routeBlock, /requireAuth/);
+  assert.match(routeBlock, /requireRole\(\['super_admin', 'admin_verifier'\]\)/);
+  assert.match(routeBlock, /guideApprovalProxyPayloadSchema\.parse\(req\.body\)/);
+  assert.match(routeBlock, /localGuideProxyHeaders\(req, true\)/);
+  assert.match(routeBlock, /\/api\/v2\/guide-application-approvals-v2\/admin-proxy-action/);
+  assert.match(routeBlock, /action: validatedData\.adminAction/);
+  assert.doesNotMatch(routeBlock, /storage\.createGuideApplicationApproval/);
+  assert.doesNotMatch(routeBlock, /storage\.updateGuideApplication/);
+  assert.doesNotMatch(routeBlock, /storage\.updateUserGuideStatus/);
+});
+
 test("create admin UI separates Identity Type, Access Groups, and Engagement fields", async () => {
   const source = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
   const identitySource = await readFile(new URL("../client/src/lib/adminIdentity.ts", import.meta.url), "utf8");

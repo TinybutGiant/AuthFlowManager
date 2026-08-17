@@ -4,11 +4,9 @@ import { storage } from "./storage";
 import { setupAuth, requireAuth, requireRole, requireAccessGroup, requireAnyAccessGroup, jwtUtils } from "./jwtAuth";
 import { insertAdminUserApprovalSchema, type AdminAccessGroup, type AdminRole } from "@shared/schema";
 import {
-  insertGuideApplicationApprovalSchema,
   updateGuideApplicationLiteSchema,
   updateGuideApplicationApprovalSchema,
   type ApplicationStatus,
-  type AdminActionType
 } from "../shared/main-schema";
 import { z } from "zod";
 import bcrypt from 'bcrypt';
@@ -97,6 +95,12 @@ const createAdminUserSchema = z.object({
 const waitlistStatusSchema = z
   .enum(["all", "pending", "confirmed", "unsubscribed"])
   .default("all");
+
+const guideApprovalProxyPayloadSchema = z.object({
+  applicationId: z.string().uuid(),
+  adminAction: z.enum(["review", "approve", "reject", "require_more_info"]),
+  note: z.string().optional(),
+});
 
 const adminStaffAccessGroups: AdminAccessGroup[] = [
   'super_admin',
@@ -2340,63 +2344,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create a new approval/review action
   app.post("/api/guide-approvals", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     try {
-      // Get the application to fetch the userId if not provided
-      const application = await storage.getGuideApplication(req.body.applicationId);
-      if (!application) {
-        return res.status(404).json({ message: "Application not found" });
-      }
-      
-      const validatedData = insertGuideApplicationApprovalSchema.parse({
-        ...req.body,
-        userId: application.userId, // Use userId from application
-        adminId: parseInt(req.user.id) // Convert to number
+      const validatedData = guideApprovalProxyPayloadSchema.parse(req.body);
+      const headers = await localGuideProxyHeaders(req, true);
+      const r = await fetch(`${localGuideBase}/api/v2/guide-application-approvals-v2/admin-proxy-action`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          applicationId: validatedData.applicationId,
+          action: validatedData.adminAction,
+          note: validatedData.note,
+        }),
       });
-      
-      const approval = await storage.createGuideApplicationApproval(validatedData);
-      
-      // Update the application status based on admin action
-      if (validatedData.adminAction) {
-        let newStatus: ApplicationStatus;
-        switch (validatedData.adminAction) {
-          case 'approve':
-            newStatus = 'approved';
-            // When approving, also update the user's guide status in main database
-            try {
-              await storage.updateUserGuideStatus(application.userId, true);
-              console.log(`Updated user ${application.userId} guide status to true`);
-            } catch (error) {
-              console.error(`Failed to update user ${application.userId} guide status:`, error);
-              // Continue with the approval process even if user update fails
-            }
-            break;
-          case 'reject':
-            newStatus = 'rejected';
-            // When rejecting, ensure user guide status is false
-            try {
-              await storage.updateUserGuideStatus(application.userId, false);
-              console.log(`Updated user ${application.userId} guide status to false`);
-            } catch (error) {
-              console.error(`Failed to update user ${application.userId} guide status:`, error);
-            }
-            break;
-          case 'require_more_info':
-            newStatus = 'needs_more_info';
-            break;
-          default:
-            newStatus = 'pending';
-        }
-        
-        await storage.updateGuideApplication(validatedData.applicationId, {
-          id: validatedData.applicationId,
-          applicationStatus: newStatus,
-          updatedAt: new Date()
+      const text = await r.text();
+      res.status(r.status);
+      res.type("application/json").send(text || "{}");
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: "Failed to create guide approval",
+          error: error.message,
         });
       }
-      
-      res.status(201).json(approval);
-    } catch (error: any) {
-      console.error('Error creating guide approval:', error);
-      res.status(400).json({ message: "Failed to create guide approval", error: error?.message });
+      handleLocalGuideProxyError(res, error);
     }
   });
 
