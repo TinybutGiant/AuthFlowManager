@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useParams, useSearch } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -18,15 +19,24 @@ import {
   Send,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 import {
+  Destination,
   GuideApplication,
   GuideApplicationApproval,
+  GuideServiceAreaProposal,
   ApplicationStatus,
   AdminActionType,
 } from "@/types/admin";
 import { UserResponse } from "@shared/main-schema";
 import { isUnauthorizedError } from "@/lib/authUtils";
+
+type CreateDestinationDraft = {
+  nameEn: string;
+  nameJa: string;
+  nameZhCn: string;
+  prefectureName: string;
+};
 
 export default function ApplicationDetail() {
   const params = useParams<{ id?: string }>();
@@ -39,6 +49,8 @@ export default function ApplicationDetail() {
   const [selectedAction, setSelectedAction] = useState<AdminActionType | "">(
     "",
   );
+  const [mapSelections, setMapSelections] = useState<Record<number, string>>({});
+  const [createDrafts, setCreateDrafts] = useState<Record<number, CreateDestinationDraft>>({});
   const [lockAcquired, setLockAcquired] = useState(false);
   const [lockError, setLockError] = useState<string>("");
 
@@ -156,6 +168,113 @@ export default function ApplicationDetail() {
     retry: false,
   });
 
+  const { data: destinations = [] } = useQuery<Destination[]>({
+    queryKey: ["/api/destinations?countryCode=JP"],
+    enabled: !!applicationId && (lockAcquired || isReadOnly),
+    retry: false,
+  });
+
+  const refreshApplicationDetail = () => {
+    queryClient.invalidateQueries({
+      queryKey: ["/api/guide-applications", applicationId],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["/api/destinations?countryCode=JP"],
+    });
+  };
+
+  const mapProposalMutation = useMutation({
+    mutationFn: async ({
+      proposalId,
+      destinationId,
+    }: {
+      proposalId: number;
+      destinationId: number;
+    }) => {
+      await apiRequest(
+        "POST",
+        `/api/guide-applications/service-area-proposals/${proposalId}/map`,
+        { destinationId },
+      );
+    },
+    onSuccess: () => {
+      refreshApplicationDetail();
+      toast({
+        title: "Service area mapped",
+        description: "The proposed service area was mapped to an existing destination.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Mapping failed",
+        description: getApiErrorMessage(error, "Failed to map service area proposal"),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const createDestinationMutation = useMutation({
+    mutationFn: async ({
+      proposal,
+      draft,
+    }: {
+      proposal: GuideServiceAreaProposal;
+      draft: CreateDestinationDraft;
+    }) => {
+      const nameEn = draft.nameEn.trim() || proposal.rawName;
+      await apiRequest(
+        "POST",
+        `/api/guide-applications/service-area-proposals/${proposal.id}/create-destination`,
+        {
+          nameEn,
+          nameJa: draft.nameJa.trim() || undefined,
+          nameZhCn: draft.nameZhCn.trim() || undefined,
+          prefectureName: draft.prefectureName.trim() || undefined,
+          placeType: "area",
+          aliases: [proposal.rawName],
+        },
+      );
+    },
+    onSuccess: () => {
+      refreshApplicationDetail();
+      toast({
+        title: "Destination created",
+        description: "The proposed service area was created as a canonical destination.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Destination creation failed",
+        description: getApiErrorMessage(error, "Failed to create destination"),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const rejectProposalMutation = useMutation({
+    mutationFn: async (proposalId: number) => {
+      await apiRequest(
+        "POST",
+        `/api/guide-applications/service-area-proposals/${proposalId}/reject`,
+        {},
+      );
+    },
+    onSuccess: () => {
+      refreshApplicationDetail();
+      toast({
+        title: "Service area rejected",
+        description: "The proposed service area was rejected.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Rejection failed",
+        description: getApiErrorMessage(error, "Failed to reject service area proposal"),
+        variant: "destructive",
+      });
+    },
+  });
+
   // Submit approval mutation
   const submitApprovalMutation = useMutation({
     mutationFn: async ({
@@ -222,7 +341,100 @@ export default function ApplicationDetail() {
       return;
     }
 
+    if (
+      selectedAction === "approve" &&
+      application?.serviceAreaProposals?.some((proposal) => proposal.status === "pending")
+    ) {
+      toast({
+        title: "Resolve service areas first",
+        description:
+          "This application has proposed service areas that must be mapped, created, or rejected before approval.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     submitApprovalMutation.mutate({ action: selectedAction, note });
+  };
+
+  const destinationById = new Map(destinations.map((destination) => [destination.id, destination]));
+  const serviceAreas = application?.serviceAreas ?? [];
+  const serviceAreaProposals = application?.serviceAreaProposals ?? [];
+  const pendingServiceAreaProposals = serviceAreaProposals.filter(
+    (proposal) => proposal.status === "pending",
+  );
+  const hasPendingServiceAreaProposals = pendingServiceAreaProposals.length > 0;
+
+  const formatDestination = (destination?: Destination | null) => {
+    if (!destination) return "Unknown destination";
+    const localizedNames = [destination.nameZhCn, destination.nameJa]
+      .filter((name) => name && name !== destination.nameEn)
+      .join(" / ");
+    return localizedNames
+      ? `${destination.nameEn} (${localizedNames})`
+      : destination.nameEn;
+  };
+
+  const proposalStatusClass = (status: string) => {
+    switch (status) {
+      case "pending":
+        return "bg-yellow-500/10 text-yellow-700";
+      case "mapped":
+      case "approved":
+        return "bg-green-500/10 text-green-700";
+      case "rejected":
+        return "bg-red-500/10 text-red-700";
+      default:
+        return "bg-gray-500/10 text-gray-700";
+    }
+  };
+
+  const getCreateDraft = (proposal: GuideServiceAreaProposal): CreateDestinationDraft =>
+    createDrafts[proposal.id] ?? {
+      nameEn: proposal.rawName,
+      nameJa: "",
+      nameZhCn: "",
+      prefectureName: "",
+    };
+
+  const updateCreateDraft = (
+    proposal: GuideServiceAreaProposal,
+    field: keyof CreateDestinationDraft,
+    value: string,
+  ) => {
+    setCreateDrafts((current) => ({
+      ...current,
+      [proposal.id]: {
+        ...(current[proposal.id] ?? {
+          nameEn: proposal.rawName,
+          nameJa: "",
+          nameZhCn: "",
+          prefectureName: "",
+        }),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleMapProposal = (proposal: GuideServiceAreaProposal) => {
+    const destinationId = Number(mapSelections[proposal.id]);
+    if (!Number.isFinite(destinationId) || destinationId <= 0) {
+      toast({
+        title: "Select a destination",
+        description: "Choose the canonical destination to map this proposal to.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    mapProposalMutation.mutate({ proposalId: proposal.id, destinationId });
+  };
+
+  const handleCreateDestination = (proposal: GuideServiceAreaProposal) => {
+    createDestinationMutation.mutate({
+      proposal,
+      draft: getCreateDraft(proposal),
+    });
   };
 
   const getStatusBadge = (status: ApplicationStatus) => {
@@ -579,6 +791,193 @@ export default function ApplicationDetail() {
         </CardContent>
       </Card>
 
+      {/* Service Areas */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Service Areas</span>
+            {hasPendingServiceAreaProposals && (
+              <span className="rounded-full bg-yellow-500/10 px-3 py-1 text-sm font-medium text-yellow-700">
+                {pendingServiceAreaProposals.length} proposal(s) need review
+              </span>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div>
+            <p className="mb-2 text-sm font-medium text-muted-foreground">
+              Canonical destinations
+            </p>
+            {serviceAreas.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {serviceAreas.map((destination) => (
+                  <span
+                    key={destination.id}
+                    className="rounded-full border bg-background px-3 py-1 text-sm"
+                    data-testid={`service-area-${destination.slug}`}
+                  >
+                    {formatDestination(destination)}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No canonical service areas have been selected.
+              </p>
+            )}
+          </div>
+
+          {serviceAreaProposals.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-muted-foreground">
+                Custom service-area proposals
+              </p>
+              {serviceAreaProposals.map((proposal) => {
+                const draft = getCreateDraft(proposal);
+                const resolvedDestination = proposal.resolvedDestinationId
+                  ? destinationById.get(proposal.resolvedDestinationId)
+                  : null;
+                const actionPending =
+                  mapProposalMutation.isPending ||
+                  createDestinationMutation.isPending ||
+                  rejectProposalMutation.isPending;
+
+                return (
+                  <div
+                    key={proposal.id}
+                    className="space-y-4 rounded-lg border p-4"
+                    data-testid={`service-area-proposal-${proposal.id}`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-medium">{proposal.rawName}</p>
+                        <p className="text-sm text-muted-foreground">
+                          Normalized: {proposal.normalizedName}
+                        </p>
+                        {resolvedDestination && (
+                          <p className="text-sm text-muted-foreground">
+                            Resolved to: {formatDestination(resolvedDestination)}
+                          </p>
+                        )}
+                      </div>
+                      <span
+                        className={`rounded-full px-3 py-1 text-sm font-medium ${proposalStatusClass(proposal.status)}`}
+                      >
+                        {proposal.status}
+                      </span>
+                    </div>
+
+                    {proposal.status === "pending" && (
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="space-y-3 rounded-md bg-muted/40 p-3">
+                          <p className="text-sm font-medium">Map to existing destination</p>
+                          <Select
+                            value={mapSelections[proposal.id] ?? ""}
+                            onValueChange={(value) =>
+                              setMapSelections((current) => ({
+                                ...current,
+                                [proposal.id]: value,
+                              }))
+                            }
+                          >
+                            <SelectTrigger data-testid={`select-map-proposal-${proposal.id}`}>
+                              <SelectValue placeholder="Choose a canonical destination" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {destinations.map((destination) => (
+                                <SelectItem
+                                  key={destination.id}
+                                  value={String(destination.id)}
+                                >
+                                  {formatDestination(destination)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleMapProposal(proposal)}
+                            disabled={actionPending}
+                            data-testid={`button-map-proposal-${proposal.id}`}
+                          >
+                            Map Proposal
+                          </Button>
+                        </div>
+
+                        <div className="space-y-3 rounded-md bg-muted/40 p-3">
+                          <p className="text-sm font-medium">Create canonical destination</p>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <Input
+                              value={draft.nameEn}
+                              onChange={(event) =>
+                                updateCreateDraft(proposal, "nameEn", event.target.value)
+                              }
+                              placeholder="English name"
+                              data-testid={`input-create-destination-name-en-${proposal.id}`}
+                            />
+                            <Input
+                              value={draft.nameZhCn}
+                              onChange={(event) =>
+                                updateCreateDraft(proposal, "nameZhCn", event.target.value)
+                              }
+                              placeholder="Chinese name"
+                            />
+                            <Input
+                              value={draft.nameJa}
+                              onChange={(event) =>
+                                updateCreateDraft(proposal, "nameJa", event.target.value)
+                              }
+                              placeholder="Japanese name"
+                            />
+                            <Input
+                              value={draft.prefectureName}
+                              onChange={(event) =>
+                                updateCreateDraft(proposal, "prefectureName", event.target.value)
+                              }
+                              placeholder="Prefecture / region"
+                            />
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => handleCreateDestination(proposal)}
+                              disabled={actionPending}
+                              data-testid={`button-create-destination-${proposal.id}`}
+                            >
+                              Create Destination
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => rejectProposalMutation.mutate(proposal.id)}
+                              disabled={actionPending}
+                              data-testid={`button-reject-proposal-${proposal.id}`}
+                            >
+                              Reject Proposal
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {hasPendingServiceAreaProposals && (
+            <div
+              className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-900"
+              data-testid="service-area-approval-blocker"
+            >
+              Resolve all pending service-area proposals before approving this application.
+              The backend will also reject approval while proposals remain unresolved.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* PDF Documents */}
       {application.internalTags && application.internalTags.length > 0 && (
         <Card>
@@ -766,7 +1165,11 @@ export default function ApplicationDetail() {
 
             <Button
               onClick={handleSubmitApproval}
-              disabled={!selectedAction || submitApprovalMutation.isPending}
+              disabled={
+                !selectedAction ||
+                submitApprovalMutation.isPending ||
+                (selectedAction === "approve" && hasPendingServiceAreaProposals)
+              }
               className="w-full"
               data-testid="button-submit-approval"
             >

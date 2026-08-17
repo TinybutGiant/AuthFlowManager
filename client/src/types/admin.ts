@@ -318,6 +318,35 @@ export interface Qualifications {
   }>;
 }
 
+export interface Destination {
+  id: number;
+  slug: string;
+  countryCode: string;
+  nameEn: string;
+  nameJa?: string | null;
+  nameZhCn?: string | null;
+  timezone: string;
+  prefectureCode?: string | null;
+  prefectureName?: string | null;
+  placeType: string;
+  status: string;
+  sortOrder: number;
+}
+
+export interface GuideServiceAreaProposal {
+  id: number;
+  applicationId?: string | null;
+  guideId?: number | null;
+  rawName: string;
+  normalizedName: string;
+  countryCode: string;
+  status: 'pending' | 'mapped' | 'approved' | 'rejected' | string;
+  resolvedDestinationId?: number | null;
+  createdAt: string;
+  resolvedAt?: string | null;
+  resolvedBy?: number | null;
+}
+
 export interface GuideApplication {
   id: string;
   userId: number;
@@ -329,6 +358,10 @@ export interface GuideApplication {
   lockedBy: number | null;
   lockedAt: string | null;
   lockExpiry: string | null;
+  serviceAreas?: Destination[];
+  serviceAreaDestinationIds?: number[];
+  serviceAreaProposals?: GuideServiceAreaProposal[];
+  customServiceAreaProposals?: string[];
   createdAt: string;
   updatedAt: string;
 }

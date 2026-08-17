@@ -715,6 +715,49 @@ test("guide approval mutation delegates to LocalGuide canonical approval command
   assert.doesNotMatch(routeBlock, /storage\.updateUserGuideStatus/);
 });
 
+test("service area proposal commands proxy through LocalGuide canonical endpoints", async () => {
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+  const routeStart = routesSource.indexOf('"/api/guide-applications/service-area-proposals/:proposalId/map"');
+  const routeEnd = routesSource.indexOf('app.get(\n    "/api/localguide/admin/cancellation-requests"', routeStart);
+  const routeBlock = routesSource.slice(routeStart, routeEnd);
+
+  assert.notEqual(routeStart, -1);
+  assert.match(routeBlock, /requireAuth/);
+  assert.match(routeBlock, /requireRole\(\["super_admin", "admin_verifier"\]\)/);
+  assert.match(routeBlock, /proposalIdParamSchema\.parse\(req\.params\.proposalId\)/);
+  assert.match(routeBlock, /mapServiceAreaProposalSchema\.parse\(req\.body\)/);
+  assert.match(routeBlock, /createDestinationFromProposalSchema\.parse\(req\.body\)/);
+  assert.match(routeBlock, /localGuideProxyHeaders\(req, true\)/);
+  assert.match(routeBlock, /\/api\/v2\/guide-applications\/service-area-proposals\/\$\{proposalId\}\/map/);
+  assert.match(routeBlock, /\/api\/v2\/guide-applications\/service-area-proposals\/\$\{proposalId\}\/create-destination/);
+  assert.match(routeBlock, /\/api\/v2\/guide-applications\/service-area-proposals\/\$\{proposalId\}\/reject/);
+  assert.doesNotMatch(routeBlock, /storage\.updateGuideApplication/);
+  assert.doesNotMatch(routeBlock, /mainDb\.update/);
+});
+
+test("guide application detail displays service areas and blocks approval with pending proposals", async () => {
+  const pageSource = await readFile(new URL("../client/src/pages/ApplicationDetail.tsx", import.meta.url), "utf8");
+  const typeSource = await readFile(new URL("../client/src/types/admin.ts", import.meta.url), "utf8");
+  const storageSource = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
+  const schemaSource = await readFile(new URL("../shared/main-schema.ts", import.meta.url), "utf8");
+
+  assert.match(schemaSource, /export const destinations = pgTable\("destinations"/);
+  assert.match(schemaSource, /export const guideApplicationServiceAreas = pgTable\("guide_application_service_areas"/);
+  assert.match(schemaSource, /export const guideServiceAreaProposals = pgTable\("guide_service_area_proposals"/);
+  assert.match(storageSource, /innerJoin\(\s*destinations/);
+  assert.match(storageSource, /serviceAreaProposals/);
+
+  assert.match(typeSource, /export interface Destination/);
+  assert.match(typeSource, /export interface GuideServiceAreaProposal/);
+  assert.match(pageSource, /\/api\/destinations\?countryCode=JP/);
+  assert.match(pageSource, /serviceAreaProposals/);
+  assert.match(pageSource, /service-area-proposals\/\$\{proposalId\}\/map/);
+  assert.match(pageSource, /service-area-proposals\/\$\{proposal\.id\}\/create-destination/);
+  assert.match(pageSource, /service-area-proposals\/\$\{proposalId\}\/reject/);
+  assert.match(pageSource, /selectedAction === "approve" && hasPendingServiceAreaProposals/);
+  assert.match(pageSource, /data-testid="service-area-approval-blocker"/);
+});
+
 test("create admin UI separates Identity Type, Access Groups, and Engagement fields", async () => {
   const source = await readFile(new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url), "utf8");
   const identitySource = await readFile(new URL("../client/src/lib/adminIdentity.ts", import.meta.url), "utf8");

@@ -102,6 +102,24 @@ const guideApprovalProxyPayloadSchema = z.object({
   note: z.string().optional(),
 });
 
+const proposalIdParamSchema = z.coerce.number().int().positive();
+
+const mapServiceAreaProposalSchema = z.object({
+  destinationId: z.coerce.number().int().positive(),
+});
+
+const createDestinationFromProposalSchema = z.object({
+  slug: z.string().trim().min(1).max(80).optional(),
+  nameEn: z.string().trim().min(1).max(160),
+  nameJa: z.string().trim().max(160).optional(),
+  nameZhCn: z.string().trim().max(160).optional(),
+  prefectureCode: z.string().trim().max(16).optional(),
+  prefectureName: z.string().trim().max(160).optional(),
+  placeType: z.enum(["city", "region", "prefecture", "island", "area"]).default("area"),
+  sortOrder: z.coerce.number().int().default(1000),
+  aliases: z.array(z.string().trim().min(1).max(160)).optional().default([]),
+});
+
 const adminStaffAccessGroups: AdminAccessGroup[] = [
   'super_admin',
   'admin_operations',
@@ -2470,6 +2488,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
       message: "LocalGuide proxy request failed",
     });
   }
+
+  app.get(
+    "/api/destinations",
+    requireAuth,
+    requireRole(["super_admin", "admin_verifier"]),
+    async (req: any, res) => {
+      try {
+        const rawCountryCode = String(req.query.countryCode ?? "JP").trim().toUpperCase();
+        if (!/^[A-Z]{2}$/.test(rawCountryCode)) {
+          return res.status(400).json({ message: "Invalid countryCode" });
+        }
+
+        const destinations = await storage.listDestinations({
+          countryCode: rawCountryCode,
+          status: "active",
+        });
+        res.json(destinations);
+      } catch (error) {
+        console.error("Error fetching destinations:", error);
+        res.status(500).json({ message: "Failed to fetch destinations" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/guide-applications/service-area-proposals/:proposalId/map",
+    requireAuth,
+    requireRole(["super_admin", "admin_verifier"]),
+    async (req: any, res) => {
+      try {
+        const proposalId = proposalIdParamSchema.parse(req.params.proposalId);
+        const body = mapServiceAreaProposalSchema.parse(req.body);
+        const headers = await localGuideProxyHeaders(req, true);
+        const r = await fetch(
+          `${localGuideBase}/api/v2/guide-applications/service-area-proposals/${proposalId}/map`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          }
+        );
+        const text = await r.text();
+        res.status(r.status);
+        res.type("application/json").send(text || "{}");
+      } catch (error: any) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: "Invalid service area proposal request",
+            error: error.message,
+          });
+        }
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/guide-applications/service-area-proposals/:proposalId/create-destination",
+    requireAuth,
+    requireRole(["super_admin", "admin_verifier"]),
+    async (req: any, res) => {
+      try {
+        const proposalId = proposalIdParamSchema.parse(req.params.proposalId);
+        const body = createDestinationFromProposalSchema.parse(req.body);
+        const headers = await localGuideProxyHeaders(req, true);
+        const r = await fetch(
+          `${localGuideBase}/api/v2/guide-applications/service-area-proposals/${proposalId}/create-destination`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          }
+        );
+        const text = await r.text();
+        res.status(r.status);
+        res.type("application/json").send(text || "{}");
+      } catch (error: any) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: "Invalid destination creation request",
+            error: error.message,
+          });
+        }
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/guide-applications/service-area-proposals/:proposalId/reject",
+    requireAuth,
+    requireRole(["super_admin", "admin_verifier"]),
+    async (req: any, res) => {
+      try {
+        const proposalId = proposalIdParamSchema.parse(req.params.proposalId);
+        const headers = await localGuideProxyHeaders(req, true);
+        const r = await fetch(
+          `${localGuideBase}/api/v2/guide-applications/service-area-proposals/${proposalId}/reject`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(req.body ?? {}),
+          }
+        );
+        const text = await r.text();
+        res.status(r.status);
+        res.type("application/json").send(text || "{}");
+      } catch (error: any) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: "Invalid service area proposal request",
+            error: error.message,
+          });
+        }
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
 
   app.get(
     "/api/localguide/admin/cancellation-requests",

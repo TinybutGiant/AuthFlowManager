@@ -63,6 +63,43 @@ export const guideApplicationsLite = pgTable("guide_applications", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 });
 
+export const destinations = pgTable("destinations", {
+  id: serial("id").primaryKey(),
+  countryCode: varchar("country_code", { length: 2 }).notNull(),
+  slug: varchar("slug", { length: 80 }).notNull(),
+  nameEn: text("name_en").notNull(),
+  nameJa: text("name_ja"),
+  nameZhCn: text("name_zh_cn"),
+  timezone: text("timezone").notNull(),
+  prefectureCode: varchar("prefecture_code", { length: 16 }),
+  prefectureName: text("prefecture_name"),
+  placeType: text("place_type").notNull(),
+  status: text("status").notNull(),
+  sortOrder: integer("sort_order").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+});
+
+export const guideApplicationServiceAreas = pgTable("guide_application_service_areas", {
+  applicationId: uuid("application_id").notNull(),
+  destinationId: integer("destination_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+});
+
+export const guideServiceAreaProposals = pgTable("guide_service_area_proposals", {
+  id: serial("id").primaryKey(),
+  applicationId: uuid("application_id"),
+  guideId: integer("guide_id"),
+  rawName: text("raw_name").notNull(),
+  normalizedName: text("normalized_name").notNull(),
+  countryCode: varchar("country_code", { length: 2 }).notNull(),
+  status: text("status").notNull(),
+  resolvedDestinationId: integer("resolved_destination_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedBy: integer("resolved_by"),
+});
+
 // Guide application approvals table
 export const guideApplicationApprovals = pgTable("guide_application_approvals", {
   id: serial("id").primaryKey(),  
@@ -146,6 +183,9 @@ export const updateGuideApplicationApprovalSchema = insertGuideApplicationApprov
 export type GuideApplicationLite = typeof guideApplicationsLite.$inferSelect;
 export type InsertGuideApplicationLite = z.infer<typeof insertGuideApplicationLiteSchema>;
 export type UpdateGuideApplicationLite = z.infer<typeof updateGuideApplicationLiteSchema>;
+export type Destination = typeof destinations.$inferSelect;
+export type GuideApplicationServiceArea = typeof guideApplicationServiceAreas.$inferSelect;
+export type GuideServiceAreaProposal = typeof guideServiceAreaProposals.$inferSelect;
 
 export type GuideApplicationApproval = typeof guideApplicationApprovals.$inferSelect;
 export type InsertGuideApplicationApproval = z.infer<typeof insertGuideApplicationApprovalSchema>;

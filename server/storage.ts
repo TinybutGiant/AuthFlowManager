@@ -42,9 +42,14 @@ import {
 import {
   guideApplicationsLite,
   guideApplicationApprovals,
+  guideApplicationServiceAreas,
+  guideServiceAreaProposals,
+  destinations,
   mainUsers,
   waitlistSignups,
   type GuideApplicationLite,
+  type Destination,
+  type GuideServiceAreaProposal,
   type InsertGuideApplicationLite,
   type UpdateGuideApplicationLite,
   type GuideApplicationApproval,
@@ -60,7 +65,7 @@ import {
 } from "../shared/main-schema";
 import { db } from "./db";
 import { mainDb } from "./main-db";
-import { count, eq, and, desc, inArray, lt, or, isNull, gt, lte, sql } from "drizzle-orm";
+import { asc, count, eq, and, desc, inArray, lt, or, isNull, gt, lte, sql } from "drizzle-orm";
 import {
   deriveAccessGroupsFromLegacyRole,
   deriveAccountTypeFromLegacyRole,
@@ -88,6 +93,29 @@ export type WaitlistStats = {
   confirmed: number;
   unsubscribed: number;
   confirmationRate: number;
+};
+
+export type GuideApplicationDestination = Pick<
+  Destination,
+  | "id"
+  | "slug"
+  | "countryCode"
+  | "nameEn"
+  | "nameJa"
+  | "nameZhCn"
+  | "timezone"
+  | "prefectureCode"
+  | "prefectureName"
+  | "placeType"
+  | "status"
+  | "sortOrder"
+>;
+
+export type GuideApplicationWithServiceAreas = GuideApplicationLite & {
+  serviceAreas: GuideApplicationDestination[];
+  serviceAreaDestinationIds: number[];
+  serviceAreaProposals: GuideServiceAreaProposal[];
+  customServiceAreaProposals: string[];
 };
 
 // Interface for storage operations
@@ -246,13 +274,14 @@ export interface IStorage {
   authenticateAdmin(email: string, password: string): Promise<AdminUser | null>;
   
   // Guide application operations
-  getGuideApplication(id: string): Promise<GuideApplicationLite | undefined>;
+  getGuideApplication(id: string): Promise<GuideApplicationWithServiceAreas | undefined>;
   listGuideApplications(filters?: { 
     status?: ApplicationStatus; 
     flaggedForReview?: boolean;
     userId?: number;
   }): Promise<GuideApplicationLite[]>;
   updateGuideApplication(id: string, updates: UpdateGuideApplicationLite): Promise<GuideApplicationLite>;
+  listDestinations(filters?: { countryCode?: string; status?: string }): Promise<GuideApplicationDestination[]>;
   
   // Exclusive lock operations
   acquireApplicationLock(applicationId: string, adminId: number): Promise<GuideApplicationLite | null>;
@@ -2248,9 +2277,49 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Guide application operations
-  async getGuideApplication(id: string): Promise<GuideApplicationLite | undefined> {
+  async getGuideApplication(id: string): Promise<GuideApplicationWithServiceAreas | undefined> {
     const [application] = await mainDb.select().from(guideApplicationsLite).where(eq(guideApplicationsLite.id, id));
-    return application;
+    if (!application) return undefined;
+
+    const [serviceAreas, serviceAreaProposals] = await Promise.all([
+      mainDb
+        .select({
+          id: destinations.id,
+          slug: destinations.slug,
+          countryCode: destinations.countryCode,
+          nameEn: destinations.nameEn,
+          nameJa: destinations.nameJa,
+          nameZhCn: destinations.nameZhCn,
+          timezone: destinations.timezone,
+          prefectureCode: destinations.prefectureCode,
+          prefectureName: destinations.prefectureName,
+          placeType: destinations.placeType,
+          status: destinations.status,
+          sortOrder: destinations.sortOrder,
+        })
+        .from(guideApplicationServiceAreas)
+        .innerJoin(
+          destinations,
+          eq(guideApplicationServiceAreas.destinationId, destinations.id)
+        )
+        .where(eq(guideApplicationServiceAreas.applicationId, id))
+        .orderBy(asc(destinations.sortOrder), asc(destinations.nameEn)),
+      mainDb
+        .select()
+        .from(guideServiceAreaProposals)
+        .where(eq(guideServiceAreaProposals.applicationId, id))
+        .orderBy(desc(guideServiceAreaProposals.createdAt)),
+    ]);
+
+    return {
+      ...application,
+      serviceAreas,
+      serviceAreaDestinationIds: serviceAreas.map((area) => area.id),
+      serviceAreaProposals,
+      customServiceAreaProposals: serviceAreaProposals
+        .filter((proposal) => proposal.status === "pending")
+        .map((proposal) => proposal.rawName),
+    };
   }
 
   async listGuideApplications(filters?: { 
@@ -2289,6 +2358,40 @@ export class DatabaseStorage implements IStorage {
       .where(eq(guideApplicationsLite.id, id))
       .returning();
     return updatedApplication;
+  }
+
+  async listDestinations(filters: { countryCode?: string; status?: string } = {}): Promise<GuideApplicationDestination[]> {
+    const conditions = [];
+    if (filters.countryCode) {
+      conditions.push(eq(destinations.countryCode, filters.countryCode));
+    }
+    if (filters.status) {
+      conditions.push(eq(destinations.status, filters.status));
+    }
+
+    let query = mainDb
+      .select({
+        id: destinations.id,
+        slug: destinations.slug,
+        countryCode: destinations.countryCode,
+        nameEn: destinations.nameEn,
+        nameJa: destinations.nameJa,
+        nameZhCn: destinations.nameZhCn,
+        timezone: destinations.timezone,
+        prefectureCode: destinations.prefectureCode,
+        prefectureName: destinations.prefectureName,
+        placeType: destinations.placeType,
+        status: destinations.status,
+        sortOrder: destinations.sortOrder,
+      })
+      .from(destinations)
+      .$dynamic();
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+
+    return await query.orderBy(asc(destinations.sortOrder), asc(destinations.nameEn));
   }
 
   // Guide application approval operations  
