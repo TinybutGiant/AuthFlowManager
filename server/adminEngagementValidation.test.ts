@@ -707,8 +707,8 @@ test("guide approval mutation delegates to LocalGuide canonical approval command
   assert.match(routeBlock, /requireAuth/);
   assert.match(routeBlock, /requireRole\(\['super_admin', 'admin_verifier'\]\)/);
   assert.match(routeBlock, /guideApprovalProxyPayloadSchema\.parse\(req\.body\)/);
-  assert.match(routeBlock, /localGuideProxyHeaders\(req, true\)/);
-  assert.match(routeBlock, /\/api\/v2\/guide-application-approvals-v2\/admin-proxy-action/);
+  assert.match(routeBlock, /localGuideStaffAssertionHeaders\(req, true\)/);
+  assert.match(routeBlock, /\/api\/v2\/guide-application-approvals-v2\/staff-action/);
   assert.match(routeBlock, /action: validatedData\.adminAction/);
   assert.doesNotMatch(routeBlock, /storage\.createGuideApplicationApproval/);
   assert.doesNotMatch(routeBlock, /storage\.updateGuideApplication/);
@@ -727,12 +727,27 @@ test("service area proposal commands proxy through LocalGuide canonical endpoint
   assert.match(routeBlock, /proposalIdParamSchema\.parse\(req\.params\.proposalId\)/);
   assert.match(routeBlock, /mapServiceAreaProposalSchema\.parse\(req\.body\)/);
   assert.match(routeBlock, /createDestinationFromProposalSchema\.parse\(req\.body\)/);
-  assert.match(routeBlock, /localGuideProxyHeaders\(req, true\)/);
+  assert.match(routeBlock, /localGuideStaffAssertionHeaders\(req, true\)/);
   assert.match(routeBlock, /\/api\/v2\/guide-applications\/service-area-proposals\/\$\{proposalId\}\/map/);
   assert.match(routeBlock, /\/api\/v2\/guide-applications\/service-area-proposals\/\$\{proposalId\}\/create-destination/);
   assert.match(routeBlock, /\/api\/v2\/guide-applications\/service-area-proposals\/\$\{proposalId\}\/reject/);
   assert.doesNotMatch(routeBlock, /storage\.updateGuideApplication/);
   assert.doesNotMatch(routeBlock, /mainDb\.update/);
+});
+
+test("LocalGuide BFF signs asymmetric staff assertions without legacy admin proxy headers", async () => {
+  const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.match(routesSource, /STAFF_ASSERTION_PRIVATE_KEY/);
+  assert.match(routesSource, /algorithm:\s*"RS256"/);
+  assert.match(routesSource, /type:\s*"staff"/);
+  assert.match(routesSource, /permissions/);
+  assert.doesNotMatch(routesSource, /LOCALGUIDE_ADMIN_PROXY/);
+  assert.doesNotMatch(routesSource, /x-admin-id/);
+  assert.doesNotMatch(routesSource, /\/admin-action/);
+  assert.doesNotMatch(routesSource, /\/admin-proxy-action/);
+  assert.doesNotMatch(routesSource, /localGuideProxyHeaders/);
+  assert.doesNotMatch(routesSource, /adminHeader/);
 });
 
 test("guide application detail displays service areas and blocks approval with pending proposals", async () => {

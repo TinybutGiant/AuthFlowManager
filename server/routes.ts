@@ -2363,8 +2363,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/guide-approvals", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     try {
       const validatedData = guideApprovalProxyPayloadSchema.parse(req.body);
-      const headers = await localGuideProxyHeaders(req, true);
-      const r = await fetch(`${localGuideBase}/api/v2/guide-application-approvals-v2/admin-proxy-action`, {
+      const headers = await localGuideStaffAssertionHeaders(req, true);
+      const r = await fetch(`${localGuideBase}/api/v2/guide-application-approvals-v2/staff-action`, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -2422,12 +2422,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ----- LocalGuide BFF: cancellation manual review (server-side only; no Stripe/DB in dashboard) -----
+  // ----- LocalGuide BFF: staff assertions for LocalGuide admin resource APIs -----
   const localGuideBase = process.env.LOCALGUIDE_API_BASE_URL?.replace(/\/$/, "");
-  const localGuideAdminProxySecret = process.env.LOCALGUIDE_ADMIN_PROXY_SECRET;
-  const localGuideAdminProxyIssuer = process.env.LOCALGUIDE_ADMIN_PROXY_ISSUER || "authflowmanager";
-  const localGuideAdminProxyAudience = process.env.LOCALGUIDE_ADMIN_PROXY_AUDIENCE || "localguide-admin-proxy";
-  const localGuideAdminProxyExpiresIn = process.env.LOCALGUIDE_ADMIN_PROXY_EXPIRES_IN || "5m";
+  const staffAssertionPrivateKey = process.env.STAFF_ASSERTION_PRIVATE_KEY;
+  const staffAssertionIssuer = process.env.STAFF_ASSERTION_ISSUER || "yaotu-admin";
+  const staffAssertionAudience = process.env.STAFF_ASSERTION_AUDIENCE || "yaotu-localguide";
+  const staffAssertionExpiresIn = process.env.STAFF_ASSERTION_EXPIRES_IN || "5m";
+
+  type StaffPermission =
+    | "*"
+    | "user.read"
+    | "guide.read"
+    | "guide.review"
+    | "guide.approve"
+    | "booking.read"
+    | "booking.resolve"
+    | "finance.read"
+    | "finance.refund"
+    | "withdrawal.review"
+    | "withdrawal.approve"
+    | "evaluation.read"
+    | "evaluation.manage"
+    | "system_message.create";
+
+  const staffPermissionsByRole: Record<AdminRole, StaffPermission[]> = {
+    super_admin: ["*"],
+    admin_verifier: ["guide.read", "guide.review", "guide.approve"],
+    admin_finance: [
+      "finance.read",
+      "finance.refund",
+      "withdrawal.review",
+      "withdrawal.approve",
+      "evaluation.read",
+      "evaluation.manage",
+    ],
+    admin_support: [
+      "user.read",
+      "guide.read",
+      "booking.read",
+      "booking.resolve",
+      "system_message.create",
+    ],
+    trainee_access: [],
+  };
 
   class LocalGuideProxyError extends Error {
     constructor(
@@ -2438,37 +2475,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
-  async function localGuideProxyHeaders(req: any, includeJsonContentType: boolean): Promise<HeadersInit> {
-    if (!localGuideBase || !localGuideAdminProxySecret) {
+  function normalizePem(value: string): string {
+    return value.replace(/\\n/g, "\n").trim();
+  }
+
+  async function localGuideStaffAssertionHeaders(req: any, includeJsonContentType: boolean): Promise<HeadersInit> {
+    if (!localGuideBase || !staffAssertionPrivateKey) {
       throw new LocalGuideProxyError(
         503,
-        "LocalGuide proxy is not configured. Set LOCALGUIDE_API_BASE_URL and LOCALGUIDE_ADMIN_PROXY_SECRET.",
+        "LocalGuide staff assertion is not configured. Set LOCALGUIDE_API_BASE_URL and STAFF_ASSERTION_PRIVATE_KEY.",
       );
     }
 
     const adminUser = req.adminUser;
-    if (!adminUser?.id || !adminUser?.email) {
+    if (!adminUser?.id || !adminUser?.role) {
       throw new LocalGuideProxyError(403, "Current admin identity is incomplete.");
     }
 
-    const localGuideAdminProxyToken = jwt.sign(
+    const permissions = staffPermissionsByRole[adminUser.role as AdminRole] ?? [];
+    if (permissions.length === 0) {
+      throw new LocalGuideProxyError(403, "Current admin role has no LocalGuide staff permissions.");
+    }
+
+    const localGuideStaffAssertion = jwt.sign(
       {
-        adminId: adminUser.id,
-        email: adminUser.email,
+        type: "staff",
         role: adminUser.role,
+        permissions,
       },
-      localGuideAdminProxySecret,
+      normalizePem(staffAssertionPrivateKey),
       {
-        expiresIn: localGuideAdminProxyExpiresIn,
-        issuer: localGuideAdminProxyIssuer,
-        audience: localGuideAdminProxyAudience,
+        algorithm: "RS256",
+        expiresIn: staffAssertionExpiresIn,
+        issuer: staffAssertionIssuer,
+        audience: staffAssertionAudience,
         subject: String(adminUser.id),
       } as jwt.SignOptions,
     );
 
     const h: Record<string, string> = {
-      Authorization: `Bearer ${localGuideAdminProxyToken}`,
-      "x-admin-id": String(adminUser.id),
+      Authorization: `Bearer ${localGuideStaffAssertion}`,
     };
     if (includeJsonContentType) {
       h["Content-Type"] = "application/json";
@@ -2487,6 +2533,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.status(502).json({
       message: "LocalGuide proxy request failed",
     });
+  }
+
+  async function forwardLocalGuideJson(
+    req: any,
+    res: any,
+    path: string,
+    options: { method?: "GET" | "POST"; body?: unknown } = {},
+  ) {
+    const method = options.method ?? "GET";
+    const hasBody = Object.prototype.hasOwnProperty.call(options, "body");
+    const headers = await localGuideStaffAssertionHeaders(req, hasBody);
+    const r = await fetch(`${localGuideBase}${path}`, {
+      method,
+      headers,
+      ...(hasBody ? { body: JSON.stringify(options.body ?? {}) } : {}),
+    });
+    const text = await r.text();
+    res.status(r.status);
+    res.type("application/json").send(text || "{}");
   }
 
   app.get(
@@ -2520,7 +2585,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const proposalId = proposalIdParamSchema.parse(req.params.proposalId);
         const body = mapServiceAreaProposalSchema.parse(req.body);
-        const headers = await localGuideProxyHeaders(req, true);
+        const headers = await localGuideStaffAssertionHeaders(req, true);
         const r = await fetch(
           `${localGuideBase}/api/v2/guide-applications/service-area-proposals/${proposalId}/map`,
           {
@@ -2552,7 +2617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const proposalId = proposalIdParamSchema.parse(req.params.proposalId);
         const body = createDestinationFromProposalSchema.parse(req.body);
-        const headers = await localGuideProxyHeaders(req, true);
+        const headers = await localGuideStaffAssertionHeaders(req, true);
         const r = await fetch(
           `${localGuideBase}/api/v2/guide-applications/service-area-proposals/${proposalId}/create-destination`,
           {
@@ -2583,7 +2648,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: any, res) => {
       try {
         const proposalId = proposalIdParamSchema.parse(req.params.proposalId);
-        const headers = await localGuideProxyHeaders(req, true);
+        const headers = await localGuideStaffAssertionHeaders(req, true);
         const r = await fetch(
           `${localGuideBase}/api/v2/guide-applications/service-area-proposals/${proposalId}/reject`,
           {
@@ -2615,7 +2680,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const qs = new URLSearchParams(req.query as Record<string, string>).toString();
         const path = `/api/v2/admin/cancellation-requests${qs ? `?${qs}` : ""}`;
-        const headers = await localGuideProxyHeaders(req, false);
+        const headers = await localGuideStaffAssertionHeaders(req, false);
         const r = await fetch(`${localGuideBase}${path}`, { headers });
         const text = await r.text();
         res.status(r.status);
@@ -2633,7 +2698,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: any, res) => {
       try {
         const id = encodeURIComponent(req.params.id);
-        const headers = await localGuideProxyHeaders(req, false);
+        const headers = await localGuideStaffAssertionHeaders(req, false);
         const r = await fetch(`${localGuideBase}/api/v2/admin/cancellation-requests/${id}`, {
           headers,
         });
@@ -2653,7 +2718,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: any, res) => {
       try {
         const id = encodeURIComponent(req.params.id);
-        const headers = await localGuideProxyHeaders(req, true);
+        const headers = await localGuideStaffAssertionHeaders(req, true);
         const r = await fetch(
           `${localGuideBase}/api/v2/admin/cancellation-requests/${id}/approve-refund`,
           {
@@ -2678,7 +2743,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: any, res) => {
       try {
         const id = encodeURIComponent(req.params.id);
-        const headers = await localGuideProxyHeaders(req, true);
+        const headers = await localGuideStaffAssertionHeaders(req, true);
         const r = await fetch(
           `${localGuideBase}/api/v2/admin/cancellation-requests/${id}/reject-refund`,
           {
@@ -2695,6 +2760,205 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
   );
+
+  app.get(
+    "/api/localguide/admin/withdrawal-requests",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        const qs = new URLSearchParams(req.query as Record<string, string>).toString();
+        await forwardLocalGuideJson(
+          req,
+          res,
+          `/api/v2/admin/withdrawal-requests${qs ? `?${qs}` : ""}`,
+        );
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/localguide/admin/withdrawal-requests/:id",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        const id = encodeURIComponent(req.params.id);
+        await forwardLocalGuideJson(req, res, `/api/v2/admin/withdrawal-requests/${id}`);
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/localguide/admin/withdrawal-requests/:id/approve",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        const id = encodeURIComponent(req.params.id);
+        await forwardLocalGuideJson(req, res, `/api/v2/admin/withdrawal-requests/${id}/approve`, {
+          method: "POST",
+          body: req.body ?? {},
+        });
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/localguide/admin/withdrawal-requests/:id/reject",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        const id = encodeURIComponent(req.params.id);
+        await forwardLocalGuideJson(req, res, `/api/v2/admin/withdrawal-requests/${id}/reject`, {
+          method: "POST",
+          body: req.body ?? {},
+        });
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/localguide/admin/bookings/abnormal",
+    requireAuth,
+    requireRole(["super_admin", "admin_support"]),
+    async (req: any, res) => {
+      try {
+        await forwardLocalGuideJson(req, res, "/api/v2/admin/bookings/abnormal");
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/localguide/admin/bookings/:id",
+    requireAuth,
+    requireRole(["super_admin", "admin_support"]),
+    async (req: any, res) => {
+      try {
+        const id = encodeURIComponent(req.params.id);
+        await forwardLocalGuideJson(req, res, `/api/v2/admin/bookings/${id}`);
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/localguide/admin/bookings/:id/override",
+    requireAuth,
+    requireRole(["super_admin", "admin_support"]),
+    async (req: any, res) => {
+      try {
+        const id = encodeURIComponent(req.params.id);
+        await forwardLocalGuideJson(req, res, `/api/v2/admin/bookings/${id}/override`, {
+          method: "POST",
+          body: req.body ?? {},
+        });
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/localguide/admin/bookings/:id/admin-fallback-completion",
+    requireAuth,
+    requireRole(["super_admin", "admin_support"]),
+    async (req: any, res) => {
+      try {
+        const id = encodeURIComponent(req.params.id);
+        await forwardLocalGuideJson(req, res, `/api/v2/admin/bookings/${id}/admin-fallback-completion`, {
+          method: "POST",
+          body: req.body ?? {},
+        });
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/localguide/admin/evaluation-rewards/queue",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        await forwardLocalGuideJson(req, res, "/api/v2/admin/evaluation-rewards/queue");
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/localguide/admin/evaluation-rewards/recovery-queue",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        await forwardLocalGuideJson(req, res, "/api/v2/admin/evaluation-rewards/recovery-queue");
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/localguide/admin/evaluation-rewards/reports/:reportId",
+    requireAuth,
+    requireRole(["super_admin", "admin_finance"]),
+    async (req: any, res) => {
+      try {
+        const reportId = encodeURIComponent(req.params.reportId);
+        await forwardLocalGuideJson(req, res, `/api/v2/admin/evaluation-rewards/reports/${reportId}`);
+      } catch (error) {
+        handleLocalGuideProxyError(res, error);
+      }
+    }
+  );
+
+  const evaluationRewardPostRoutes = [
+    ["/api/localguide/admin/evaluation-rewards/recovery-events/:eventId/retry-attach", "/api/v2/admin/evaluation-rewards/recovery-events/:eventId/retry-attach"],
+    ["/api/localguide/admin/evaluation-rewards/reports/:reportId/outcome", "/api/v2/admin/evaluation-rewards/reports/:reportId/outcome"],
+    ["/api/localguide/admin/evaluation-rewards/reports/:reportId/redacted-snapshot", "/api/v2/admin/evaluation-rewards/reports/:reportId/redacted-snapshot"],
+    ["/api/localguide/admin/evaluation-rewards/claims/:claimId/approve-award", "/api/v2/admin/evaluation-rewards/claims/:claimId/approve-award"],
+    ["/api/localguide/admin/evaluation-rewards/awards/:awardId/retry", "/api/v2/admin/evaluation-rewards/awards/:awardId/retry"],
+    ["/api/localguide/admin/evaluation-rewards/awards/:awardId/mark-issued", "/api/v2/admin/evaluation-rewards/awards/:awardId/mark-issued"],
+    ["/api/localguide/admin/evaluation-rewards/awards/:awardId/mark-failed", "/api/v2/admin/evaluation-rewards/awards/:awardId/mark-failed"],
+    ["/api/localguide/admin/evaluation-rewards/bookings/:bookingId/disqualify", "/api/v2/admin/evaluation-rewards/bookings/:bookingId/disqualify"],
+  ] as const;
+
+  for (const [adminPath, localGuideTemplate] of evaluationRewardPostRoutes) {
+    app.post(
+      adminPath,
+      requireAuth,
+      requireRole(["super_admin", "admin_finance"]),
+      async (req: any, res) => {
+        try {
+          const path = localGuideTemplate.replace(/:([A-Za-z0-9_]+)/g, (_match, key) =>
+            encodeURIComponent(String(req.params[key]))
+          );
+          await forwardLocalGuideJson(req, res, path, {
+            method: "POST",
+            body: req.body ?? {},
+          });
+        } catch (error) {
+          handleLocalGuideProxyError(res, error);
+        }
+      }
+    );
+  }
 
   const httpServer = createServer(app);
   return httpServer;
