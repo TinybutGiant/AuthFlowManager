@@ -739,6 +739,9 @@ test("LocalGuide BFF signs asymmetric staff assertions without legacy admin prox
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
 
   assert.match(routesSource, /STAFF_ASSERTION_PRIVATE_KEY/);
+  assert.match(routesSource, /function normalizePem\(value: string\): string/);
+  assert.match(routesSource, /replace\(\/\\\\n\/g, "\\n"\)\.trim\(\)/);
+  assert.match(routesSource, /normalizePem\(staffAssertionPrivateKey\)/);
   assert.match(routesSource, /algorithm:\s*"RS256"/);
   assert.match(routesSource, /type:\s*"staff"/);
   assert.match(routesSource, /permissions/);
