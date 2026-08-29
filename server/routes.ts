@@ -70,12 +70,35 @@ import {
 import { financeExpenseRepository } from './financeExpenseRepository';
 import {
   FinanceExpenseServiceError,
+  archiveFinanceVendor,
+  cancelFinanceSubscription,
+  cancelRecurringExpensePayloadSchema,
+  createFinanceBill,
+  createFinanceSubscription,
+  createFinanceVendor,
+  createRecurringExpensePayloadSchema,
+  createVendorBillPayloadSchema,
+  createVendorPayloadSchema,
+  financeBillResponse,
+  financeBillTransitionPayloadSchema,
   financeListQuerySchema,
+  financeSubscriptionResponse,
+  financeVendorResponse,
   getFinanceOverview,
+  listFinanceLegalEntities,
   listFinanceBills,
   listFinancePayments,
   listFinanceSubscriptions,
   listFinanceVendors,
+  pauseFinanceSubscription,
+  resumeFinanceSubscription,
+  transitionFinanceBillStatus,
+  updateDraftFinanceBill,
+  updateDraftVendorBillPayloadSchema,
+  updateFinanceSubscription,
+  updateFinanceVendor,
+  updateRecurringExpensePayloadSchema,
+  updateVendorPayloadSchema,
 } from './financeExpenseService';
 import { publicCompanyBrandDefaults } from './companyBrandDefaults';
 import { deriveAccountTypeFromLegacyRole } from './adminAccessModel';
@@ -687,6 +710,7 @@ async function hasAcceptedOfferForCurrentTrainee(adminUserId: number) {
 }
 
 type FinanceRouteHandler = (req: any, res: any) => Promise<unknown>;
+const financeIdParamSchema = z.coerce.number().int().positive();
 
 function financeRoute(handler: FinanceRouteHandler) {
   return async (req: any, res: any) => {
@@ -2247,6 +2271,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   app.get(
+    "/api/admin/finance/legal-entities",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async () => listFinanceLegalEntities(financeExpenseRepository)),
+  );
+
+  app.get(
     "/api/admin/finance/vendors",
     requireAuth,
     requireRole(['super_admin', 'admin_finance']),
@@ -2254,6 +2285,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       financeExpenseRepository,
       financeListQuerySchema.parse(req.query),
     )),
+  );
+
+  app.post(
+    "/api/admin/finance/vendors",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req, res) => {
+      const vendor = await createFinanceVendor(financeExpenseRepository, {
+        ...createVendorPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(financeVendorResponse(vendor));
+    }),
+  );
+
+  app.patch(
+    "/api/admin/finance/vendors/:vendorId",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const vendor = await updateFinanceVendor(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.vendorId),
+        {
+          ...updateVendorPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeVendorResponse(vendor);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/vendors/:vendorId/archive",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const vendor = await archiveFinanceVendor(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.vendorId),
+        req.adminUser.id,
+      );
+      return financeVendorResponse(vendor);
+    }),
   );
 
   app.get(
@@ -2266,6 +2341,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
     )),
   );
 
+  app.post(
+    "/api/admin/finance/subscriptions",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req, res) => {
+      const subscription = await createFinanceSubscription(financeExpenseRepository, {
+        ...createRecurringExpensePayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(financeSubscriptionResponse(subscription));
+    }),
+  );
+
+  app.patch(
+    "/api/admin/finance/subscriptions/:subscriptionId",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const subscription = await updateFinanceSubscription(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.subscriptionId),
+        {
+          ...updateRecurringExpensePayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeSubscriptionResponse(subscription);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/subscriptions/:subscriptionId/pause",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const subscription = await pauseFinanceSubscription(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.subscriptionId),
+        req.adminUser.id,
+      );
+      return financeSubscriptionResponse(subscription);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/subscriptions/:subscriptionId/resume",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const subscription = await resumeFinanceSubscription(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.subscriptionId),
+        req.adminUser.id,
+      );
+      return financeSubscriptionResponse(subscription);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/subscriptions/:subscriptionId/cancel",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const subscription = await cancelFinanceSubscription(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.subscriptionId),
+        {
+          ...cancelRecurringExpensePayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeSubscriptionResponse(subscription);
+    }),
+  );
+
   app.get(
     "/api/admin/finance/bills",
     requireAuth,
@@ -2274,6 +2424,108 @@ export async function registerRoutes(app: Express): Promise<Server> {
       financeExpenseRepository,
       financeListQuerySchema.parse(req.query),
     )),
+  );
+
+  app.post(
+    "/api/admin/finance/bills",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req, res) => {
+      const bill = await createFinanceBill(financeExpenseRepository, {
+        ...createVendorBillPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(financeBillResponse(bill));
+    }),
+  );
+
+  app.patch(
+    "/api/admin/finance/bills/:billId",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const bill = await updateDraftFinanceBill(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.billId),
+        {
+          ...updateDraftVendorBillPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeBillResponse(bill);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/bills/:billId/receive",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const bill = await transitionFinanceBillStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.billId),
+        "receive",
+        {
+          ...financeBillTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeBillResponse(bill);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/bills/:billId/approve",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const bill = await transitionFinanceBillStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.billId),
+        "approve",
+        {
+          ...financeBillTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeBillResponse(bill);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/bills/:billId/dispute",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const bill = await transitionFinanceBillStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.billId),
+        "dispute",
+        {
+          ...financeBillTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeBillResponse(bill);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/bills/:billId/void",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const bill = await transitionFinanceBillStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.billId),
+        "void",
+        {
+          ...financeBillTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeBillResponse(bill);
+    }),
   );
 
   app.get(

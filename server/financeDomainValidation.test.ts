@@ -147,6 +147,28 @@ test("external refs normalize NULL source vendor for uniqueness", async () => {
   assert.match(migration, /"external_record_id"/);
 });
 
+test("finance audit migration is narrow and server-only", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0018_finance_audit_events.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS "finance_audit_events"/);
+  assert.match(migration, /"actor_admin_user_id" integer NOT NULL REFERENCES "admin_users"/);
+  assert.match(migration, /"entity_type" text NOT NULL/);
+  assert.match(migration, /"entity_id" integer NOT NULL/);
+  assert.match(migration, /"action" text NOT NULL/);
+  assert.match(migration, /"changes_json" jsonb NOT NULL DEFAULT '\{\}'::jsonb/);
+  assert.match(migration, /"entity_type" IN \('vendor', 'recurring_expense', 'vendor_bill'\)/);
+  for (const action of ["created", "updated", "archived", "paused", "resumed", "cancelled", "received", "approved", "disputed", "voided"]) {
+    assert.match(migration, new RegExp(`'${action}'`));
+  }
+  assert.match(migration, /ALTER TABLE "finance_audit_events" ENABLE ROW LEVEL SECURITY/);
+  assert.match(migration, /REVOKE ALL PRIVILEGES ON TABLE "finance_audit_events" FROM anon, authenticated/);
+  assert.match(migration, /CREATE POLICY "finance_audit_events_no_direct_client_access"/);
+  assert.doesNotMatch(migration, /expense_payments|vendor_bill_applications|payroll|tax_/);
+});
+
 test("worker admin link is optional and one admin can link to at most one worker", async () => {
   const migration = await readFile(
     new URL("../migrations/0017_finance_personnel_payroll_tax_foundation.sql", import.meta.url),

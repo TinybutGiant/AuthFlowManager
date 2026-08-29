@@ -3,6 +3,7 @@ import {
   documentLinks,
   documents,
   expensePayments,
+  financeAuditEvents,
   legalEntities,
   reconciliationExceptions,
   recurringExpenses,
@@ -14,6 +15,7 @@ import {
   type InsertDocument,
   type InsertDocumentLink,
   type InsertExpensePayment,
+  type InsertFinanceAuditEvent,
   type InsertRecurringExpense,
   type InsertVendor,
   type InsertVendorBill,
@@ -58,6 +60,7 @@ function mapBillRows(
   rows: Array<{
     bill: {
       id: number;
+      legalEntityId: number;
       vendorId: number;
       recurringExpenseId: number | null;
       invoiceNumber: string | null;
@@ -83,6 +86,7 @@ function mapBillRows(
     const activeAppliedAmountCents = activeApplicationTotal(billApplications);
     return {
       id: row.bill.id,
+      legalEntityId: row.bill.legalEntityId,
       vendorId: row.bill.vendorId,
       recurringExpenseId: row.bill.recurringExpenseId,
       invoiceNumber: row.bill.invoiceNumber,
@@ -199,6 +203,14 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
       await database.execute(sql`SELECT "id" FROM "vendor_bills" WHERE "id" = ${id} FOR UPDATE`);
     },
 
+    lockVendor: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "vendors" WHERE "id" = ${id} FOR UPDATE`);
+    },
+
+    lockRecurringExpense: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "recurring_expenses" WHERE "id" = ${id} FOR UPDATE`);
+    },
+
     lockExpensePayment: async (id) => {
       await database.execute(sql`SELECT "id" FROM "expense_payments" WHERE "id" = ${id} FOR UPDATE`);
     },
@@ -211,6 +223,19 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
       const [row] = await database.select().from(legalEntities).where(eq(legalEntities.id, id));
       return row;
     },
+
+    listLegalEntities: async () => (
+      await database
+        .select({
+          id: legalEntities.id,
+          legalName: legalEntities.legalName,
+          entityType: legalEntities.entityType,
+          status: legalEntities.status,
+        })
+        .from(legalEntities)
+        .where(eq(legalEntities.status, "active"))
+        .orderBy(asc(legalEntities.legalName), asc(legalEntities.id))
+    ),
 
     getVendor: async (id) => {
       const [row] = await database.select().from(vendors).where(eq(vendors.id, id));
@@ -348,6 +373,7 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
         .select({
           bill: {
             id: vendorBills.id,
+            legalEntityId: vendorBills.legalEntityId,
             vendorId: vendorBills.vendorId,
             recurringExpenseId: vendorBills.recurringExpenseId,
             invoiceNumber: vendorBills.invoiceNumber,
@@ -395,6 +421,25 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
         .set(compact(values))
         .where(eq(vendorBills.id, id))
         .returning();
+      return row;
+    },
+
+    findVendorBillInvoiceConflict: async (filters) => {
+      const conditions = [
+        eq(vendorBills.legalEntityId, filters.legalEntityId),
+        eq(vendorBills.vendorId, filters.vendorId),
+        eq(vendorBills.currency, filters.currency),
+        sql`lower(${vendorBills.invoiceNumber}) = lower(${filters.invoiceNumber})`,
+        sql`${vendorBills.status} <> 'voided'`,
+      ];
+      if (filters.excludeVendorBillId) {
+        conditions.push(sql`${vendorBills.id} <> ${filters.excludeVendorBillId}`);
+      }
+      const [row] = await database
+        .select({ id: vendorBills.id })
+        .from(vendorBills)
+        .where(and(...conditions))
+        .limit(1);
       return row;
     },
 
@@ -504,6 +549,11 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
       return row;
     },
 
+    createFinanceAuditEvent: async (values) => {
+      const [row] = await database.insert(financeAuditEvents).values(compact(values)).returning();
+      return row;
+    },
+
     createDocumentWithLink: async (values) => {
       const createRows = async (client: DrizzleDb) => {
         const [document] = await client.insert(documents).values(compact(values.document)).returning();
@@ -539,6 +589,7 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
         .select({
           bill: {
             id: vendorBills.id,
+            legalEntityId: vendorBills.legalEntityId,
             vendorId: vendorBills.vendorId,
             recurringExpenseId: vendorBills.recurringExpenseId,
             invoiceNumber: vendorBills.invoiceNumber,
@@ -635,6 +686,7 @@ export type {
   InsertDocument,
   InsertDocumentLink,
   InsertExpensePayment,
+  InsertFinanceAuditEvent,
   InsertRecurringExpense,
   InsertVendor,
   InsertVendorBill,

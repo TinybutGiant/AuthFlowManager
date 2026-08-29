@@ -5,10 +5,12 @@ import type {
   DocumentLink,
   DocumentSensitivityClass,
   ExpensePayment,
+  FinanceAuditEvent,
   FinanceEntityType,
   InsertDocument,
   InsertDocumentLink,
   InsertExpensePayment,
+  InsertFinanceAuditEvent,
   InsertRecurringExpense,
   InsertVendor,
   InsertVendorBill,
@@ -69,6 +71,48 @@ const VENDOR_BILL_STATUSES = ["draft", "received", "approved", "disputed", "void
 const EXPENSE_PAYMENT_DIRECTIONS = ["outflow", "refund"] as const;
 const EXPENSE_PAYMENT_METHODS = ["provider", "ach", "check", "card", "wire", "manual", "other"] as const;
 const EXPENSE_PAYMENT_STATUSES = ["pending", "posted", "cleared", "failed", "reversed", "voided"] as const;
+const FINANCE_AUDIT_ENTITY_TYPES = ["vendor", "recurring_expense", "vendor_bill"] as const;
+const FINANCE_AUDIT_ACTIONS = [
+  "created",
+  "updated",
+  "archived",
+  "paused",
+  "resumed",
+  "cancelled",
+  "received",
+  "approved",
+  "disputed",
+  "voided",
+] as const;
+const VENDOR_AUDIT_FIELDS = ["name", "vendorType", "status"] as const;
+const RECURRING_EXPENSE_AUDIT_FIELDS = [
+  "categoryCode",
+  "cadence",
+  "expectedAmountCents",
+  "currency",
+  "variableAmount",
+  "billingDay",
+  "nextBillingDate",
+  "renewalDate",
+  "autoRenew",
+  "trialEndsOn",
+  "cancellationDate",
+  "status",
+] as const;
+const VENDOR_BILL_AUDIT_FIELDS = [
+  "recurringExpenseId",
+  "invoiceNumber",
+  "billKind",
+  "issueDate",
+  "dueDate",
+  "servicePeriodStart",
+  "servicePeriodEnd",
+  "amountCents",
+  "currency",
+  "categoryCode",
+  "status",
+  "creditForVendorBillId",
+] as const;
 const AP_DOCUMENT_ENTITY_TYPES = [
   "vendors",
   "recurring_expenses",
@@ -272,7 +316,7 @@ const vendorBillWriteFields = {
   amountCents: amountCentsSchema,
   currency: currencySchema.default("USD"),
   categoryCode: requiredText(80),
-  status: z.enum(VENDOR_BILL_STATUSES).default("draft"),
+  status: z.literal("draft").default("draft"),
   creditForVendorBillId: z.preprocess(
     (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
     z.coerce.number().int().positive().nullable().optional(),
@@ -283,12 +327,21 @@ const vendorBillWriteFields = {
 function refineVendorBillPayload(
   data: {
     billKind?: VendorBillKind;
+    issueDate?: string | null;
+    dueDate?: string | null;
     servicePeriodStart?: string | null;
     servicePeriodEnd?: string | null;
     creditForVendorBillId?: number | null;
   },
   ctx: z.RefinementCtx,
 ) {
+  if (data.issueDate && data.dueDate && data.dueDate < data.issueDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["dueDate"],
+      message: "Due date cannot be before issue date.",
+    });
+  }
   if (data.servicePeriodStart && data.servicePeriodEnd && data.servicePeriodStart > data.servicePeriodEnd) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -414,6 +467,8 @@ export type UpdateExpensePaymentStatusPayload = z.infer<typeof updateExpensePaym
 export type ApplyExpensePaymentPayload = z.infer<typeof applyExpensePaymentPayloadSchema>;
 export type ApplyCreditMemoPayload = z.infer<typeof applyCreditMemoPayloadSchema>;
 export type CreateFinanceDocumentPayload = z.infer<typeof createFinanceDocumentPayloadSchema>;
+export type FinanceAuditEntityType = typeof FINANCE_AUDIT_ENTITY_TYPES[number];
+export type FinanceAuditAction = typeof FINANCE_AUDIT_ACTIONS[number];
 
 export interface CurrencyAmount {
   currency: string;
@@ -429,8 +484,16 @@ export interface FinanceVendorListItem {
   contactEmail?: string | null;
 }
 
+export interface FinanceLegalEntityListItem {
+  id: number;
+  legalName: string;
+  entityType: string;
+  status: string;
+}
+
 export interface VendorBillListItem {
   id: number;
+  legalEntityId: number;
   vendorId: number;
   vendorName?: string | null;
   recurringExpenseId?: number | null;
@@ -450,6 +513,24 @@ export interface VendorBillListItem {
   settlementState: VendorBillSettlementState;
   documentCount: number;
   recurringExpectedAmountCents?: number | null;
+}
+
+export interface VendorBillMutationResult {
+  id: number;
+  legalEntityId: number;
+  vendorId: number;
+  recurringExpenseId?: number | null;
+  invoiceNumber?: string | null;
+  billKind: string;
+  issueDate?: string | Date | null;
+  dueDate?: string | Date | null;
+  servicePeriodStart?: string | Date | null;
+  servicePeriodEnd?: string | Date | null;
+  amountCents: number;
+  currency: string;
+  categoryCode: string;
+  status: string;
+  creditForVendorBillId?: number | null;
 }
 
 export interface RecurringExpenseListItem {
@@ -564,10 +645,13 @@ export interface FinanceOverview {
 
 export interface FinanceExpenseRepository {
   transaction<T>(work: (repo: FinanceExpenseRepository) => Promise<T>): Promise<T>;
+  lockVendor(id: number): Promise<void>;
+  lockRecurringExpense(id: number): Promise<void>;
   lockVendorBill(id: number): Promise<void>;
   lockExpensePayment(id: number): Promise<void>;
   lockVendorBillApplication(id: number): Promise<void>;
   getLegalEntity(id: number): Promise<LegalEntity | undefined>;
+  listLegalEntities(): Promise<FinanceLegalEntityListItem[]>;
   getVendor(id: number): Promise<Vendor | undefined>;
   listVendors(filters: FinanceListQuery): Promise<FinanceVendorListItem[]>;
   createVendor(values: InsertVendor): Promise<Vendor>;
@@ -580,6 +664,13 @@ export interface FinanceExpenseRepository {
   listVendorBills(filters: FinanceListQuery): Promise<VendorBillListItem[]>;
   createVendorBill(values: InsertVendorBill): Promise<VendorBill>;
   updateVendorBill(id: number, values: Partial<InsertVendorBill>): Promise<VendorBill | undefined>;
+  findVendorBillInvoiceConflict(filters: {
+    legalEntityId: number;
+    vendorId: number;
+    invoiceNumber: string;
+    currency: string;
+    excludeVendorBillId?: number;
+  }): Promise<Pick<VendorBill, "id"> | undefined>;
   getExpensePayment(id: number): Promise<ExpensePayment | undefined>;
   listExpensePayments(filters: FinanceListQuery): Promise<ExpensePaymentListItem[]>;
   createExpensePayment(values: InsertExpensePayment): Promise<ExpensePayment>;
@@ -596,12 +687,124 @@ export interface FinanceExpenseRepository {
     id: number,
     values: Partial<InsertVendorBillApplication>,
   ): Promise<VendorBillApplication | undefined>;
+  createFinanceAuditEvent(values: InsertFinanceAuditEvent): Promise<FinanceAuditEvent>;
   createDocumentWithLink(values: {
     document: InsertDocument;
     link: Omit<InsertDocumentLink, "documentId">;
   }): Promise<{ document: Document; link: DocumentLink }>;
   entityExists(entityType: FinanceEntityType, entityId: number): Promise<boolean>;
   getFinanceOverviewRows(today: string): Promise<FinanceOverviewInput>;
+}
+
+export function financeVendorResponse(vendor: Vendor | FinanceVendorListItem): FinanceVendorListItem {
+  return {
+    id: vendor.id,
+    name: vendor.name,
+    vendorType: vendor.vendorType,
+    status: vendor.status,
+    website: vendor.website,
+    contactEmail: vendor.contactEmail,
+  };
+}
+
+export function financeSubscriptionResponse(
+  subscription: RecurringExpense | RecurringExpenseListItem,
+): RecurringExpenseListItem {
+  return {
+    id: subscription.id,
+    legalEntityId: subscription.legalEntityId,
+    vendorId: subscription.vendorId,
+    vendorName: "vendorName" in subscription ? subscription.vendorName : undefined,
+    categoryCode: subscription.categoryCode,
+    cadence: subscription.cadence,
+    expectedAmountCents: subscription.expectedAmountCents,
+    currency: subscription.currency,
+    variableAmount: subscription.variableAmount,
+    billingDay: subscription.billingDay,
+    nextBillingDate: subscription.nextBillingDate,
+    renewalDate: subscription.renewalDate,
+    autoRenew: subscription.autoRenew,
+    trialEndsOn: subscription.trialEndsOn,
+    cancellationDate: subscription.cancellationDate,
+    status: subscription.status,
+  };
+}
+
+export function financeBillResponse(bill: VendorBill | VendorBillListItem): VendorBillMutationResult {
+  return {
+    id: bill.id,
+    legalEntityId: bill.legalEntityId,
+    vendorId: bill.vendorId,
+    recurringExpenseId: bill.recurringExpenseId,
+    invoiceNumber: bill.invoiceNumber,
+    billKind: bill.billKind,
+    issueDate: bill.issueDate,
+    dueDate: bill.dueDate,
+    servicePeriodStart: bill.servicePeriodStart,
+    servicePeriodEnd: bill.servicePeriodEnd,
+    amountCents: bill.amountCents,
+    currency: bill.currency,
+    categoryCode: bill.categoryCode,
+    status: bill.status,
+    creditForVendorBillId: bill.creditForVendorBillId,
+  };
+}
+
+function normalizeAuditValue(value: unknown) {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  return value === undefined ? null : value;
+}
+
+function auditValuesEqual(left: unknown, right: unknown) {
+  return JSON.stringify(normalizeAuditValue(left)) === JSON.stringify(normalizeAuditValue(right));
+}
+
+function auditChanges(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown>,
+  fields: readonly string[],
+) {
+  return Object.fromEntries(
+    fields.flatMap((field) => {
+      const from = before ? normalizeAuditValue(before[field]) : null;
+      const to = normalizeAuditValue(after[field]);
+      if (!before && to === null) {
+        return [];
+      }
+      if (before && auditValuesEqual(from, to)) {
+        return [];
+      }
+      return [[field, { from, to }]];
+    }),
+  );
+}
+
+async function writeFinanceAuditEvent(
+  repo: FinanceExpenseRepository,
+  input: {
+    actorAdminId: number;
+    entityType: FinanceAuditEntityType;
+    entityId: number;
+    action: FinanceAuditAction;
+    changes: Record<string, unknown>;
+  },
+) {
+  return repo.createFinanceAuditEvent({
+    actorAdminUserId: input.actorAdminId,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    action: input.action,
+    changesJson: input.changes,
+  } as InsertFinanceAuditEvent);
+}
+
+function runFinanceTransaction<T>(
+  repo: FinanceExpenseRepository,
+  work: (tx: FinanceExpenseRepository) => Promise<T>,
+) {
+  return typeof repo.transaction === "function" ? repo.transaction(work) : work(repo);
 }
 
 export function monthlyRecurringAmountCents(
@@ -848,6 +1051,29 @@ async function assertCreditSourceMatchesBill(
   }
 }
 
+async function assertInvoiceNumberAvailable(
+  repo: FinanceExpenseRepository,
+  bill: {
+    legalEntityId: number;
+    vendorId: number;
+    invoiceNumber?: string | null;
+    currency: string;
+  },
+  excludeVendorBillId?: number,
+) {
+  if (!bill.invoiceNumber) return;
+  const conflict = await repo.findVendorBillInvoiceConflict({
+    legalEntityId: bill.legalEntityId,
+    vendorId: bill.vendorId,
+    invoiceNumber: bill.invoiceNumber,
+    currency: bill.currency,
+    excludeVendorBillId,
+  });
+  if (conflict) {
+    fail(409, "VENDOR_BILL_INVOICE_DUPLICATE", "Invoice number already exists for this vendor and currency.");
+  }
+}
+
 export function assertVendorBillEditable(bill: Pick<VendorBill, "status">) {
   if (bill.status !== "draft") {
     fail(409, "BILL_NOT_DRAFT", "Only draft bills can be edited.");
@@ -896,8 +1122,24 @@ export function nextExpensePaymentStatus(
   return nextStatus as ExpensePayment["status"];
 }
 
+function vendorBillStatusAuditAction(status: VendorBillStatus): FinanceAuditAction {
+  switch (status) {
+    case "received":
+    case "approved":
+    case "disputed":
+    case "voided":
+      return status;
+    case "draft":
+      fail(500, "BILL_AUDIT_STATUS_INVALID", "Draft is not a bill transition audit action.");
+  }
+}
+
 export async function getFinanceOverview(repo: FinanceExpenseRepository, today = dateOnly()) {
   return deriveFinanceOverviewFromRows(await repo.getFinanceOverviewRows(today));
+}
+
+export function listFinanceLegalEntities(repo: FinanceExpenseRepository) {
+  return repo.listLegalEntities();
 }
 
 export function listFinanceVendors(repo: FinanceExpenseRepository, query: FinanceListQuery) {
@@ -909,40 +1151,75 @@ export async function createFinanceVendor(
   input: CreateVendorPayload & { actorAdminId: number },
 ) {
   const { actorAdminId, ...payload } = input;
-  return repo.createVendor({
-    ...payload,
-    createdBy: actorAdminId,
+  return runFinanceTransaction(repo, async (tx) => {
+    const vendor = await tx.createVendor({
+      ...payload,
+      createdBy: actorAdminId,
+    });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor",
+      entityId: vendor.id,
+      action: "created",
+      changes: auditChanges(null, vendor, VENDOR_AUDIT_FIELDS),
+    });
+    return vendor;
   });
 }
 
 export async function updateFinanceVendor(
   repo: FinanceExpenseRepository,
   vendorId: number,
-  payload: UpdateVendorPayload,
+  input: UpdateVendorPayload & { actorAdminId: number },
 ) {
-  const existing = await repo.getVendor(vendorId);
-  if (!existing) {
-    fail(404, "VENDOR_NOT_FOUND", "Vendor not found.");
-  }
-  const updated = await repo.updateVendor(vendorId, {
-    ...payload,
-    updatedAt: new Date(),
-  } as Partial<InsertVendor>);
-  if (!updated) {
-    fail(404, "VENDOR_NOT_FOUND", "Vendor not found.");
-  }
-  return updated;
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockVendor(vendorId);
+    const existing = await tx.getVendor(vendorId);
+    if (!existing) {
+      fail(404, "VENDOR_NOT_FOUND", "Vendor not found.");
+    }
+    const updated = await tx.updateVendor(vendorId, {
+      ...payload,
+      updatedAt: new Date(),
+    } as Partial<InsertVendor>);
+    if (!updated) {
+      fail(404, "VENDOR_NOT_FOUND", "Vendor not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor",
+      entityId: updated.id,
+      action: "updated",
+      changes: auditChanges(existing, updated, VENDOR_AUDIT_FIELDS),
+    });
+    return updated;
+  });
 }
 
-export async function archiveFinanceVendor(repo: FinanceExpenseRepository, vendorId: number) {
-  const updated = await repo.updateVendor(vendorId, {
-    status: "archived",
-    updatedAt: new Date(),
-  } as Partial<InsertVendor>);
-  if (!updated) {
-    fail(404, "VENDOR_NOT_FOUND", "Vendor not found.");
-  }
-  return updated;
+export async function archiveFinanceVendor(repo: FinanceExpenseRepository, vendorId: number, actorAdminId: number) {
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockVendor(vendorId);
+    const existing = await tx.getVendor(vendorId);
+    if (!existing) {
+      fail(404, "VENDOR_NOT_FOUND", "Vendor not found.");
+    }
+    const updated = await tx.updateVendor(vendorId, {
+      status: "archived",
+      updatedAt: new Date(),
+    } as Partial<InsertVendor>);
+    if (!updated) {
+      fail(404, "VENDOR_NOT_FOUND", "Vendor not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor",
+      entityId: updated.id,
+      action: "archived",
+      changes: auditChanges(existing, updated, VENDOR_AUDIT_FIELDS),
+    });
+    return updated;
+  });
 }
 
 export function listFinanceSubscriptions(repo: FinanceExpenseRepository, query: FinanceListQuery) {
@@ -954,87 +1231,165 @@ export async function createFinanceSubscription(
   input: CreateRecurringExpensePayload & { actorAdminId: number },
 ) {
   const { actorAdminId, ...payload } = input;
-  await assertLegalEntityExists(repo, payload.legalEntityId);
-  await assertVendorUsable(repo, payload.vendorId);
-  return repo.createRecurringExpense({
-    ...payload,
-    createdBy: actorAdminId,
+  return runFinanceTransaction(repo, async (tx) => {
+    await assertLegalEntityExists(tx, payload.legalEntityId);
+    await assertVendorUsable(tx, payload.vendorId);
+    const subscription = await tx.createRecurringExpense({
+      ...payload,
+      createdBy: actorAdminId,
+    });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "recurring_expense",
+      entityId: subscription.id,
+      action: "created",
+      changes: auditChanges(null, subscription, RECURRING_EXPENSE_AUDIT_FIELDS),
+    });
+    return subscription;
   });
 }
 
 export async function updateFinanceSubscription(
   repo: FinanceExpenseRepository,
   subscriptionId: number,
-  payload: UpdateRecurringExpensePayload,
+  input: UpdateRecurringExpensePayload & { actorAdminId: number },
 ) {
-  const existing = await repo.getRecurringExpense(subscriptionId);
-  if (!existing) {
-    fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
-  }
-  if (existing.status === "cancelled" || existing.status === "expired") {
-    fail(409, "SUBSCRIPTION_TERMINAL_STATE", "Cancelled or expired subscriptions cannot be edited.");
-  }
-  const nextVariableAmount = payload.variableAmount ?? existing.variableAmount;
-  const nextExpectedAmount = Object.prototype.hasOwnProperty.call(payload, "expectedAmountCents")
-    ? payload.expectedAmountCents
-    : existing.expectedAmountCents;
-  if (!nextVariableAmount && nextExpectedAmount == null) {
-    fail(400, "SUBSCRIPTION_EXPECTED_AMOUNT_REQUIRED", "Expected amount is required unless the subscription is variable.");
-  }
-  const updated = await repo.updateRecurringExpense(subscriptionId, {
-    ...payload,
-    updatedAt: new Date(),
-  } as Partial<InsertRecurringExpense>);
-  if (!updated) {
-    fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
-  }
-  return updated;
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockRecurringExpense(subscriptionId);
+    const existing = await tx.getRecurringExpense(subscriptionId);
+    if (!existing) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    if (existing.status === "cancelled" || existing.status === "expired") {
+      fail(409, "SUBSCRIPTION_TERMINAL_STATE", "Cancelled or expired subscriptions cannot be edited.");
+    }
+    const nextVariableAmount = payload.variableAmount ?? existing.variableAmount;
+    const nextExpectedAmount = Object.prototype.hasOwnProperty.call(payload, "expectedAmountCents")
+      ? payload.expectedAmountCents
+      : existing.expectedAmountCents;
+    if (!nextVariableAmount && nextExpectedAmount == null) {
+      fail(400, "SUBSCRIPTION_EXPECTED_AMOUNT_REQUIRED", "Expected amount is required unless the subscription is variable.");
+    }
+    const updated = await tx.updateRecurringExpense(subscriptionId, {
+      ...payload,
+      updatedAt: new Date(),
+    } as Partial<InsertRecurringExpense>);
+    if (!updated) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "recurring_expense",
+      entityId: updated.id,
+      action: "updated",
+      changes: auditChanges(existing, updated, RECURRING_EXPENSE_AUDIT_FIELDS),
+    });
+    return updated;
+  });
 }
 
-export async function pauseFinanceSubscription(repo: FinanceExpenseRepository, subscriptionId: number) {
-  const existing = await repo.getRecurringExpense(subscriptionId);
-  if (!existing) {
-    fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
-  }
-  if (!["trial", "active"].includes(existing.status)) {
-    fail(409, "SUBSCRIPTION_PAUSE_REQUIRES_ACTIVE", "Only trial or active subscriptions can be paused.");
-  }
-  const updated = await repo.updateRecurringExpense(subscriptionId, {
-    status: "paused",
-    updatedAt: new Date(),
-  } as Partial<InsertRecurringExpense>);
-  if (!updated) {
-    fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
-  }
-  return updated;
+export async function pauseFinanceSubscription(
+  repo: FinanceExpenseRepository,
+  subscriptionId: number,
+  actorAdminId: number,
+) {
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockRecurringExpense(subscriptionId);
+    const existing = await tx.getRecurringExpense(subscriptionId);
+    if (!existing) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    if (!["trial", "active"].includes(existing.status)) {
+      fail(409, "SUBSCRIPTION_PAUSE_REQUIRES_ACTIVE", "Only trial or active subscriptions can be paused.");
+    }
+    const updated = await tx.updateRecurringExpense(subscriptionId, {
+      status: "paused",
+      updatedAt: new Date(),
+    } as Partial<InsertRecurringExpense>);
+    if (!updated) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "recurring_expense",
+      entityId: updated.id,
+      action: "paused",
+      changes: auditChanges(existing, updated, RECURRING_EXPENSE_AUDIT_FIELDS),
+    });
+    return updated;
+  });
+}
+
+export async function resumeFinanceSubscription(
+  repo: FinanceExpenseRepository,
+  subscriptionId: number,
+  actorAdminId: number,
+) {
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockRecurringExpense(subscriptionId);
+    const existing = await tx.getRecurringExpense(subscriptionId);
+    if (!existing) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    if (existing.status !== "paused") {
+      fail(409, "SUBSCRIPTION_RESUME_REQUIRES_PAUSED", "Only paused subscriptions can be resumed.");
+    }
+    const updated = await tx.updateRecurringExpense(subscriptionId, {
+      status: "active",
+      updatedAt: new Date(),
+    } as Partial<InsertRecurringExpense>);
+    if (!updated) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "recurring_expense",
+      entityId: updated.id,
+      action: "resumed",
+      changes: auditChanges(existing, updated, RECURRING_EXPENSE_AUDIT_FIELDS),
+    });
+    return updated;
+  });
 }
 
 export async function cancelFinanceSubscription(
   repo: FinanceExpenseRepository,
   subscriptionId: number,
-  input: CancelRecurringExpensePayload,
+  input: CancelRecurringExpensePayload & { actorAdminId: number },
   now = new Date(),
 ) {
-  const existing = await repo.getRecurringExpense(subscriptionId);
-  if (!existing) {
-    fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
-  }
-  if (existing.status === "cancelled") {
-    return existing;
-  }
-  if (existing.status === "expired") {
-    fail(409, "SUBSCRIPTION_EXPIRED", "Expired subscriptions cannot be cancelled.");
-  }
-  const updated = await repo.updateRecurringExpense(subscriptionId, {
-    status: "cancelled",
-    cancellationDate: input.cancellationDate ?? dateOnly(now),
-    notes: input.notes ?? existing.notes,
-    updatedAt: now,
-  } as Partial<InsertRecurringExpense>);
-  if (!updated) {
-    fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
-  }
-  return updated;
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockRecurringExpense(subscriptionId);
+    const existing = await tx.getRecurringExpense(subscriptionId);
+    if (!existing) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    if (existing.status === "cancelled") {
+      return existing;
+    }
+    if (existing.status === "expired") {
+      fail(409, "SUBSCRIPTION_EXPIRED", "Expired subscriptions cannot be cancelled.");
+    }
+    const updated = await tx.updateRecurringExpense(subscriptionId, {
+      status: "cancelled",
+      cancellationDate: payload.cancellationDate ?? dateOnly(now),
+      notes: payload.notes ?? existing.notes,
+      updatedAt: now,
+    } as Partial<InsertRecurringExpense>);
+    if (!updated) {
+      fail(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "recurring_expense",
+      entityId: updated.id,
+      action: "cancelled",
+      changes: auditChanges(existing, updated, RECURRING_EXPENSE_AUDIT_FIELDS),
+    });
+    return updated;
+  });
 }
 
 export function listFinanceBills(repo: FinanceExpenseRepository, query: FinanceListQuery) {
@@ -1046,72 +1401,115 @@ export async function createFinanceBill(
   input: CreateVendorBillPayload & { actorAdminId: number },
 ) {
   const { actorAdminId, ...payload } = input;
-  await assertLegalEntityExists(repo, payload.legalEntityId);
-  await assertVendorUsable(repo, payload.vendorId);
-  await assertRecurringExpenseMatchesBill(repo, payload);
-  await assertCreditSourceMatchesBill(repo, payload);
-  return repo.createVendorBill({
-    ...payload,
-    createdBy: actorAdminId,
+  return runFinanceTransaction(repo, async (tx) => {
+    await assertLegalEntityExists(tx, payload.legalEntityId);
+    await assertVendorUsable(tx, payload.vendorId);
+    await assertRecurringExpenseMatchesBill(tx, payload);
+    await assertCreditSourceMatchesBill(tx, payload);
+    await assertInvoiceNumberAvailable(tx, payload);
+    const bill = await tx.createVendorBill({
+      ...payload,
+      createdBy: actorAdminId,
+    });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor_bill",
+      entityId: bill.id,
+      action: "created",
+      changes: auditChanges(null, bill, VENDOR_BILL_AUDIT_FIELDS),
+    });
+    return bill;
   });
 }
 
 export async function updateDraftFinanceBill(
   repo: FinanceExpenseRepository,
   billId: number,
-  payload: UpdateDraftVendorBillPayload,
+  input: UpdateDraftVendorBillPayload & { actorAdminId: number },
 ) {
-  const existing = await repo.getVendorBill(billId);
-  if (!existing) {
-    fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
-  }
-  assertVendorBillEditable(existing);
-  const merged = {
-    legalEntityId: existing.legalEntityId,
-    vendorId: existing.vendorId,
-    currency: payload.currency ?? existing.currency,
-    categoryCode: payload.categoryCode ?? existing.categoryCode,
-    billKind: payload.billKind ?? existing.billKind,
-    recurringExpenseId: Object.prototype.hasOwnProperty.call(payload, "recurringExpenseId")
-      ? payload.recurringExpenseId
-      : existing.recurringExpenseId,
-    creditForVendorBillId: Object.prototype.hasOwnProperty.call(payload, "creditForVendorBillId")
-      ? payload.creditForVendorBillId
-      : existing.creditForVendorBillId,
-    targetVendorBillId: billId,
-  };
-  await assertRecurringExpenseMatchesBill(repo, merged);
-  await assertCreditSourceMatchesBill(repo, merged);
-  const updated = await repo.updateVendorBill(billId, {
-    ...payload,
-    updatedAt: new Date(),
-  } as Partial<InsertVendorBill>);
-  if (!updated) {
-    fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
-  }
-  return updated;
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockVendorBill(billId);
+    const existing = await tx.getVendorBill(billId);
+    if (!existing) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+    assertVendorBillEditable(existing);
+    const merged = {
+      legalEntityId: existing.legalEntityId,
+      vendorId: existing.vendorId,
+      currency: payload.currency ?? existing.currency,
+      categoryCode: payload.categoryCode ?? existing.categoryCode,
+      billKind: payload.billKind ?? existing.billKind,
+      recurringExpenseId: Object.prototype.hasOwnProperty.call(payload, "recurringExpenseId")
+        ? payload.recurringExpenseId
+        : existing.recurringExpenseId,
+      creditForVendorBillId: Object.prototype.hasOwnProperty.call(payload, "creditForVendorBillId")
+        ? payload.creditForVendorBillId
+        : existing.creditForVendorBillId,
+      targetVendorBillId: billId,
+    };
+    await assertRecurringExpenseMatchesBill(tx, merged);
+    await assertCreditSourceMatchesBill(tx, merged);
+    await assertInvoiceNumberAvailable(tx, {
+      legalEntityId: merged.legalEntityId,
+      vendorId: merged.vendorId,
+      invoiceNumber: Object.prototype.hasOwnProperty.call(payload, "invoiceNumber")
+        ? payload.invoiceNumber
+        : existing.invoiceNumber,
+      currency: merged.currency,
+    }, billId);
+    const updated = await tx.updateVendorBill(billId, {
+      ...payload,
+      updatedAt: new Date(),
+    } as Partial<InsertVendorBill>);
+    if (!updated) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor_bill",
+      entityId: updated.id,
+      action: "updated",
+      changes: auditChanges(existing, updated, VENDOR_BILL_AUDIT_FIELDS),
+    });
+    return updated;
+  });
 }
 
 export async function transitionFinanceBillStatus(
   repo: FinanceExpenseRepository,
   billId: number,
   action: "receive" | "approve" | "dispute" | "void",
-  payload: z.infer<typeof financeBillTransitionPayloadSchema>,
+  input: z.infer<typeof financeBillTransitionPayloadSchema> & { actorAdminId: number },
 ) {
-  const existing = await repo.getVendorBill(billId);
-  if (!existing) {
-    fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
-  }
-  const status = nextVendorBillStatus(existing, action);
-  const updated = await repo.updateVendorBill(billId, {
-    status,
-    notes: payload.notes ?? existing.notes,
-    updatedAt: new Date(),
-  } as Partial<InsertVendorBill>);
-  if (!updated) {
-    fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
-  }
-  return updated;
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockVendorBill(billId);
+    const existing = await tx.getVendorBill(billId);
+    if (!existing) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+    const status = nextVendorBillStatus(existing, action);
+    // Slice 1C: once bill application writes are exposed, reject voiding bills
+    // with active applications until those applications are reversed.
+    const updated = await tx.updateVendorBill(billId, {
+      status,
+      notes: payload.notes ?? existing.notes,
+      updatedAt: new Date(),
+    } as Partial<InsertVendorBill>);
+    if (!updated) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor_bill",
+      entityId: updated.id,
+      action: vendorBillStatusAuditAction(status),
+      changes: auditChanges(existing, updated, VENDOR_BILL_AUDIT_FIELDS),
+    });
+    return updated;
+  });
 }
 
 export function listFinancePayments(repo: FinanceExpenseRepository, query: FinanceListQuery) {

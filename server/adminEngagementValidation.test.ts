@@ -43,6 +43,21 @@ function assertRouteUsesRole(source: string, routePath: string, rolesPattern: Re
   assert.match(block, rolesPattern);
 }
 
+function assertRouteMethodUsesRole(source: string, method: string, routePath: string, rolesPattern: RegExp) {
+  const escapedPath = routePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`app\\.${method}\\(\\s*["\`]${escapedPath}["\`][\\s\\S]*?\\);`);
+  const match = source.match(pattern);
+  assert.ok(match, `${method.toUpperCase()} ${routePath} route should exist`);
+  assert.match(match[0], /requireAuth/);
+  assert.match(match[0], rolesPattern);
+  return match[0];
+}
+
+function assertFinanceMutationRouteUsesActor(source: string, method: string, routePath: string, rolesPattern: RegExp) {
+  const block = assertRouteMethodUsesRole(source, method, routePath, rolesPattern);
+  assert.match(block, /req\.adminUser\.id/, `${method.toUpperCase()} ${routePath} should pass the acting admin id`);
+}
+
 test("access role rejects engagement identity and lifecycle values", () => {
   for (const value of ['intern', 'contractor', 'employee', 'advisor', 'cpt', 'opt', 'stem_opt', 'full_time', 'part_time']) {
     assert.equal(accessRoleSchema.safeParse(value).success, false, `${value} must not be an access role`);
@@ -700,17 +715,39 @@ test("Phase C.2 admin operations use explicit access groups without global super
     assert.equal(adminOperationsBlock.includes(forbidden), false, `${forbidden} must not authorize Admin Operations routes`);
   }
 
+  const financeRoles = /requireRole\(\['super_admin', 'admin_finance'\]\)/;
   for (const financeRoute of [
     "/api/admin/finance",
     "/api/admin/finance/overview",
+    "/api/admin/finance/legal-entities",
     "/api/admin/finance/vendors",
     "/api/admin/finance/subscriptions",
     "/api/admin/finance/bills",
     "/api/admin/finance/payments",
   ]) {
-    assertRouteUsesRole(routesSource, financeRoute, /requireRole\(\['super_admin', 'admin_finance'\]\)/);
+    assertRouteMethodUsesRole(routesSource, "get", financeRoute, financeRoles);
   }
-  assert.doesNotMatch(routesSource, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance/);
+
+  for (const financeRoute of [
+    "/api/admin/finance/vendors",
+    "/api/admin/finance/vendors/:vendorId/archive",
+    "/api/admin/finance/subscriptions",
+    "/api/admin/finance/subscriptions/:subscriptionId/pause",
+    "/api/admin/finance/subscriptions/:subscriptionId/resume",
+    "/api/admin/finance/subscriptions/:subscriptionId/cancel",
+    "/api/admin/finance/bills",
+    "/api/admin/finance/bills/:billId/receive",
+    "/api/admin/finance/bills/:billId/approve",
+    "/api/admin/finance/bills/:billId/dispute",
+    "/api/admin/finance/bills/:billId/void",
+  ]) {
+    assertFinanceMutationRouteUsesActor(routesSource, "post", financeRoute, financeRoles);
+  }
+  assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/vendors/:vendorId", financeRoles);
+  assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/subscriptions/:subscriptionId", financeRoles);
+  assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/bills/:billId", financeRoles);
+  assert.match(routesSource, /return res\.status\(400\)\.json\(\{ message: "Invalid finance request" \}\);/);
+  assert.doesNotMatch(routesSource, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:payments|bill-applications|applications)/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/verifier", requireAuth, requireRole\(\['super_admin', 'admin_verifier'\]\)/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/support", requireAuth, requireRole\(\['super_admin', 'admin_support'\]\)/);
   assert.match(routesSource, /"\/api\/localguide\/admin\/cancellation-requests"[\s\S]*requireRole\(\["super_admin", "admin_finance"\]\)/);
@@ -967,8 +1004,37 @@ test("backend sensitive routes and engagement management APIs do not allow train
   for (const pattern of sensitivePatterns) {
     assert.match(source, pattern);
   }
-  assertRouteUsesRole(source, "/api/admin/finance", /requireRole\(\['super_admin', 'admin_finance'\]\)/);
-  assert.doesNotMatch(source, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance/);
+  const financeRoles = /requireRole\(\['super_admin', 'admin_finance'\]\)/;
+  for (const financeRoute of [
+    "/api/admin/finance",
+    "/api/admin/finance/overview",
+    "/api/admin/finance/legal-entities",
+    "/api/admin/finance/vendors",
+    "/api/admin/finance/subscriptions",
+    "/api/admin/finance/bills",
+    "/api/admin/finance/payments",
+  ]) {
+    assertRouteMethodUsesRole(source, "get", financeRoute, financeRoles);
+  }
+  for (const financeRoute of [
+    "/api/admin/finance/vendors",
+    "/api/admin/finance/vendors/:vendorId/archive",
+    "/api/admin/finance/subscriptions",
+    "/api/admin/finance/subscriptions/:subscriptionId/pause",
+    "/api/admin/finance/subscriptions/:subscriptionId/resume",
+    "/api/admin/finance/subscriptions/:subscriptionId/cancel",
+    "/api/admin/finance/bills",
+    "/api/admin/finance/bills/:billId/receive",
+    "/api/admin/finance/bills/:billId/approve",
+    "/api/admin/finance/bills/:billId/dispute",
+    "/api/admin/finance/bills/:billId/void",
+  ]) {
+    assertFinanceMutationRouteUsesActor(source, "post", financeRoute, financeRoles);
+  }
+  assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/vendors/:vendorId", financeRoles);
+  assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/subscriptions/:subscriptionId", financeRoles);
+  assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/bills/:billId", financeRoles);
+  assert.doesNotMatch(source, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:payments|bill-applications|applications)/);
 });
 
 test("offer letter APIs use admin or trainee scoped permissions", async () => {
