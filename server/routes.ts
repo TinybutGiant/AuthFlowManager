@@ -67,6 +67,16 @@ import {
   previewOfferLetterTemplate,
   updateDocumentTemplate,
 } from './documentTemplateService';
+import { financeExpenseRepository } from './financeExpenseRepository';
+import {
+  FinanceExpenseServiceError,
+  financeListQuerySchema,
+  getFinanceOverview,
+  listFinanceBills,
+  listFinancePayments,
+  listFinanceSubscriptions,
+  listFinanceVendors,
+} from './financeExpenseService';
 import { publicCompanyBrandDefaults } from './companyBrandDefaults';
 import { deriveAccountTypeFromLegacyRole } from './adminAccessModel';
 
@@ -674,6 +684,36 @@ async function hasAcceptedOfferForCurrentTrainee(adminUserId: number) {
   }
 
   return await storage.hasAcceptedOfferLetterForEngagement(engagement.id);
+}
+
+type FinanceRouteHandler = (req: any, res: any) => Promise<unknown>;
+
+function financeRoute(handler: FinanceRouteHandler) {
+  return async (req: any, res: any) => {
+    try {
+      const result = await handler(req, res);
+      if (!res.headersSent) {
+        res.json(result);
+      }
+    } catch (error) {
+      handleFinanceRouteError(res, error);
+    }
+  };
+}
+
+function handleFinanceRouteError(res: any, error: unknown) {
+  if (error instanceof FinanceExpenseServiceError) {
+    return res.status(error.statusCode).json({
+      message: error.message,
+      code: error.code,
+    });
+  }
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({ message: "Invalid finance request" });
+  }
+
+  console.error("[finance]", error);
+  return res.status(500).json({ message: "Finance request failed" });
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -2191,10 +2231,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
-  // Role-specific management routes
-  app.get("/api/admin/finance", requireAuth, requireRole(['super_admin', 'admin_finance']), async (req: any, res) => {
-    res.json({ message: "Finance Management" });
-  });
+  // Finance / AP and subscription routes
+  app.get(
+    "/api/admin/finance",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async () => getFinanceOverview(financeExpenseRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/overview",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async () => getFinanceOverview(financeExpenseRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/vendors",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => listFinanceVendors(
+      financeExpenseRepository,
+      financeListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.get(
+    "/api/admin/finance/subscriptions",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => listFinanceSubscriptions(
+      financeExpenseRepository,
+      financeListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.get(
+    "/api/admin/finance/bills",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => listFinanceBills(
+      financeExpenseRepository,
+      financeListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.get(
+    "/api/admin/finance/payments",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => listFinancePayments(
+      financeExpenseRepository,
+      financeListQuerySchema.parse(req.query),
+    )),
+  );
 
   app.get("/api/admin/verifier", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {
     res.json({ message: "Verifier Management" });

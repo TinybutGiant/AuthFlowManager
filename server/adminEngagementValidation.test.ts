@@ -34,6 +34,15 @@ import {
 } from "../shared/offerLetterPlainTextParser";
 import { z } from "zod";
 
+function assertRouteUsesRole(source: string, routePath: string, rolesPattern: RegExp) {
+  const start = source.indexOf(`"${routePath}"`);
+  assert.notEqual(start, -1, `${routePath} route should exist`);
+  const end = source.indexOf(");", start);
+  const block = source.slice(start, end === -1 ? source.length : end);
+  assert.match(block, /requireAuth/);
+  assert.match(block, rolesPattern);
+}
+
 test("access role rejects engagement identity and lifecycle values", () => {
   for (const value of ['intern', 'contractor', 'employee', 'advisor', 'cpt', 'opt', 'stem_opt', 'full_time', 'part_time']) {
     assert.equal(accessRoleSchema.safeParse(value).success, false, `${value} must not be an access role`);
@@ -691,7 +700,17 @@ test("Phase C.2 admin operations use explicit access groups without global super
     assert.equal(adminOperationsBlock.includes(forbidden), false, `${forbidden} must not authorize Admin Operations routes`);
   }
 
-  assert.match(routesSource, /app\.get\("\/api\/admin\/finance", requireAuth, requireRole\(\['super_admin', 'admin_finance'\]\)/);
+  for (const financeRoute of [
+    "/api/admin/finance",
+    "/api/admin/finance/overview",
+    "/api/admin/finance/vendors",
+    "/api/admin/finance/subscriptions",
+    "/api/admin/finance/bills",
+    "/api/admin/finance/payments",
+  ]) {
+    assertRouteUsesRole(routesSource, financeRoute, /requireRole\(\['super_admin', 'admin_finance'\]\)/);
+  }
+  assert.doesNotMatch(routesSource, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/verifier", requireAuth, requireRole\(\['super_admin', 'admin_verifier'\]\)/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/support", requireAuth, requireRole\(\['super_admin', 'admin_support'\]\)/);
   assert.match(routesSource, /"\/api\/localguide\/admin\/cancellation-requests"[\s\S]*requireRole\(\["super_admin", "admin_finance"\]\)/);
@@ -867,7 +886,7 @@ test("trainee access does not gain existing sensitive sidebar routes", async () 
     'Pending Requests',
     'Admin Management',
     'Admin Operations',
-    'Finance Management',
+    'Finance',
     'Cancellation review',
     'Verifier Management',
     'Support Management',
@@ -934,7 +953,6 @@ test("backend sensitive routes and engagement management APIs do not allow train
     /app\.delete\("\/api\/admin\/users\/:id", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.get\("\/api\/admin\/approvals", requireAuth, requireRole\(\['super_admin'\]\)/,
     /app\.put\("\/api\/admin\/approvals\/:id", requireAuth, requireRole\(\['super_admin'\]\)/,
-    /app\.get\("\/api\/admin\/finance", requireAuth, requireRole\(\['super_admin', 'admin_finance'\]\)/,
     /app\.get\("\/api\/admin\/verifier", requireAuth, requireRole\(\['super_admin', 'admin_verifier'\]\)/,
     /app\.get\("\/api\/admin\/support", requireAuth, requireRole\(\['super_admin', 'admin_support'\]\)/,
     /app\.get\("\/api\/admin\/users\/:id\/engagements", requireAuth, requireRole\(\['super_admin'\]\)/,
@@ -949,6 +967,8 @@ test("backend sensitive routes and engagement management APIs do not allow train
   for (const pattern of sensitivePatterns) {
     assert.match(source, pattern);
   }
+  assertRouteUsesRole(source, "/api/admin/finance", /requireRole\(\['super_admin', 'admin_finance'\]\)/);
+  assert.doesNotMatch(source, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance/);
 });
 
 test("offer letter APIs use admin or trainee scoped permissions", async () => {
@@ -1149,7 +1169,7 @@ test("admin profile hides unsafe actions for accepted offer letters", async () =
 test("offer letter route errors do not expose raw storage errors", async () => {
   const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
   const start = source.indexOf("function handleOfferLetterRouteError");
-  const end = source.indexOf("export async function registerRoutes", start);
+  const end = source.indexOf("function parsePositiveInt", start);
   const block = source.slice(start, end);
 
   assert.match(block, /error instanceof z\.ZodError/);
@@ -1197,7 +1217,7 @@ test("document template management uses Admin Operations access group and render
   assert.match(appSource, /path="\/admin-management\/profile\/:id"[\s\S]*allowedRoles={\["super_admin"\]}/);
 
   const adminOperationsStart = sidebarSource.indexOf('title: "Admin Operations"');
-  const adminOperationsEnd = sidebarSource.indexOf('title: "Finance Management"', adminOperationsStart);
+  const adminOperationsEnd = sidebarSource.indexOf('title: "Finance"', adminOperationsStart);
   const adminOperationsBlock = sidebarSource.slice(adminOperationsStart, adminOperationsEnd);
   assert.match(adminOperationsBlock, /title: "Document Templates"/);
   assert.match(adminOperationsBlock, /href: "\/admin-operations\/document-templates"/);

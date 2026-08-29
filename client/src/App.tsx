@@ -213,6 +213,14 @@ function Router() {
             <VerifierApplicationDetailRoute />
           </Route>
 
+          <Route path="/finance-management/:section">
+            <ProtectedRoute allowedRoles={["super_admin", "admin_finance"]}>
+              <AdminLayout>
+                <FinanceManagement />
+              </AdminLayout>
+            </ProtectedRoute>
+          </Route>
+
           <Route path="/finance-management">
             <ProtectedRoute allowedRoles={["super_admin", "admin_finance"]}>
               <AdminLayout>

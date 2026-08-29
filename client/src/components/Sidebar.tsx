@@ -15,12 +15,15 @@ import {
   UserRound,
   Bot,
   CalendarDays,
+  Building2,
   ChevronDown,
   ChevronRight,
   ClipboardList,
   FileText,
   GraduationCap,
+  ReceiptText,
   RefreshCw,
+  Repeat2,
 } from "lucide-react";
 import { AdminAccessGroup, AdminRole } from "@/types/admin";
 
@@ -116,10 +119,35 @@ const menuItems: MenuItem[] = [
     ],
   },
   {
-    title: "Finance Management",
-    href: "/finance-management",
+    title: "Finance",
     icon: Wallet,
     roles: ['super_admin', 'admin_finance'],
+    children: [
+      {
+        title: "Overview",
+        href: "/finance-management",
+        icon: Wallet,
+        roles: ['super_admin', 'admin_finance'],
+      },
+      {
+        title: "Expenses",
+        href: "/finance-management/expenses",
+        icon: ReceiptText,
+        roles: ['super_admin', 'admin_finance'],
+      },
+      {
+        title: "Subscriptions",
+        href: "/finance-management/subscriptions",
+        icon: Repeat2,
+        roles: ['super_admin', 'admin_finance'],
+      },
+      {
+        title: "Vendors",
+        href: "/finance-management/vendors",
+        icon: Building2,
+        roles: ['super_admin', 'admin_finance'],
+      },
+    ],
   },
   {
     title: "Cancellation review",
@@ -150,7 +178,7 @@ const menuItems: MenuItem[] = [
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const { user } = useAuth();
   const [location] = useLocation();
-  const [expandedSections, setExpandedSections] = useState<string[]>(['Admin Management']);
+  const [expandedSections, setExpandedSections] = useState<string[]>(['Admin Management', 'Finance']);
   
   const adminUser = (user as any)?.adminUser;
   const userRole = adminUser?.role as AdminRole;
