@@ -11,12 +11,14 @@ import type {
   InsertDocumentLink,
   InsertExpensePayment,
   InsertFinanceAuditEvent,
+  InsertReconciliationException,
   InsertRecurringExpense,
   InsertVendor,
   InsertVendorBill,
   InsertVendorBillApplication,
   LegalEntity,
   ReconciliationException,
+  ReconciliationExceptionStatus,
   RecurringExpense,
   RecurringExpenseStatus,
   Vendor,
@@ -27,6 +29,7 @@ import type {
   VendorStatus,
 } from "@shared/schema";
 import {
+  FinanceDomainValidationError,
   deriveVendorBillSettlementState,
   validateDocumentLinkSensitivity,
   validatePolymorphicEntityTarget,
@@ -52,6 +55,17 @@ function fail(statusCode: number, code: string, message: string): never {
   throw new FinanceExpenseServiceError(statusCode, code, message);
 }
 
+function runFinanceDomainValidation(work: () => void) {
+  try {
+    work();
+  } catch (error) {
+    if (error instanceof FinanceDomainValidationError) {
+      fail(400, error.code, error.message);
+    }
+    throw error;
+  }
+}
+
 const VENDOR_TYPES = [
   "saas",
   "cloud",
@@ -71,7 +85,16 @@ const VENDOR_BILL_STATUSES = ["draft", "received", "approved", "disputed", "void
 const EXPENSE_PAYMENT_DIRECTIONS = ["outflow", "refund"] as const;
 const EXPENSE_PAYMENT_METHODS = ["provider", "ach", "check", "card", "wire", "manual", "other"] as const;
 const EXPENSE_PAYMENT_STATUSES = ["pending", "posted", "cleared", "failed", "reversed", "voided"] as const;
-const FINANCE_AUDIT_ENTITY_TYPES = ["vendor", "recurring_expense", "vendor_bill"] as const;
+const EXPENSE_PAYMENT_MUTABLE_STATUSES = ["pending"] as const;
+const EXPENSE_PAYMENT_TRANSITION_STATUSES = ["posted", "cleared", "failed", "voided"] as const;
+const FINANCE_AUDIT_ENTITY_TYPES = [
+  "vendor",
+  "recurring_expense",
+  "vendor_bill",
+  "expense_payment",
+  "vendor_bill_application",
+  "reconciliation_exception",
+] as const;
 const FINANCE_AUDIT_ACTIONS = [
   "created",
   "updated",
@@ -83,6 +106,15 @@ const FINANCE_AUDIT_ACTIONS = [
   "approved",
   "disputed",
   "voided",
+  "posted",
+  "cleared",
+  "failed",
+  "reversed",
+  "applied",
+  "investigating",
+  "resolved",
+  "waived",
+  "reopened",
 ] as const;
 const VENDOR_AUDIT_FIELDS = ["name", "vendorType", "status"] as const;
 const RECURRING_EXPENSE_AUDIT_FIELDS = [
@@ -112,6 +144,52 @@ const VENDOR_BILL_AUDIT_FIELDS = [
   "categoryCode",
   "status",
   "creditForVendorBillId",
+] as const;
+const EXPENSE_PAYMENT_AUDIT_FIELDS = [
+  "vendorId",
+  "amountCents",
+  "currency",
+  "direction",
+  "paymentDate",
+  "methodType",
+  "status",
+] as const;
+const VENDOR_BILL_APPLICATION_AUDIT_FIELDS = [
+  "targetVendorBillId",
+  "expensePaymentId",
+  "creditVendorBillId",
+  "amountCents",
+  "currency",
+  "status",
+] as const;
+const RECONCILIATION_EXCEPTION_AUDIT_FIELDS = [
+  "expectedEntityType",
+  "expectedEntityId",
+  "actualEntityType",
+  "actualEntityId",
+  "currency",
+  "expectedAmountCents",
+  "actualAmountCents",
+  "differenceAmountCents",
+  "reasonCode",
+  "status",
+  "ownerAdminId",
+] as const;
+const AP_RECONCILIATION_ENTITY_TYPES = [
+  "vendors",
+  "recurring_expenses",
+  "vendor_bills",
+  "expense_payments",
+  "vendor_bill_applications",
+] as const satisfies readonly FinanceEntityType[];
+const AP_RECONCILIATION_REASON_CODES = [
+  "unmatched_payment",
+  "amount_mismatch",
+  "duplicate_charge",
+  "missing_invoice",
+  "missing_receipt",
+  "stale_unpaid_bill",
+  "other_ap_mismatch",
 ] as const;
 const AP_DOCUMENT_ENTITY_TYPES = [
   "vendors",
@@ -415,8 +493,35 @@ export const createExpensePaymentPayloadSchema = z.object({
   status: z.enum(EXPENSE_PAYMENT_STATUSES).default("pending"),
 }).strict();
 
+export const updateExpensePaymentPayloadSchema = z.object({
+  vendorId: z.preprocess(
+    (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
+    z.coerce.number().int().positive().nullable().optional(),
+  ),
+  amountCents: amountCentsSchema.optional(),
+  currency: currencySchema.optional(),
+  direction: z.enum(EXPENSE_PAYMENT_DIRECTIONS).optional(),
+  paymentDate: optionalDateOnlySchema,
+  methodType: z.enum(EXPENSE_PAYMENT_METHODS).optional(),
+  methodLabel: optionalText(120),
+  institutionName: optionalText(160),
+  maskedLast4: z.preprocess(
+    (value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed ? trimmed : null;
+      }
+      return value;
+    },
+    z.string().regex(/^[0-9]{4}$/).nullable().optional(),
+  ),
+  externalConfirmationRef: optionalText(200),
+}).strict().refine(nonEmptyPatch, "At least one payment field is required.");
+
 export const updateExpensePaymentStatusPayloadSchema = z.object({
-  status: z.enum(EXPENSE_PAYMENT_STATUSES),
+  status: z.enum(EXPENSE_PAYMENT_TRANSITION_STATUSES),
 }).strict();
 
 export const applyExpensePaymentPayloadSchema = z.object({
@@ -431,6 +536,64 @@ export const applyCreditMemoPayloadSchema = z.object({
   creditVendorBillId: positiveIdSchema,
   amountCents: amountCentsSchema,
   currency: currencySchema.default("USD"),
+}).strict();
+
+function refineEntityPair(
+  data: {
+    expectedEntityType?: FinanceEntityType | null;
+    expectedEntityId?: number | null;
+    actualEntityType?: FinanceEntityType | null;
+    actualEntityId?: number | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  for (const side of ["expected", "actual"] as const) {
+    const entityType = data[`${side}EntityType`];
+    const entityId = data[`${side}EntityId`];
+    if (Boolean(entityType) !== Boolean(entityId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [`${side}EntityId`],
+        message: `${side} entity type and id must be supplied together.`,
+      });
+    }
+  }
+  if (!data.expectedEntityId && !data.actualEntityId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["expectedEntityId"],
+      message: "At least one reconciliation entity is required.",
+    });
+  }
+}
+
+export const createReconciliationExceptionPayloadSchema = z
+  .object({
+    expectedEntityType: z.enum(AP_RECONCILIATION_ENTITY_TYPES).nullable().optional(),
+    expectedEntityId: z.preprocess(
+      (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
+      z.coerce.number().int().positive().nullable().optional(),
+    ),
+    actualEntityType: z.enum(AP_RECONCILIATION_ENTITY_TYPES).nullable().optional(),
+    actualEntityId: z.preprocess(
+      (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
+      z.coerce.number().int().positive().nullable().optional(),
+    ),
+    currency: currencySchema.nullable().optional(),
+    expectedAmountCents: z.coerce.number().int().min(0).nullable().optional(),
+    actualAmountCents: z.coerce.number().int().min(0).nullable().optional(),
+    reasonCode: z.enum(AP_RECONCILIATION_REASON_CODES),
+    summary: requiredText(500),
+    ownerAdminId: z.preprocess(
+      (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
+      z.coerce.number().int().positive().nullable().optional(),
+    ),
+  })
+  .strict()
+  .superRefine(refineEntityPair);
+
+export const reconciliationExceptionTransitionPayloadSchema = z.object({
+  resolutionNotes: optionalText(1000),
 }).strict();
 
 export const createFinanceDocumentPayloadSchema = z.object({
@@ -463,9 +626,12 @@ export type CancelRecurringExpensePayload = z.infer<typeof cancelRecurringExpens
 export type CreateVendorBillPayload = z.infer<typeof createVendorBillPayloadSchema>;
 export type UpdateDraftVendorBillPayload = z.infer<typeof updateDraftVendorBillPayloadSchema>;
 export type CreateExpensePaymentPayload = z.infer<typeof createExpensePaymentPayloadSchema>;
+export type UpdateExpensePaymentPayload = z.infer<typeof updateExpensePaymentPayloadSchema>;
 export type UpdateExpensePaymentStatusPayload = z.infer<typeof updateExpensePaymentStatusPayloadSchema>;
 export type ApplyExpensePaymentPayload = z.infer<typeof applyExpensePaymentPayloadSchema>;
 export type ApplyCreditMemoPayload = z.infer<typeof applyCreditMemoPayloadSchema>;
+export type CreateReconciliationExceptionPayload = z.infer<typeof createReconciliationExceptionPayloadSchema>;
+export type ReconciliationExceptionTransitionPayload = z.infer<typeof reconciliationExceptionTransitionPayloadSchema>;
 export type CreateFinanceDocumentPayload = z.infer<typeof createFinanceDocumentPayloadSchema>;
 export type FinanceAuditEntityType = typeof FINANCE_AUDIT_ENTITY_TYPES[number];
 export type FinanceAuditAction = typeof FINANCE_AUDIT_ACTIONS[number];
@@ -554,6 +720,7 @@ export interface RecurringExpenseListItem {
 
 export interface ExpensePaymentListItem {
   id: number;
+  legalEntityId?: number;
   vendorId?: number | null;
   vendorName?: string | null;
   amountCents: number;
@@ -564,9 +731,43 @@ export interface ExpensePaymentListItem {
   methodLabel?: string | null;
   institutionName?: string | null;
   maskedLast4?: string | null;
+  externalConfirmationRef?: string | null;
   status: string;
   activeAppliedAmountCents: number;
   remainingAmountCents: number;
+}
+
+export interface VendorBillApplicationListItem {
+  id: number;
+  targetVendorBillId: number;
+  expensePaymentId?: number | null;
+  creditVendorBillId?: number | null;
+  amountCents: number;
+  currency: string;
+  status: string;
+  reversedAt?: string | Date | null;
+  reversedBy?: number | null;
+  createdBy?: number | null;
+  createdAt?: string | Date | null;
+}
+
+export interface ReconciliationExceptionListItem {
+  id: number;
+  domain: string;
+  expectedEntityType?: string | null;
+  expectedEntityId?: number | null;
+  actualEntityType?: string | null;
+  actualEntityId?: number | null;
+  currency?: string | null;
+  expectedAmountCents?: number | null;
+  actualAmountCents?: number | null;
+  differenceAmountCents?: number | null;
+  reasonCode: string;
+  summary: string;
+  status: string;
+  ownerAdminId?: number | null;
+  resolvedAt?: string | Date | null;
+  resolvedBy?: number | null;
 }
 
 export interface FinanceOverviewBillRow {
@@ -650,6 +851,7 @@ export interface FinanceExpenseRepository {
   lockVendorBill(id: number): Promise<void>;
   lockExpensePayment(id: number): Promise<void>;
   lockVendorBillApplication(id: number): Promise<void>;
+  lockReconciliationException(id: number): Promise<void>;
   getLegalEntity(id: number): Promise<LegalEntity | undefined>;
   listLegalEntities(): Promise<FinanceLegalEntityListItem[]>;
   getVendor(id: number): Promise<Vendor | undefined>;
@@ -687,6 +889,13 @@ export interface FinanceExpenseRepository {
     id: number,
     values: Partial<InsertVendorBillApplication>,
   ): Promise<VendorBillApplication | undefined>;
+  getReconciliationException(id: number): Promise<ReconciliationException | undefined>;
+  listReconciliationExceptions(filters: FinanceListQuery): Promise<ReconciliationExceptionListItem[]>;
+  createReconciliationException(values: InsertReconciliationException): Promise<ReconciliationException>;
+  updateReconciliationException(
+    id: number,
+    values: Partial<InsertReconciliationException>,
+  ): Promise<ReconciliationException | undefined>;
   createFinanceAuditEvent(values: InsertFinanceAuditEvent): Promise<FinanceAuditEvent>;
   createDocumentWithLink(values: {
     document: InsertDocument;
@@ -747,6 +956,68 @@ export function financeBillResponse(bill: VendorBill | VendorBillListItem): Vend
     categoryCode: bill.categoryCode,
     status: bill.status,
     creditForVendorBillId: bill.creditForVendorBillId,
+  };
+}
+
+export function financePaymentResponse(payment: ExpensePayment | ExpensePaymentListItem): ExpensePaymentListItem {
+  return {
+    id: payment.id,
+    legalEntityId: "legalEntityId" in payment ? payment.legalEntityId : undefined,
+    vendorId: payment.vendorId,
+    vendorName: "vendorName" in payment ? payment.vendorName : undefined,
+    amountCents: payment.amountCents,
+    currency: payment.currency,
+    direction: payment.direction,
+    paymentDate: payment.paymentDate,
+    methodType: payment.methodType,
+    methodLabel: payment.methodLabel,
+    institutionName: payment.institutionName,
+    maskedLast4: payment.maskedLast4,
+    externalConfirmationRef: payment.externalConfirmationRef,
+    status: payment.status,
+    activeAppliedAmountCents: "activeAppliedAmountCents" in payment ? payment.activeAppliedAmountCents : 0,
+    remainingAmountCents: "remainingAmountCents" in payment ? payment.remainingAmountCents : payment.amountCents,
+  };
+}
+
+export function financeBillApplicationResponse(
+  application: VendorBillApplication | VendorBillApplicationListItem,
+): VendorBillApplicationListItem {
+  return {
+    id: application.id,
+    targetVendorBillId: application.targetVendorBillId,
+    expensePaymentId: application.expensePaymentId,
+    creditVendorBillId: application.creditVendorBillId,
+    amountCents: application.amountCents,
+    currency: application.currency,
+    status: application.status,
+    reversedAt: application.reversedAt,
+    reversedBy: application.reversedBy,
+    createdBy: application.createdBy,
+    createdAt: application.createdAt,
+  };
+}
+
+export function financeReconciliationExceptionResponse(
+  exception: ReconciliationException | ReconciliationExceptionListItem,
+): ReconciliationExceptionListItem {
+  return {
+    id: exception.id,
+    domain: exception.domain,
+    expectedEntityType: exception.expectedEntityType,
+    expectedEntityId: exception.expectedEntityId,
+    actualEntityType: exception.actualEntityType,
+    actualEntityId: exception.actualEntityId,
+    currency: exception.currency,
+    expectedAmountCents: exception.expectedAmountCents,
+    actualAmountCents: exception.actualAmountCents,
+    differenceAmountCents: exception.differenceAmountCents,
+    reasonCode: exception.reasonCode,
+    summary: exception.summary,
+    status: exception.status,
+    ownerAdminId: exception.ownerAdminId,
+    resolvedAt: exception.resolvedAt,
+    resolvedBy: exception.resolvedBy,
   };
 }
 
@@ -961,6 +1232,7 @@ export function deriveFinanceOverviewFromRows(input: FinanceOverviewInput): Fina
 function billSnapshot(bill: VendorBill): VendorBillSnapshot {
   return {
     id: bill.id,
+    legalEntityId: bill.legalEntityId,
     vendorId: bill.vendorId,
     amountCents: bill.amountCents,
     currency: bill.currency,
@@ -972,9 +1244,12 @@ function billSnapshot(bill: VendorBill): VendorBillSnapshot {
 function paymentSnapshot(payment: ExpensePayment): ExpensePaymentSnapshot {
   return {
     id: payment.id,
+    legalEntityId: payment.legalEntityId,
     vendorId: payment.vendorId,
     amountCents: payment.amountCents,
     currency: payment.currency,
+    direction: payment.direction,
+    status: payment.status,
   };
 }
 
@@ -1116,10 +1391,137 @@ export function nextExpensePaymentStatus(
   if (payment.status === "voided" || payment.status === "reversed") {
     fail(409, "PAYMENT_TERMINAL_STATE", "Terminal payments cannot transition.");
   }
-  if (!EXPENSE_PAYMENT_STATUSES.includes(nextStatus as typeof EXPENSE_PAYMENT_STATUSES[number])) {
+  if (!EXPENSE_PAYMENT_TRANSITION_STATUSES.includes(nextStatus as typeof EXPENSE_PAYMENT_TRANSITION_STATUSES[number])) {
     fail(400, "PAYMENT_STATUS_INVALID", "Invalid payment status.");
   }
-  return nextStatus as ExpensePayment["status"];
+  if (payment.status === "pending" && ["posted", "failed", "voided"].includes(nextStatus)) {
+    return nextStatus as ExpensePayment["status"];
+  }
+  if (payment.status === "posted" && ["cleared", "failed"].includes(nextStatus)) {
+    return nextStatus as ExpensePayment["status"];
+  }
+  if (payment.status === "cleared") {
+    fail(409, "PAYMENT_REVERSE_REQUIRED", "Cleared payments can only change through explicit reversal.");
+  }
+  if (payment.status === "failed") {
+    fail(409, "PAYMENT_TERMINAL_STATE", "Failed payments cannot transition.");
+  }
+  fail(409, "PAYMENT_STATUS_TRANSITION_INVALID", "Expense payment status transition is not allowed.");
+}
+
+function assertExpensePaymentEditable(payment: Pick<ExpensePayment, "status">) {
+  if (!EXPENSE_PAYMENT_MUTABLE_STATUSES.includes(payment.status as typeof EXPENSE_PAYMENT_MUTABLE_STATUSES[number])) {
+    fail(409, "PAYMENT_NOT_PENDING", "Only pending payments can be edited.");
+  }
+}
+
+function paymentStatusAuditAction(status: ExpensePayment["status"]): FinanceAuditAction {
+  switch (status) {
+    case "posted":
+    case "cleared":
+    case "failed":
+    case "voided":
+    case "reversed":
+      return status;
+    case "pending":
+      fail(500, "PAYMENT_AUDIT_STATUS_INVALID", "Pending is not a payment transition audit action.");
+  }
+  fail(500, "PAYMENT_AUDIT_STATUS_INVALID", "Invalid payment transition audit action.");
+}
+
+function reconciliationStatusAuditAction(status: ReconciliationExceptionStatus): FinanceAuditAction {
+  switch (status) {
+    case "investigating":
+    case "resolved":
+    case "waived":
+      return status;
+    case "open":
+      return "reopened";
+    case "voided":
+      return "voided";
+  }
+  fail(500, "RECONCILIATION_AUDIT_STATUS_INVALID", "Invalid reconciliation audit action.");
+}
+
+function nextReconciliationExceptionStatus(
+  exception: Pick<ReconciliationException, "status">,
+  action: "investigate" | "resolve" | "waive" | "reopen",
+): ReconciliationExceptionStatus {
+  switch (action) {
+    case "investigate":
+      if (exception.status !== "open") {
+        fail(409, "RECONCILIATION_INVESTIGATE_REQUIRES_OPEN", "Only open reconciliation exceptions can move to investigating.");
+      }
+      return "investigating";
+    case "resolve":
+      if (!["open", "investigating"].includes(exception.status)) {
+        fail(409, "RECONCILIATION_RESOLVE_REQUIRES_OPEN", "Only open or investigating reconciliation exceptions can be resolved.");
+      }
+      return "resolved";
+    case "waive":
+      if (!["open", "investigating"].includes(exception.status)) {
+        fail(409, "RECONCILIATION_WAIVE_REQUIRES_OPEN", "Only open or investigating reconciliation exceptions can be waived.");
+      }
+      return "waived";
+    case "reopen":
+      if (!["resolved", "waived"].includes(exception.status)) {
+        fail(409, "RECONCILIATION_REOPEN_REQUIRES_CLOSED", "Only resolved or waived reconciliation exceptions can be reopened.");
+      }
+      return "open";
+  }
+  fail(500, "RECONCILIATION_ACTION_INVALID", "Invalid reconciliation action.");
+}
+
+function differenceAmountCents(expected?: number | null, actual?: number | null) {
+  if (expected == null || actual == null) {
+    return null;
+  }
+  return Math.abs(actual - expected);
+}
+
+async function validateReconciliationEntityTargets(
+  repo: FinanceExpenseRepository,
+  payload: Pick<
+    CreateReconciliationExceptionPayload,
+    "expectedEntityType" | "expectedEntityId" | "actualEntityType" | "actualEntityId"
+  >,
+) {
+  for (const side of ["expected", "actual"] as const) {
+    const entityType = payload[`${side}EntityType`];
+    const entityId = payload[`${side}EntityId`];
+    if (!entityType || !entityId) continue;
+    if (!(await repo.entityExists(entityType, entityId))) {
+      fail(404, "RECONCILIATION_ENTITY_NOT_FOUND", "Reconciliation exception entity target not found.");
+    }
+  }
+}
+
+function ensureRecordablePaymentStatus(status: ExpensePayment["status"]) {
+  if (!["pending", "posted", "cleared"].includes(status)) {
+    fail(400, "PAYMENT_INITIAL_STATUS_INVALID", "New expense payments must start pending, posted, or cleared.");
+  }
+}
+
+function assertNoActiveApplications(applications: readonly VendorBillApplication[], code: string, message: string) {
+  if (applications.some((application) => application.status === "active")) {
+    fail(409, code, message);
+  }
+}
+
+function hasActiveApplications(applications: readonly VendorBillApplication[]) {
+  return applications.some((application) => application.status === "active");
+}
+
+function activeApplicationAuditChanges(before: VendorBillApplication | null, after: VendorBillApplication) {
+  return auditChanges(before, after, VENDOR_BILL_APPLICATION_AUDIT_FIELDS);
+}
+
+function paymentAuditChanges(before: ExpensePayment | null, after: ExpensePayment) {
+  return auditChanges(before, after, EXPENSE_PAYMENT_AUDIT_FIELDS);
+}
+
+function reconciliationAuditChanges(before: ReconciliationException | null, after: ReconciliationException) {
+  return auditChanges(before, after, RECONCILIATION_EXCEPTION_AUDIT_FIELDS);
 }
 
 function vendorBillStatusAuditAction(status: VendorBillStatus): FinanceAuditAction {
@@ -1491,8 +1893,15 @@ export async function transitionFinanceBillStatus(
       fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
     }
     const status = nextVendorBillStatus(existing, action);
-    // Slice 1C: once bill application writes are exposed, reject voiding bills
-    // with active applications until those applications are reversed.
+    if (action === "void") {
+      const activeApplications = await Promise.all([
+        tx.listVendorBillApplications({ targetVendorBillId: billId, status: "active" }),
+        tx.listVendorBillApplications({ creditVendorBillId: billId, status: "active" }),
+      ]);
+      if (activeApplications.some(hasActiveApplications)) {
+        fail(409, "BILL_VOID_HAS_ACTIVE_APPLICATIONS", "Bills with active applications must have applications reversed before voiding.");
+      }
+    }
     const updated = await tx.updateVendorBill(billId, {
       status,
       notes: payload.notes ?? existing.notes,
@@ -1521,41 +1930,138 @@ export async function recordFinancePayment(
   input: CreateExpensePaymentPayload & { actorAdminId: number },
 ) {
   const { actorAdminId, ...payload } = input;
-  await assertLegalEntityExists(repo, payload.legalEntityId);
-  if (payload.vendorId) {
-    await assertVendorUsable(repo, payload.vendorId);
-  }
-  return repo.createExpensePayment({
-    ...payload,
-    createdBy: actorAdminId,
+  ensureRecordablePaymentStatus(payload.status);
+  return runFinanceTransaction(repo, async (tx) => {
+    await assertLegalEntityExists(tx, payload.legalEntityId);
+    if (payload.vendorId) {
+      await assertVendorUsable(tx, payload.vendorId);
+    }
+    const payment = await tx.createExpensePayment({
+      ...payload,
+      createdBy: actorAdminId,
+    });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "expense_payment",
+      entityId: payment.id,
+      action: "created",
+      changes: paymentAuditChanges(null, payment),
+    });
+    return payment;
+  });
+}
+
+export async function updateFinancePayment(
+  repo: FinanceExpenseRepository,
+  paymentId: number,
+  input: UpdateExpensePaymentPayload & { actorAdminId: number },
+) {
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockExpensePayment(paymentId);
+    const existing = await tx.getExpensePayment(paymentId);
+    if (!existing) {
+      fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
+    }
+    assertExpensePaymentEditable(existing);
+    if (payload.vendorId) {
+      await assertVendorUsable(tx, payload.vendorId);
+    }
+    const updated = await tx.updateExpensePayment(paymentId, {
+      ...payload,
+      updatedAt: new Date(),
+    } as Partial<InsertExpensePayment>);
+    if (!updated) {
+      fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "expense_payment",
+      entityId: updated.id,
+      action: "updated",
+      changes: paymentAuditChanges(existing, updated),
+    });
+    return updated;
   });
 }
 
 export async function updateFinancePaymentStatus(
   repo: FinanceExpenseRepository,
   paymentId: number,
-  payload: UpdateExpensePaymentStatusPayload,
+  input: UpdateExpensePaymentStatusPayload & { actorAdminId: number },
 ) {
-  const existing = await repo.getExpensePayment(paymentId);
-  if (!existing) {
-    fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
-  }
-  const status = nextExpensePaymentStatus(existing, payload.status);
-  const updated = await repo.updateExpensePayment(paymentId, {
-    status,
-    updatedAt: new Date(),
-  } as Partial<InsertExpensePayment>);
-  if (!updated) {
-    fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
-  }
-  return updated;
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockExpensePayment(paymentId);
+    const existing = await tx.getExpensePayment(paymentId);
+    if (!existing) {
+      fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
+    }
+    const status = nextExpensePaymentStatus(existing, payload.status);
+    const updated = await tx.updateExpensePayment(paymentId, {
+      status,
+      updatedAt: new Date(),
+    } as Partial<InsertExpensePayment>);
+    if (!updated) {
+      fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "expense_payment",
+      entityId: updated.id,
+      action: paymentStatusAuditAction(status),
+      changes: paymentAuditChanges(existing, updated),
+    });
+    return updated;
+  });
+}
+
+export async function reverseFinancePayment(
+  repo: FinanceExpenseRepository,
+  paymentId: number,
+  actorAdminId: number,
+) {
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockExpensePayment(paymentId);
+    const existing = await tx.getExpensePayment(paymentId);
+    if (!existing) {
+      fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
+    }
+    if (existing.status === "reversed") {
+      return existing;
+    }
+    if (!["posted", "cleared"].includes(existing.status)) {
+      fail(409, "PAYMENT_REVERSE_REQUIRES_POSTED", "Only posted or cleared payments can be reversed.");
+    }
+    const activeApplications = await tx.listVendorBillApplications({ expensePaymentId: paymentId, status: "active" });
+    assertNoActiveApplications(
+      activeApplications,
+      "PAYMENT_REVERSE_HAS_ACTIVE_APPLICATIONS",
+      "Payments with active applications must have applications reversed before payment reversal.",
+    );
+    const updated = await tx.updateExpensePayment(paymentId, {
+      status: "reversed",
+      updatedAt: new Date(),
+    } as Partial<InsertExpensePayment>);
+    if (!updated) {
+      fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "expense_payment",
+      entityId: updated.id,
+      action: "reversed",
+      changes: paymentAuditChanges(existing, updated),
+    });
+    return updated;
+  });
 }
 
 export async function applyFinancePaymentToBill(
   repo: FinanceExpenseRepository,
   input: ApplyExpensePaymentPayload & { actorAdminId: number },
 ) {
-  return repo.transaction(async (tx) => {
+  return runFinanceTransaction(repo, async (tx) => {
     await tx.lockVendorBill(input.targetVendorBillId);
     await tx.lockExpensePayment(input.expensePaymentId);
 
@@ -1573,16 +2079,16 @@ export async function applyFinancePaymentToBill(
       fail(404, "PAYMENT_NOT_FOUND", "Expense payment not found.");
     }
 
-    validateVendorBillPaymentApplicationFromLockedRows({
+    runFinanceDomainValidation(() => validateVendorBillPaymentApplicationFromLockedRows({
       targetBill: billSnapshot(targetBill),
       payment: paymentSnapshot(payment),
       amountCents: input.amountCents,
       currency: input.currency,
       existingTargetBillApplications: activeAllocationRows(existingTargetBillApplications),
       existingPaymentApplications: activeAllocationRows(existingPaymentApplications),
-    });
+    }));
 
-    return tx.createVendorBillApplication({
+    const application = await tx.createVendorBillApplication({
       targetVendorBillId: input.targetVendorBillId,
       expensePaymentId: input.expensePaymentId,
       creditVendorBillId: null,
@@ -1591,6 +2097,14 @@ export async function applyFinancePaymentToBill(
       status: "active",
       createdBy: input.actorAdminId,
     });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "vendor_bill_application",
+      entityId: application.id,
+      action: "applied",
+      changes: activeApplicationAuditChanges(null, application),
+    });
+    return application;
   });
 }
 
@@ -1602,7 +2116,7 @@ export async function applyFinanceCreditToBill(
     fail(400, "AP_CREDIT_SELF_APPLICATION", "Credit bill cannot apply to itself.");
   }
 
-  return repo.transaction(async (tx) => {
+  return runFinanceTransaction(repo, async (tx) => {
     for (const billId of [input.targetVendorBillId, input.creditVendorBillId].sort((a, b) => a - b)) {
       await tx.lockVendorBill(billId);
     }
@@ -1621,16 +2135,16 @@ export async function applyFinanceCreditToBill(
       fail(404, "CREDIT_BILL_NOT_FOUND", "Credit memo not found.");
     }
 
-    validateVendorBillCreditApplicationFromLockedRows({
+    runFinanceDomainValidation(() => validateVendorBillCreditApplicationFromLockedRows({
       targetBill: billSnapshot(targetBill),
       creditBill: billSnapshot(creditBill),
       amountCents: input.amountCents,
       currency: input.currency,
       existingTargetBillApplications: activeAllocationRows(existingTargetBillApplications),
       existingCreditBillApplications: activeAllocationRows(existingCreditBillApplications),
-    });
+    }));
 
-    return tx.createVendorBillApplication({
+    const application = await tx.createVendorBillApplication({
       targetVendorBillId: input.targetVendorBillId,
       expensePaymentId: null,
       creditVendorBillId: input.creditVendorBillId,
@@ -1639,6 +2153,14 @@ export async function applyFinanceCreditToBill(
       status: "active",
       createdBy: input.actorAdminId,
     });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "vendor_bill_application",
+      entityId: application.id,
+      action: "applied",
+      changes: activeApplicationAuditChanges(null, application),
+    });
+    return application;
   });
 }
 
@@ -1648,7 +2170,7 @@ export async function reverseFinanceBillApplication(
   actorAdminId: number,
   now = new Date(),
 ) {
-  return repo.transaction(async (tx) => {
+  return runFinanceTransaction(repo, async (tx) => {
     await tx.lockVendorBillApplication(applicationId);
     const existing = await tx.getVendorBillApplication(applicationId);
     if (!existing) {
@@ -1660,6 +2182,15 @@ export async function reverseFinanceBillApplication(
     if (existing.status === "voided") {
       fail(409, "APPLICATION_VOIDED", "Voided applications cannot be reversed.");
     }
+    const relatedBillIds = [existing.targetVendorBillId, existing.creditVendorBillId].filter(
+      (id): id is number => Number.isInteger(id),
+    );
+    for (const billId of relatedBillIds.sort((a, b) => a - b)) {
+      await tx.lockVendorBill(billId);
+    }
+    if (existing.expensePaymentId) {
+      await tx.lockExpensePayment(existing.expensePaymentId);
+    }
     const updated = await tx.updateVendorBillApplication(applicationId, {
       status: "reversed",
       reversedAt: now,
@@ -1669,6 +2200,108 @@ export async function reverseFinanceBillApplication(
     if (!updated) {
       fail(404, "APPLICATION_NOT_FOUND", "Bill application not found.");
     }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor_bill_application",
+      entityId: updated.id,
+      action: "reversed",
+      changes: activeApplicationAuditChanges(existing, updated),
+    });
+    return updated;
+  });
+}
+
+export function listFinanceBillApplications(repo: FinanceExpenseRepository, query: FinanceListQuery) {
+  return repo.listVendorBillApplications({
+    status: query.status && query.status !== "all" ? query.status as AllocationStatus : undefined,
+  }).then((rows) => rows.slice(0, Math.min(250, Math.max(1, query.pageSize ?? 100))).map(financeBillApplicationResponse));
+}
+
+export function listFinanceReconciliationExceptions(repo: FinanceExpenseRepository, query: FinanceListQuery) {
+  return repo.listReconciliationExceptions(query).then((rows) => rows
+    .filter((row) => row.domain === "ap")
+    .map(financeReconciliationExceptionResponse));
+}
+
+export async function createFinanceReconciliationException(
+  repo: FinanceExpenseRepository,
+  input: CreateReconciliationExceptionPayload & { actorAdminId: number },
+) {
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await validateReconciliationEntityTargets(tx, payload);
+    const exception = await tx.createReconciliationException({
+      domain: "ap",
+      expectedEntityType: payload.expectedEntityType,
+      expectedEntityId: payload.expectedEntityId,
+      actualEntityType: payload.actualEntityType,
+      actualEntityId: payload.actualEntityId,
+      currency: payload.currency,
+      expectedAmountCents: payload.expectedAmountCents,
+      actualAmountCents: payload.actualAmountCents,
+      differenceAmountCents: differenceAmountCents(payload.expectedAmountCents, payload.actualAmountCents),
+      reasonCode: payload.reasonCode,
+      summary: payload.summary,
+      status: "open",
+      ownerAdminId: payload.ownerAdminId,
+      createdBy: actorAdminId,
+    });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "reconciliation_exception",
+      entityId: exception.id,
+      action: "created",
+      changes: reconciliationAuditChanges(null, exception),
+    });
+    return exception;
+  });
+}
+
+export async function transitionFinanceReconciliationException(
+  repo: FinanceExpenseRepository,
+  exceptionId: number,
+  action: "investigate" | "resolve" | "waive" | "reopen",
+  input: ReconciliationExceptionTransitionPayload & { actorAdminId: number },
+  now = new Date(),
+) {
+  const { actorAdminId, ...payload } = input;
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockReconciliationException(exceptionId);
+    const existing = await tx.getReconciliationException(exceptionId);
+    if (!existing || existing.domain !== "ap") {
+      fail(404, "RECONCILIATION_EXCEPTION_NOT_FOUND", "AP reconciliation exception not found.");
+    }
+    const status = nextReconciliationExceptionStatus(existing, action);
+    const updateValues = {
+      status,
+      updatedAt: now,
+    } as Partial<InsertReconciliationException> & {
+      status: ReconciliationExceptionStatus;
+      updatedAt: Date;
+      resolvedAt?: Date | null;
+      resolvedBy?: number | null;
+      resolutionNotes?: string | null;
+    };
+    if (status === "resolved" || status === "waived") {
+      updateValues.resolvedAt = now;
+      updateValues.resolvedBy = actorAdminId;
+      updateValues.resolutionNotes = payload.resolutionNotes ?? existing.resolutionNotes;
+    } else if (status === "open") {
+      updateValues.resolvedAt = null;
+      updateValues.resolvedBy = null;
+      updateValues.resolutionNotes = null;
+    }
+    const updated = await tx.updateReconciliationException(exceptionId, updateValues);
+    if (!updated) {
+      fail(404, "RECONCILIATION_EXCEPTION_NOT_FOUND", "AP reconciliation exception not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "reconciliation_exception",
+      entityId: updated.id,
+      action: reconciliationStatusAuditAction(status),
+      changes: reconciliationAuditChanges(existing, updated),
+    });
     return updated;
   });
 }
@@ -1681,10 +2314,10 @@ export async function registerFinanceDocument(
     { entityType: input.link.entityType, entityId: input.link.entityId },
     (entityType, entityId) => repo.entityExists(entityType, entityId),
   );
-  validateDocumentLinkSensitivity({
+  runFinanceDomainValidation(() => validateDocumentLinkSensitivity({
     documentSensitivityClass: input.sensitivityClass,
     requiredSensitivityClass: input.link.requiredSensitivityClass,
-  });
+  }));
 
   return repo.createDocumentWithLink({
     document: {

@@ -16,6 +16,7 @@ import {
   type InsertDocumentLink,
   type InsertExpensePayment,
   type InsertFinanceAuditEvent,
+  type InsertReconciliationException,
   type InsertRecurringExpense,
   type InsertVendor,
   type InsertVendorBill,
@@ -29,9 +30,10 @@ import type {
   FinanceOverviewInput,
   FinanceVendorListItem,
   RecurringExpenseListItem,
+  ReconciliationExceptionListItem,
   VendorBillListItem,
 } from "./financeExpenseService";
-import { deriveVendorBillSettlementState } from "./financeDomainValidation";
+import { deriveExpensePaymentBalance, deriveVendorBillBalance } from "./financeDomainValidation";
 
 type DrizzleDb = any;
 
@@ -48,12 +50,6 @@ function queryLimit(filters: FinanceListQuery) {
 function searchPattern(search?: string | null) {
   const trimmed = search?.trim();
   return trimmed ? `%${trimmed.toLowerCase()}%` : null;
-}
-
-function activeApplicationTotal(applications: Array<{ amountCents: number; status: string }>) {
-  return applications
-    .filter((application) => application.status === "active")
-    .reduce((total, application) => total + application.amountCents, 0);
 }
 
 function mapBillRows(
@@ -83,7 +79,7 @@ function mapBillRows(
 ): VendorBillListItem[] {
   return rows.map((row) => {
     const billApplications = applications.filter((application) => application.targetVendorBillId === row.bill.id);
-    const activeAppliedAmountCents = activeApplicationTotal(billApplications);
+    const balance = deriveVendorBillBalance(row.bill, billApplications);
     return {
       id: row.bill.id,
       legalEntityId: row.bill.legalEntityId,
@@ -101,9 +97,9 @@ function mapBillRows(
       status: row.bill.status,
       creditForVendorBillId: row.bill.creditForVendorBillId,
       vendorName: row.vendorName,
-      activeAppliedAmountCents,
-      remainingAmountCents: Math.max(0, row.bill.amountCents - activeAppliedAmountCents),
-      settlementState: deriveVendorBillSettlementState(row.bill, billApplications),
+      activeAppliedAmountCents: balance.activeAppliedAmountCents,
+      remainingAmountCents: balance.remainingAmountCents,
+      settlementState: balance.settlementState,
       documentCount: documentCounts.get(row.bill.id) ?? 0,
       recurringExpectedAmountCents: row.recurringExpectedAmountCents,
     };
@@ -114,6 +110,7 @@ function mapPaymentRows(
   rows: Array<{
     payment: {
       id: number;
+      legalEntityId: number;
       vendorId: number | null;
       amountCents: number;
       currency: string;
@@ -123,6 +120,7 @@ function mapPaymentRows(
       methodLabel: string | null;
       institutionName: string | null;
       maskedLast4: string | null;
+      externalConfirmationRef: string | null;
       status: string;
     };
     vendorName: string | null;
@@ -130,11 +128,13 @@ function mapPaymentRows(
   applications: typeof vendorBillApplications.$inferSelect[],
 ): ExpensePaymentListItem[] {
   return rows.map((row) => {
-    const activeAppliedAmountCents = activeApplicationTotal(
+    const balance = deriveExpensePaymentBalance(
+      row.payment,
       applications.filter((application) => application.expensePaymentId === row.payment.id),
     );
     return {
       id: row.payment.id,
+      legalEntityId: row.payment.legalEntityId,
       vendorId: row.payment.vendorId,
       amountCents: row.payment.amountCents,
       currency: row.payment.currency,
@@ -144,10 +144,11 @@ function mapPaymentRows(
       methodLabel: row.payment.methodLabel,
       institutionName: row.payment.institutionName,
       maskedLast4: row.payment.maskedLast4,
+      externalConfirmationRef: row.payment.externalConfirmationRef,
       status: row.payment.status,
       vendorName: row.vendorName,
-      activeAppliedAmountCents,
-      remainingAmountCents: Math.max(0, row.payment.amountCents - activeAppliedAmountCents),
+      activeAppliedAmountCents: balance.activeAppliedAmountCents,
+      remainingAmountCents: balance.unappliedAmountCents,
     };
   });
 }
@@ -217,6 +218,10 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
 
     lockVendorBillApplication: async (id) => {
       await database.execute(sql`SELECT "id" FROM "vendor_bill_applications" WHERE "id" = ${id} FOR UPDATE`);
+    },
+
+    lockReconciliationException: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "reconciliation_exceptions" WHERE "id" = ${id} FOR UPDATE`);
     },
 
     getLegalEntity: async (id) => {
@@ -464,6 +469,7 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
         .select({
           payment: {
             id: expensePayments.id,
+            legalEntityId: expensePayments.legalEntityId,
             vendorId: expensePayments.vendorId,
             amountCents: expensePayments.amountCents,
             currency: expensePayments.currency,
@@ -473,6 +479,7 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
             methodLabel: expensePayments.methodLabel,
             institutionName: expensePayments.institutionName,
             maskedLast4: expensePayments.maskedLast4,
+            externalConfirmationRef: expensePayments.externalConfirmationRef,
             status: expensePayments.status,
           },
           vendorName: vendors.name,
@@ -545,6 +552,40 @@ function createRepository(database: DrizzleDb): FinanceExpenseRepository {
         .update(vendorBillApplications)
         .set(compact(values))
         .where(eq(vendorBillApplications.id, id))
+        .returning();
+      return row;
+    },
+
+    getReconciliationException: async (id) => {
+      const [row] = await database.select().from(reconciliationExceptions).where(eq(reconciliationExceptions.id, id));
+      return row;
+    },
+
+    listReconciliationExceptions: async (filters) => {
+      const conditions = [eq(reconciliationExceptions.domain, "ap")];
+      if (filters.status && filters.status !== "all") {
+        conditions.push(eq(reconciliationExceptions.status, filters.status));
+      }
+
+      const rows = await database
+        .select()
+        .from(reconciliationExceptions)
+        .where(and(...conditions))
+        .orderBy(desc(reconciliationExceptions.createdAt), desc(reconciliationExceptions.id))
+        .limit(queryLimit(filters));
+      return rows satisfies ReconciliationExceptionListItem[];
+    },
+
+    createReconciliationException: async (values) => {
+      const [row] = await database.insert(reconciliationExceptions).values(compact(values)).returning();
+      return row;
+    },
+
+    updateReconciliationException: async (id, values) => {
+      const [row] = await database
+        .update(reconciliationExceptions)
+        .set(compact(values))
+        .where(eq(reconciliationExceptions.id, id))
         .returning();
       return row;
     },
@@ -687,6 +728,7 @@ export type {
   InsertDocumentLink,
   InsertExpensePayment,
   InsertFinanceAuditEvent,
+  InsertReconciliationException,
   InsertRecurringExpense,
   InsertVendor,
   InsertVendorBill,

@@ -71,30 +71,51 @@ import { financeExpenseRepository } from './financeExpenseRepository';
 import {
   FinanceExpenseServiceError,
   archiveFinanceVendor,
+  applyCreditMemoPayloadSchema,
+  applyExpensePaymentPayloadSchema,
+  applyFinanceCreditToBill,
+  applyFinancePaymentToBill,
   cancelFinanceSubscription,
   cancelRecurringExpensePayloadSchema,
   createFinanceBill,
+  createFinanceReconciliationException,
   createFinanceSubscription,
   createFinanceVendor,
+  createExpensePaymentPayloadSchema,
+  createReconciliationExceptionPayloadSchema,
   createRecurringExpensePayloadSchema,
   createVendorBillPayloadSchema,
   createVendorPayloadSchema,
+  financeBillApplicationResponse,
   financeBillResponse,
   financeBillTransitionPayloadSchema,
   financeListQuerySchema,
+  financePaymentResponse,
+  financeReconciliationExceptionResponse,
   financeSubscriptionResponse,
   financeVendorResponse,
   getFinanceOverview,
+  listFinanceBillApplications,
   listFinanceLegalEntities,
   listFinanceBills,
   listFinancePayments,
+  listFinanceReconciliationExceptions,
   listFinanceSubscriptions,
   listFinanceVendors,
   pauseFinanceSubscription,
+  reconciliationExceptionTransitionPayloadSchema,
+  recordFinancePayment,
+  reverseFinanceBillApplication,
+  reverseFinancePayment,
   resumeFinanceSubscription,
   transitionFinanceBillStatus,
+  transitionFinanceReconciliationException,
+  updateExpensePaymentPayloadSchema,
+  updateExpensePaymentStatusPayloadSchema,
   updateDraftFinanceBill,
   updateDraftVendorBillPayloadSchema,
+  updateFinancePayment,
+  updateFinancePaymentStatus,
   updateFinanceSubscription,
   updateFinanceVendor,
   updateRecurringExpensePayloadSchema,
@@ -2536,6 +2557,263 @@ export async function registerRoutes(app: Express): Promise<Server> {
       financeExpenseRepository,
       financeListQuerySchema.parse(req.query),
     )),
+  );
+
+  app.post(
+    "/api/admin/finance/payments",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req, res) => {
+      const payment = await recordFinancePayment(financeExpenseRepository, {
+        ...createExpensePaymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(financePaymentResponse(payment));
+    }),
+  );
+
+  app.patch(
+    "/api/admin/finance/payments/:paymentId",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const payment = await updateFinancePayment(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.paymentId),
+        {
+          ...updateExpensePaymentPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financePaymentResponse(payment);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/payments/:paymentId/post",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const payment = await updateFinancePaymentStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.paymentId),
+        {
+          ...updateExpensePaymentStatusPayloadSchema.parse({ status: "posted" }),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financePaymentResponse(payment);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/payments/:paymentId/clear",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const payment = await updateFinancePaymentStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.paymentId),
+        {
+          ...updateExpensePaymentStatusPayloadSchema.parse({ status: "cleared" }),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financePaymentResponse(payment);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/payments/:paymentId/fail",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const payment = await updateFinancePaymentStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.paymentId),
+        {
+          ...updateExpensePaymentStatusPayloadSchema.parse({ status: "failed" }),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financePaymentResponse(payment);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/payments/:paymentId/void",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const payment = await updateFinancePaymentStatus(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.paymentId),
+        {
+          ...updateExpensePaymentStatusPayloadSchema.parse({ status: "voided" }),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financePaymentResponse(payment);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/payments/:paymentId/reverse",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const payment = await reverseFinancePayment(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.paymentId),
+        req.adminUser.id,
+      );
+      return financePaymentResponse(payment);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/bill-applications",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => listFinanceBillApplications(
+      financeExpenseRepository,
+      financeListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/bill-applications/payment",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req, res) => {
+      const application = await applyFinancePaymentToBill(financeExpenseRepository, {
+        ...applyExpensePaymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(financeBillApplicationResponse(application));
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/bill-applications/credit",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req, res) => {
+      const application = await applyFinanceCreditToBill(financeExpenseRepository, {
+        ...applyCreditMemoPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(financeBillApplicationResponse(application));
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/bill-applications/:applicationId/reverse",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const application = await reverseFinanceBillApplication(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.applicationId),
+        req.adminUser.id,
+      );
+      return financeBillApplicationResponse(application);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/reconciliation-exceptions",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => listFinanceReconciliationExceptions(
+      financeExpenseRepository,
+      financeListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/reconciliation-exceptions",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req, res) => {
+      const exception = await createFinanceReconciliationException(financeExpenseRepository, {
+        ...createReconciliationExceptionPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(financeReconciliationExceptionResponse(exception));
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/investigate",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const exception = await transitionFinanceReconciliationException(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.exceptionId),
+        "investigate",
+        {
+          ...reconciliationExceptionTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeReconciliationExceptionResponse(exception);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/resolve",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const exception = await transitionFinanceReconciliationException(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.exceptionId),
+        "resolve",
+        {
+          ...reconciliationExceptionTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeReconciliationExceptionResponse(exception);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/waive",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const exception = await transitionFinanceReconciliationException(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.exceptionId),
+        "waive",
+        {
+          ...reconciliationExceptionTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeReconciliationExceptionResponse(exception);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/reopen",
+    requireAuth,
+    requireRole(['super_admin', 'admin_finance']),
+    financeRoute(async (req) => {
+      const exception = await transitionFinanceReconciliationException(
+        financeExpenseRepository,
+        financeIdParamSchema.parse(req.params.exceptionId),
+        "reopen",
+        {
+          ...reconciliationExceptionTransitionPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      return financeReconciliationExceptionResponse(exception);
+    }),
   );
 
   app.get("/api/admin/verifier", requireAuth, requireRole(['super_admin', 'admin_verifier']), async (req: any, res) => {

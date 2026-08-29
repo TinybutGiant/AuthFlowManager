@@ -3,23 +3,33 @@ import test from "node:test";
 
 import {
   FinanceExpenseServiceError,
+  applyFinanceCreditToBill,
   applyFinancePaymentToBill,
   archiveFinanceVendor,
   assertVendorBillEditable,
   cancelFinanceSubscription,
+  createFinanceReconciliationException,
   createFinanceBill,
   createFinanceSubscription,
   createFinanceVendor,
+  createReconciliationExceptionPayloadSchema,
   createRecurringExpensePayloadSchema,
   createVendorBillPayloadSchema,
   deriveFinanceOverviewFromRows,
+  listFinanceReconciliationExceptions,
   monthlyRecurringAmountCents,
   nextExpensePaymentStatus,
   nextVendorBillStatus,
   pauseFinanceSubscription,
+  recordFinancePayment,
+  reverseFinanceBillApplication,
+  reverseFinancePayment,
   resumeFinanceSubscription,
   transitionFinanceBillStatus,
+  transitionFinanceReconciliationException,
   updateDraftFinanceBill,
+  updateFinancePayment,
+  updateFinancePaymentStatus,
   updateFinanceSubscription,
   updateFinanceVendor,
   updateRecurringExpensePayloadSchema,
@@ -905,6 +915,10 @@ test("payment application uses transaction and row locks before creating allocat
         updatedAt: now,
       };
     },
+    createFinanceAuditEvent: async (values: any) => {
+      calls.push(`audit-${values.action}`);
+      return { id: 1, ...values, createdAt: now };
+    },
   } as Partial<FinanceExpenseRepository> as FinanceExpenseRepository;
 
   const application = await applyFinancePaymentToBill(repo, {
@@ -920,8 +934,608 @@ test("payment application uses transaction and row locks before creating allocat
     "lock-bill-10",
     "lock-payment-30",
     "create-application",
+    "audit-applied",
   ]);
   assert.equal(application.targetVendorBillId, 10);
   assert.equal(application.expensePaymentId, 30);
   assert.equal(application.amountCents, 5_000);
+});
+
+type ApFixtureState = {
+  legalEntities: any[];
+  vendors: any[];
+  bills: any[];
+  payments: any[];
+  applications: any[];
+  reconciliationExceptions: any[];
+  auditEvents: any[];
+  calls: string[];
+  failNextAudit: boolean;
+  nextPaymentId: number;
+  nextApplicationId: number;
+  nextExceptionId: number;
+};
+
+function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
+}
+
+function cloneApState(state: ApFixtureState) {
+  return {
+    legalEntities: structuredClone(state.legalEntities),
+    vendors: structuredClone(state.vendors),
+    bills: structuredClone(state.bills),
+    payments: structuredClone(state.payments),
+    applications: structuredClone(state.applications),
+    reconciliationExceptions: structuredClone(state.reconciliationExceptions),
+    auditEvents: structuredClone(state.auditEvents),
+    nextPaymentId: state.nextPaymentId,
+    nextApplicationId: state.nextApplicationId,
+    nextExceptionId: state.nextExceptionId,
+  };
+}
+
+function restoreApState(state: ApFixtureState, snapshot: ReturnType<typeof cloneApState>) {
+  state.legalEntities = snapshot.legalEntities;
+  state.vendors = snapshot.vendors;
+  state.bills = snapshot.bills;
+  state.payments = snapshot.payments;
+  state.applications = snapshot.applications;
+  state.reconciliationExceptions = snapshot.reconciliationExceptions;
+  state.auditEvents = snapshot.auditEvents;
+  state.nextPaymentId = snapshot.nextPaymentId;
+  state.nextApplicationId = snapshot.nextApplicationId;
+  state.nextExceptionId = snapshot.nextExceptionId;
+}
+
+function createApFixture() {
+  const now = baseTimestamp();
+  const state: ApFixtureState = {
+    legalEntities: [{ id: 1, status: "active" }],
+    vendors: [{ id: 20, name: "Vendor A", status: "active" }, { id: 21, name: "Vendor B", status: "active" }],
+    bills: [],
+    payments: [],
+    applications: [],
+    reconciliationExceptions: [],
+    auditEvents: [],
+    calls: [],
+    failNextAudit: false,
+    nextPaymentId: 100,
+    nextApplicationId: 200,
+    nextExceptionId: 300,
+  };
+
+  function seedBill(values: Partial<any>) {
+    const bill = {
+      id: values.id ?? state.bills.length + 1,
+      legalEntityId: values.legalEntityId ?? 1,
+      vendorId: values.vendorId ?? 20,
+      recurringExpenseId: null,
+      invoiceNumber: values.invoiceNumber ?? null,
+      billKind: values.billKind ?? "invoice",
+      issueDate: null,
+      dueDate: values.dueDate ?? "2026-08-31",
+      servicePeriodStart: null,
+      servicePeriodEnd: null,
+      amountCents: values.amountCents ?? 10_000,
+      currency: values.currency ?? "USD",
+      categoryCode: values.categoryCode ?? "saas",
+      status: values.status ?? "approved",
+      creditForVendorBillId: values.creditForVendorBillId ?? null,
+      notes: null,
+      createdBy: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    state.bills.push(bill);
+    return bill;
+  }
+
+  function seedPayment(values: Partial<any>) {
+    const payment = {
+      id: values.id ?? state.nextPaymentId++,
+      legalEntityId: values.legalEntityId ?? 1,
+      vendorId: values.vendorId === undefined ? 20 : values.vendorId,
+      amountCents: values.amountCents ?? 10_000,
+      currency: values.currency ?? "USD",
+      direction: values.direction ?? "outflow",
+      paymentDate: values.paymentDate ?? "2026-08-29",
+      methodType: values.methodType ?? "ach",
+      methodLabel: values.methodLabel ?? null,
+      institutionName: values.institutionName ?? null,
+      maskedLast4: values.maskedLast4 ?? null,
+      externalConfirmationRef: values.externalConfirmationRef ?? null,
+      status: values.status ?? "cleared",
+      createdBy: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    state.payments.push(payment);
+    return payment;
+  }
+
+  const repo = {
+    transaction: async (work: any) => {
+      state.calls.push("transaction");
+      const snapshot = cloneApState(state);
+      try {
+        return await work(repo);
+      } catch (error) {
+        restoreApState(state, snapshot);
+        throw error;
+      }
+    },
+    lockVendorBill: async (id: number) => {
+      state.calls.push(`lock-bill-${id}`);
+    },
+    lockExpensePayment: async (id: number) => {
+      state.calls.push(`lock-payment-${id}`);
+    },
+    lockVendorBillApplication: async (id: number) => {
+      state.calls.push(`lock-application-${id}`);
+    },
+    lockReconciliationException: async (id: number) => {
+      state.calls.push(`lock-exception-${id}`);
+    },
+    getLegalEntity: async (id: number) => state.legalEntities.find((row) => row.id === id),
+    getVendor: async (id: number) => state.vendors.find((row) => row.id === id),
+    getVendorBill: async (id: number) => state.bills.find((row) => row.id === id),
+    updateVendorBill: async (id: number, values: any) => {
+      const index = state.bills.findIndex((row) => row.id === id);
+      if (index === -1) return undefined;
+      state.bills[index] = { ...state.bills[index], ...withoutUndefined(values) };
+      return state.bills[index];
+    },
+    getExpensePayment: async (id: number) => state.payments.find((row) => row.id === id),
+    createExpensePayment: async (values: any) => {
+      const payment = seedPayment({ ...values, id: state.nextPaymentId++ });
+      return payment;
+    },
+    updateExpensePayment: async (id: number, values: any) => {
+      const index = state.payments.findIndex((row) => row.id === id);
+      if (index === -1) return undefined;
+      state.payments[index] = { ...state.payments[index], ...withoutUndefined(values) };
+      return state.payments[index];
+    },
+    getVendorBillApplication: async (id: number) => state.applications.find((row) => row.id === id),
+    listVendorBillApplications: async (filters: any) => state.applications.filter((application) => (
+      (filters.targetVendorBillId === undefined || application.targetVendorBillId === filters.targetVendorBillId) &&
+      (filters.expensePaymentId === undefined || application.expensePaymentId === filters.expensePaymentId) &&
+      (filters.creditVendorBillId === undefined || application.creditVendorBillId === filters.creditVendorBillId) &&
+      (filters.status === undefined || application.status === filters.status)
+    )),
+    createVendorBillApplication: async (values: any) => {
+      const application = {
+        id: state.nextApplicationId++,
+        ...values,
+        reversedAt: null,
+        reversedBy: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.applications.push(application);
+      return application;
+    },
+    updateVendorBillApplication: async (id: number, values: any) => {
+      const index = state.applications.findIndex((row) => row.id === id);
+      if (index === -1) return undefined;
+      state.applications[index] = { ...state.applications[index], ...withoutUndefined(values) };
+      return state.applications[index];
+    },
+    getReconciliationException: async (id: number) => state.reconciliationExceptions.find((row) => row.id === id),
+    listReconciliationExceptions: async () => state.reconciliationExceptions,
+    createReconciliationException: async (values: any) => {
+      const exception = {
+        id: state.nextExceptionId++,
+        ...values,
+        resolvedAt: null,
+        resolvedBy: null,
+        resolutionNotes: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.reconciliationExceptions.push(exception);
+      return exception;
+    },
+    updateReconciliationException: async (id: number, values: any) => {
+      const index = state.reconciliationExceptions.findIndex((row) => row.id === id);
+      if (index === -1) return undefined;
+      state.reconciliationExceptions[index] = { ...state.reconciliationExceptions[index], ...withoutUndefined(values) };
+      return state.reconciliationExceptions[index];
+    },
+    entityExists: async (entityType: string, entityId: number) => {
+      const tableByType: Record<string, any[]> = {
+        vendors: state.vendors,
+        vendor_bills: state.bills,
+        expense_payments: state.payments,
+        vendor_bill_applications: state.applications,
+        reconciliation_exceptions: state.reconciliationExceptions,
+      };
+      return Boolean(tableByType[entityType]?.some((row) => row.id === entityId));
+    },
+    createFinanceAuditEvent: async (values: any) => {
+      if (state.failNextAudit) {
+        state.failNextAudit = false;
+        throw new Error("audit insert failed");
+      }
+      state.auditEvents.push(values);
+      return { id: state.auditEvents.length, ...values, createdAt: now };
+    },
+  } as Partial<FinanceExpenseRepository> as FinanceExpenseRepository;
+
+  return { repo, state, seedBill, seedPayment };
+}
+
+function activeTotal(rows: any[]) {
+  return rows.filter((row) => row.status === "active").reduce((total, row) => total + row.amountCents, 0);
+}
+
+function billRemaining(state: ApFixtureState, billId: number) {
+  const bill = state.bills.find((row) => row.id === billId);
+  assert.ok(bill);
+  return bill.amountCents - activeTotal(state.applications.filter((row) => row.targetVendorBillId === billId));
+}
+
+function paymentRemaining(state: ApFixtureState, paymentId: number) {
+  const payment = state.payments.find((row) => row.id === paymentId);
+  assert.ok(payment);
+  return payment.amountCents - activeTotal(state.applications.filter((row) => row.expensePaymentId === paymentId));
+}
+
+function creditRemaining(state: ApFixtureState, creditBillId: number) {
+  const credit = state.bills.find((row) => row.id === creditBillId);
+  assert.ok(credit);
+  return credit.amountCents - activeTotal(state.applications.filter((row) => row.creditVendorBillId === creditBillId));
+}
+
+test("AP payment applications support full, partial, split, multi-payment, and unapplied cleared payments", async () => {
+  const { repo, state, seedBill, seedPayment } = createApFixture();
+
+  const fullBill = seedBill({ id: 1, amountCents: 10_000 });
+  const fullPayment = seedPayment({ id: 101, amountCents: 10_000, status: "cleared" });
+  await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: fullBill.id,
+    expensePaymentId: fullPayment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  assert.equal(billRemaining(state, fullBill.id), 0);
+  assert.equal(paymentRemaining(state, fullPayment.id), 0);
+
+  const partialBill = seedBill({ id: 2, amountCents: 10_000 });
+  const partialPayment = seedPayment({ id: 102, amountCents: 10_000, status: "cleared" });
+  await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: partialBill.id,
+    expensePaymentId: partialPayment.id,
+    amountCents: 6_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  assert.equal(billRemaining(state, partialBill.id), 4_000);
+  assert.equal(paymentRemaining(state, partialPayment.id), 4_000);
+
+  const splitPayment = seedPayment({ id: 103, amountCents: 10_000, status: "cleared" });
+  const splitBillA = seedBill({ id: 3, amountCents: 6_000 });
+  const splitBillB = seedBill({ id: 4, amountCents: 4_000 });
+  await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: splitBillA.id,
+    expensePaymentId: splitPayment.id,
+    amountCents: 6_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: splitBillB.id,
+    expensePaymentId: splitPayment.id,
+    amountCents: 4_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  assert.equal(paymentRemaining(state, splitPayment.id), 0);
+
+  const multiBill = seedBill({ id: 5, amountCents: 10_000 });
+  const smallPayment = seedPayment({ id: 104, amountCents: 3_000, status: "posted" });
+  const largePayment = seedPayment({ id: 105, amountCents: 7_000, status: "cleared" });
+  await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: multiBill.id,
+    expensePaymentId: smallPayment.id,
+    amountCents: 3_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: multiBill.id,
+    expensePaymentId: largePayment.id,
+    amountCents: 7_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  assert.equal(billRemaining(state, multiBill.id), 0);
+
+  const cleared = await recordFinancePayment(repo, {
+    legalEntityId: 1,
+    vendorId: 20,
+    amountCents: 10_000,
+    currency: "USD",
+    direction: "outflow",
+    methodType: "ach",
+    status: "cleared",
+    actorAdminId: 42,
+  });
+  assert.equal(paymentRemaining(state, cleared.id), 10_000);
+  assert.equal(state.auditEvents.filter((event) => event.entityType === "vendor_bill_application").length, 6);
+});
+
+test("AP application rejects stale over-application and incompatible payment inputs", async () => {
+  const { repo, seedBill, seedPayment } = createApFixture();
+  const bill = seedBill({ id: 10, amountCents: 10_000 });
+  const payment = seedPayment({ id: 110, amountCents: 10_000 });
+  await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: bill.id,
+    expensePaymentId: payment.id,
+    amountCents: 9_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  await assertFinanceRejects(() => applyFinancePaymentToBill(repo, {
+    targetVendorBillId: bill.id,
+    expensePaymentId: seedPayment({ id: 111, amountCents: 2_000 }).id,
+    amountCents: 2_000,
+    currency: "USD",
+    actorAdminId: 42,
+  }), "AP_BILL_OVER_APPLIED");
+
+  const secondBill = seedBill({ id: 11, amountCents: 10_000 });
+  await assertFinanceRejects(() => applyFinancePaymentToBill(repo, {
+    targetVendorBillId: secondBill.id,
+    expensePaymentId: payment.id,
+    amountCents: 2_000,
+    currency: "USD",
+    actorAdminId: 42,
+  }), "AP_PAYMENT_OVER_APPLIED");
+  await assertFinanceRejects(() => applyFinancePaymentToBill(repo, {
+    targetVendorBillId: secondBill.id,
+    expensePaymentId: seedPayment({ id: 112, vendorId: 21, amountCents: 2_000 }).id,
+    amountCents: 2_000,
+    currency: "USD",
+    actorAdminId: 42,
+  }), "AP_PAYMENT_VENDOR_MISMATCH");
+  await assertFinanceRejects(() => applyFinancePaymentToBill(repo, {
+    targetVendorBillId: secondBill.id,
+    expensePaymentId: seedPayment({ id: 113, amountCents: 2_000, currency: "EUR" }).id,
+    amountCents: 2_000,
+    currency: "USD",
+    actorAdminId: 42,
+  }), "AP_PAYMENT_APPLICATION_CURRENCY_MISMATCH");
+  await assertFinanceRejects(() => applyFinancePaymentToBill(repo, {
+    targetVendorBillId: secondBill.id,
+    expensePaymentId: seedPayment({ id: 114, amountCents: 2_000, status: "pending" }).id,
+    amountCents: 2_000,
+    currency: "USD",
+    actorAdminId: 42,
+  }), "AP_PAYMENT_STATUS_INVALID");
+});
+
+test("AP credit applications validate credit source and remaining credit", async () => {
+  const { repo, state, seedBill } = createApFixture();
+  const target = seedBill({ id: 20, amountCents: 10_000 });
+  const credit = seedBill({ id: 21, billKind: "credit_memo", amountCents: 10_000, status: "approved" });
+  await applyFinanceCreditToBill(repo, {
+    targetVendorBillId: target.id,
+    creditVendorBillId: credit.id,
+    amountCents: 6_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  assert.equal(billRemaining(state, target.id), 4_000);
+  assert.equal(creditRemaining(state, credit.id), 4_000);
+
+  const secondTarget = seedBill({ id: 22, amountCents: 5_000 });
+  await assertFinanceRejects(() => applyFinanceCreditToBill(repo, {
+    targetVendorBillId: secondTarget.id,
+    creditVendorBillId: credit.id,
+    amountCents: 5_000,
+    currency: "USD",
+    actorAdminId: 42,
+  }), "AP_CREDIT_OVER_APPLIED");
+  await assertFinanceRejects(() => applyFinanceCreditToBill(repo, {
+    targetVendorBillId: secondTarget.id,
+    creditVendorBillId: seedBill({ id: 23, billKind: "invoice", amountCents: 5_000 }).id,
+    amountCents: 1_000,
+    currency: "USD",
+    actorAdminId: 42,
+  }), "AP_CREDIT_SOURCE_KIND_INVALID");
+});
+
+test("AP reversal preserves application history and gates payment and bill reversal", async () => {
+  const { repo, state, seedBill, seedPayment } = createApFixture();
+  const bill = seedBill({ id: 30, amountCents: 10_000, status: "approved" });
+  const payment = seedPayment({ id: 130, amountCents: 10_000, status: "cleared" });
+  const application = await applyFinancePaymentToBill(repo, {
+    targetVendorBillId: bill.id,
+    expensePaymentId: payment.id,
+    amountCents: 6_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+
+  await assertFinanceRejects(() => reverseFinancePayment(repo, payment.id, 42), "PAYMENT_REVERSE_HAS_ACTIVE_APPLICATIONS");
+  await assertFinanceRejects(() => transitionFinanceBillStatus(repo, bill.id, "void", { actorAdminId: 42 }), "BILL_VOID_HAS_ACTIVE_APPLICATIONS");
+
+  const reversed = await reverseFinanceBillApplication(repo, application.id, 42);
+  assert.equal(reversed.status, "reversed");
+  assert.equal(billRemaining(state, bill.id), 10_000);
+  assert.equal(paymentRemaining(state, payment.id), 10_000);
+
+  await reverseFinanceBillApplication(repo, application.id, 42);
+  assert.equal(state.applications.length, 1);
+  assert.equal(state.auditEvents.filter((event) => event.action === "reversed" && event.entityType === "vendor_bill_application").length, 1);
+
+  const reversedPayment = await reverseFinancePayment(repo, payment.id, 42);
+  assert.equal(reversedPayment.status, "reversed");
+});
+
+test("AP payment editing and lifecycle preserve posted history", async () => {
+  const { repo, state, seedPayment } = createApFixture();
+  const pending = seedPayment({ id: 140, amountCents: 10_000, status: "pending" });
+  const edited = await updateFinancePayment(repo, pending.id, {
+    amountCents: 12_000,
+    currency: "USD",
+    actorAdminId: 42,
+  });
+  assert.equal(edited.amountCents, 12_000);
+
+  const posted = await updateFinancePaymentStatus(repo, pending.id, { status: "posted", actorAdminId: 42 });
+  assert.equal(posted.status, "posted");
+  await assertFinanceRejects(() => updateFinancePayment(repo, pending.id, {
+    amountCents: 13_000,
+    actorAdminId: 42,
+  }), "PAYMENT_NOT_PENDING");
+  await assertFinanceRejects(() => updateFinancePaymentStatus(repo, pending.id, {
+    status: "voided",
+    actorAdminId: 42,
+  }), "PAYMENT_STATUS_TRANSITION_INVALID");
+  const cleared = await updateFinancePaymentStatus(repo, pending.id, { status: "cleared", actorAdminId: 42 });
+  assert.equal(cleared.status, "cleared");
+  assert.deepEqual(
+    state.auditEvents
+      .filter((event) => event.entityType === "expense_payment")
+      .map((event) => event.action),
+    ["updated", "posted", "cleared"],
+  );
+});
+
+test("Finance mutation rolls back when audit insert fails", async () => {
+  const { repo, state } = createApFixture();
+  state.failNextAudit = true;
+
+  await assert.rejects(() => recordFinancePayment(repo, {
+    legalEntityId: 1,
+    vendorId: 20,
+    amountCents: 10_000,
+    currency: "USD",
+    direction: "outflow",
+    methodType: "ach",
+    status: "posted",
+    actorAdminId: 42,
+  }));
+
+  assert.equal(state.payments.length, 0);
+  assert.equal(state.auditEvents.length, 0);
+});
+
+test("AP reconciliation exception lifecycle is AP-only and audited", async () => {
+  const { repo, state, seedBill, seedPayment } = createApFixture();
+  const bill = seedBill({ id: 50, amountCents: 10_000 });
+  const payment = seedPayment({ id: 150, amountCents: 9_900 });
+
+  const exception = await createFinanceReconciliationException(repo, {
+    expectedEntityType: "vendor_bills",
+    expectedEntityId: bill.id,
+    actualEntityType: "expense_payments",
+    actualEntityId: payment.id,
+    expectedAmountCents: 10_000,
+    actualAmountCents: 9_900,
+    currency: "USD",
+    reasonCode: "amount_mismatch",
+    summary: "Invoice and payment differ",
+    actorAdminId: 42,
+  });
+  assert.equal(exception.domain, "ap");
+  assert.equal(exception.differenceAmountCents, 100);
+
+  assert.equal((await transitionFinanceReconciliationException(repo, exception.id, "investigate", { actorAdminId: 42 })).status, "investigating");
+  assert.equal((await transitionFinanceReconciliationException(repo, exception.id, "resolve", { actorAdminId: 42 })).status, "resolved");
+  assert.equal((await transitionFinanceReconciliationException(repo, exception.id, "reopen", { actorAdminId: 42 })).status, "open");
+  assert.equal((await transitionFinanceReconciliationException(repo, exception.id, "waive", { actorAdminId: 42 })).status, "waived");
+  assert.deepEqual(
+    state.auditEvents
+      .filter((event) => event.entityType === "reconciliation_exception")
+      .map((event) => event.action),
+    ["created", "investigating", "resolved", "reopened", "waived"],
+  );
+  assert.equal(Object.prototype.hasOwnProperty.call(state.auditEvents[0].changesJson, "summary"), false);
+
+  await assertFinanceRejects(() => createFinanceReconciliationException(repo, {
+    expectedEntityType: "vendor_bills",
+    expectedEntityId: 999,
+    reasonCode: "missing_invoice",
+    summary: "Missing invoice",
+    actorAdminId: 42,
+  }), "RECONCILIATION_ENTITY_NOT_FOUND");
+});
+
+test("AP reconciliation API contract rejects cross-domain exception targets", async () => {
+  const { repo, state } = createApFixture();
+  state.reconciliationExceptions.push(
+    {
+      id: 301,
+      domain: "ap",
+      expectedEntityType: "vendor_bills",
+      expectedEntityId: 1,
+      actualEntityType: null,
+      actualEntityId: null,
+      currency: "USD",
+      expectedAmountCents: 10_000,
+      actualAmountCents: null,
+      differenceAmountCents: null,
+      reasonCode: "missing_invoice",
+      summary: "AP exception",
+      status: "open",
+      ownerAdminId: null,
+      createdBy: 42,
+      resolvedAt: null,
+      resolvedBy: null,
+      resolutionNotes: null,
+      createdAt: baseTimestamp(),
+      updatedAt: baseTimestamp(),
+    },
+    {
+      id: 302,
+      domain: "tax",
+      expectedEntityType: "tax_liabilities",
+      expectedEntityId: 7,
+      actualEntityType: "tax_agency_payments",
+      actualEntityId: 8,
+      currency: "USD",
+      expectedAmountCents: 10_626,
+      actualAmountCents: 10_600,
+      differenceAmountCents: 26,
+      reasonCode: "amount_mismatch",
+      summary: "Tax exception",
+      status: "open",
+      ownerAdminId: null,
+      createdBy: 42,
+      resolvedAt: null,
+      resolvedBy: null,
+      resolutionNotes: null,
+      createdAt: baseTimestamp(),
+      updatedAt: baseTimestamp(),
+    },
+  );
+
+  assert.equal(createReconciliationExceptionPayloadSchema.safeParse({
+    domain: "tax",
+    expectedEntityType: "vendor_bills",
+    expectedEntityId: 1,
+    reasonCode: "missing_invoice",
+    summary: "Caller-supplied domain is not accepted",
+  }).success, false);
+  assert.equal(createReconciliationExceptionPayloadSchema.safeParse({
+    expectedEntityType: "payroll_runs",
+    expectedEntityId: 1,
+    reasonCode: "amount_mismatch",
+    summary: "Payroll exception",
+  }).success, false);
+  assert.equal(createReconciliationExceptionPayloadSchema.safeParse({
+    expectedEntityType: "tax_liabilities",
+    expectedEntityId: 1,
+    reasonCode: "amount_mismatch",
+    summary: "Tax exception",
+  }).success, false);
+
+  const listed = await listFinanceReconciliationExceptions(repo, { pageSize: 100 });
+  assert.deepEqual(listed.map((exception) => exception.id), [301]);
+  assert.equal(listed.every((exception) => exception.domain === "ap"), true);
 });

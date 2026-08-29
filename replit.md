@@ -1,6 +1,6 @@
 # Overview
 
-This is a role-based admin panel application built with React, Express, and PostgreSQL. The system provides comprehensive user management with hierarchical admin roles (super_admin, admin_finance, admin_verifier, admin_support) and an approval workflow for admin operations. The application integrates Replit's authentication system for secure user login and session management.
+This is a role-based admin panel application built with React, Express, and PostgreSQL. The system provides admin user management with hierarchical admin roles (super_admin, admin_finance, admin_verifier, admin_support), approval workflows for admin operations, and internal Finance/AP tools for small-company vendor, subscription, bill, payment application, and reconciliation workflows. Authentication uses JWT bearer tokens issued by the app.
 
 # User Preferences
 
@@ -19,32 +19,32 @@ Preferred communication style: Simple, everyday language.
 - **Runtime**: Node.js with Express.js framework
 - **Language**: TypeScript with ES modules
 - **Database**: PostgreSQL with Drizzle ORM for type-safe database operations
-- **Authentication**: Replit's OpenID Connect (OIDC) integration with Passport.js
-- **Session Management**: Express sessions stored in PostgreSQL with connect-pg-simple
+- **Authentication**: App-issued JWT bearer tokens
+- **Session Management**: Client stores the bearer token and sends it in the `Authorization` header
 
 ## Database Design
 - **ORM**: Drizzle with PostgreSQL dialect for schema definition and migrations
 - **Schema Structure**: 
-  - `users` table for Replit user data (mandatory for auth)
-  - `sessions` table for session storage (mandatory for auth)
   - `adminUsers` table for admin-specific data with role and status fields
   - `adminUserApprovals` table for approval workflow management
+  - Finance foundation tables for legal entities, vendors, recurring expenses, vendor bills, expense payments, bill applications, documents, external references, finance audit events, and reconciliation exceptions
 - **Role System**: Enum-based admin roles with hierarchical permissions
 
 ## Authentication & Authorization
-- **Authentication**: Replit OIDC integration for secure login/logout
-- **Session Storage**: PostgreSQL-backed sessions with configurable TTL
+- **Authentication**: JWT bearer tokens returned by the login endpoint
+- **Session Storage**: No server-side browser cookie session is used for admin API authentication
 - **Authorization**: Role-based middleware with route protection
-- **User Flow**: Replit users mapped to admin roles through email association
+- **User Flow**: Admin users authenticate with email/password and are authorized through role checks
 
 ## API Design
 - **Architecture**: RESTful API with Express.js
 - **Route Protection**: Middleware-based role checking with fine-grained permissions
 - **Error Handling**: Centralized error handling with proper HTTP status codes
 - **Request/Response**: JSON-based communication with TypeScript interfaces
+- **Internal Finance/AP Routes**: Admin Finance APIs expose vendors, subscriptions, bills, payments, bill applications, and AP-only reconciliation exceptions through deliberate DTOs. Payroll and Tax write APIs are not exposed yet.
 
 ## Frontend-Backend Integration
-- **API Client**: Custom fetch wrapper with credential handling and error management
+- **API Client**: Custom fetch wrapper with bearer-token handling and error management
 - **Query Management**: TanStack Query for caching, background updates, and optimistic updates
 - **Route Protection**: Client-side route guards that verify user authentication and role permissions
 
@@ -55,8 +55,7 @@ Preferred communication style: Simple, everyday language.
 - **Database URL**: Environment-based configuration for database connectivity
 
 ## Authentication Services
-- **Replit Authentication**: OpenID Connect provider for user authentication
-- **Session Store**: PostgreSQL-based session persistence with automatic cleanup
+- **JWT Secret**: Environment-based JWT signing secret
 
 ## Development Tools
 - **Vite**: Development server and build tool with HMR support

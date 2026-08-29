@@ -337,6 +337,7 @@ export function validateTaxFilingAmendment(input: {
 
 export interface VendorBillSnapshot {
   id: number;
+  legalEntityId: number;
   vendorId: number;
   amountCents: number;
   currency: string;
@@ -346,12 +347,34 @@ export interface VendorBillSnapshot {
 
 export interface ExpensePaymentSnapshot {
   id: number;
+  legalEntityId: number;
   vendorId?: number | null;
   amountCents: number;
   currency: string;
+  direction: string;
+  status: string;
 }
 
 export type VendorBillSettlementState = "voided" | "unpaid" | "partially_paid" | "paid" | "overpaid";
+
+export interface VendorBillBalance {
+  originalAmountCents: number;
+  activeAppliedAmountCents: number;
+  remainingAmountCents: number;
+  settlementState: VendorBillSettlementState;
+}
+
+export interface ExpensePaymentBalance {
+  paymentAmountCents: number;
+  activeAppliedAmountCents: number;
+  unappliedAmountCents: number;
+}
+
+export interface CreditBillBalance {
+  creditAmountCents: number;
+  activeAppliedAmountCents: number;
+  remainingCreditAmountCents: number;
+}
 
 export function deriveVendorBillSettlementState(
   bill: Pick<VendorBillSnapshot, "amountCents" | "status">,
@@ -365,6 +388,55 @@ export function deriveVendorBillSettlementState(
   return "overpaid";
 }
 
+export function deriveVendorBillBalance(
+  bill: Pick<VendorBillSnapshot, "amountCents" | "status">,
+  applications: readonly PositiveAllocationSnapshot[],
+): VendorBillBalance {
+  const activeAppliedAmountCents = activeTotal(applications);
+  return {
+    originalAmountCents: bill.amountCents,
+    activeAppliedAmountCents,
+    remainingAmountCents: Math.max(0, bill.amountCents - activeAppliedAmountCents),
+    settlementState: deriveVendorBillSettlementState(bill, applications),
+  };
+}
+
+export function deriveExpensePaymentBalance(
+  payment: Pick<ExpensePaymentSnapshot, "amountCents">,
+  applications: readonly PositiveAllocationSnapshot[],
+): ExpensePaymentBalance {
+  const activeAppliedAmountCents = activeTotal(applications);
+  return {
+    paymentAmountCents: payment.amountCents,
+    activeAppliedAmountCents,
+    unappliedAmountCents: Math.max(0, payment.amountCents - activeAppliedAmountCents),
+  };
+}
+
+export function deriveCreditBillBalance(
+  creditBill: Pick<VendorBillSnapshot, "amountCents">,
+  applications: readonly PositiveAllocationSnapshot[],
+): CreditBillBalance {
+  const activeAppliedAmountCents = activeTotal(applications);
+  return {
+    creditAmountCents: creditBill.amountCents,
+    activeAppliedAmountCents,
+    remainingCreditAmountCents: Math.max(0, creditBill.amountCents - activeAppliedAmountCents),
+  };
+}
+
+function assertTargetBillPayable(bill: Pick<VendorBillSnapshot, "billKind" | "status">) {
+  if (bill.billKind === "credit_memo") {
+    fail("AP_TARGET_BILL_CREDIT_MEMO", "Cannot apply payment or credit to a credit memo.");
+  }
+  if (bill.status === "draft") {
+    fail("AP_TARGET_BILL_DRAFT", "Cannot apply payment or credit to a draft vendor bill.");
+  }
+  if (bill.status === "voided") {
+    fail("AP_TARGET_BILL_VOIDED", "Cannot apply payment or credit to a voided vendor bill.");
+  }
+}
+
 export function validateVendorBillPaymentApplicationFromLockedRows(input: {
   targetBill: VendorBillSnapshot;
   payment: ExpensePaymentSnapshot;
@@ -374,8 +446,15 @@ export function validateVendorBillPaymentApplicationFromLockedRows(input: {
   existingPaymentApplications: readonly PositiveAllocationSnapshot[];
 }) {
   assertPositiveMinorUnits(input.amountCents, "AP_APPLICATION_AMOUNT_INVALID");
-  if (input.targetBill.status === "voided") {
-    fail("AP_TARGET_BILL_VOIDED", "Cannot apply payment to a voided vendor bill.");
+  assertTargetBillPayable(input.targetBill);
+  if (input.targetBill.legalEntityId !== input.payment.legalEntityId) {
+    fail("AP_PAYMENT_LEGAL_ENTITY_MISMATCH", "Expense payment and target bill must share a legal entity.");
+  }
+  if (input.payment.direction !== "outflow") {
+    fail("AP_PAYMENT_DIRECTION_INVALID", "Only outflow expense payments can be applied to bills.");
+  }
+  if (!["posted", "cleared"].includes(input.payment.status)) {
+    fail("AP_PAYMENT_STATUS_INVALID", "Only posted or cleared payments can be applied to bills.");
   }
   if (input.payment.vendorId != null && input.payment.vendorId !== input.targetBill.vendorId) {
     fail("AP_PAYMENT_VENDOR_MISMATCH", "Expense payment vendor must match the target bill vendor when recorded.");
@@ -400,11 +479,21 @@ export function validateVendorBillCreditApplicationFromLockedRows(input: {
   existingCreditBillApplications: readonly PositiveAllocationSnapshot[];
 }) {
   assertPositiveMinorUnits(input.amountCents, "AP_CREDIT_APPLICATION_AMOUNT_INVALID");
+  assertTargetBillPayable(input.targetBill);
   if (input.creditBill.billKind !== "credit_memo") {
     fail("AP_CREDIT_SOURCE_KIND_INVALID", "Credit application source must be a credit memo bill.");
   }
+  if (input.creditBill.status === "draft") {
+    fail("AP_CREDIT_SOURCE_DRAFT", "Cannot apply a draft credit memo.");
+  }
+  if (input.creditBill.status === "voided") {
+    fail("AP_CREDIT_SOURCE_VOIDED", "Cannot apply a voided credit memo.");
+  }
   if (input.targetBill.id === input.creditBill.id) {
     fail("AP_CREDIT_SELF_APPLICATION", "Credit bill cannot apply to itself.");
+  }
+  if (input.targetBill.legalEntityId !== input.creditBill.legalEntityId) {
+    fail("AP_CREDIT_LEGAL_ENTITY_MISMATCH", "Credit bill and target bill must share a legal entity.");
   }
   if (input.targetBill.vendorId !== input.creditBill.vendorId) {
     fail("AP_CREDIT_VENDOR_MISMATCH", "Credit bill and target bill must belong to the same vendor.");

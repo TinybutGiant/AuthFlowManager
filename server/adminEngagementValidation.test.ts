@@ -724,6 +724,8 @@ test("Phase C.2 admin operations use explicit access groups without global super
     "/api/admin/finance/subscriptions",
     "/api/admin/finance/bills",
     "/api/admin/finance/payments",
+    "/api/admin/finance/bill-applications",
+    "/api/admin/finance/reconciliation-exceptions",
   ]) {
     assertRouteMethodUsesRole(routesSource, "get", financeRoute, financeRoles);
   }
@@ -740,14 +742,29 @@ test("Phase C.2 admin operations use explicit access groups without global super
     "/api/admin/finance/bills/:billId/approve",
     "/api/admin/finance/bills/:billId/dispute",
     "/api/admin/finance/bills/:billId/void",
+    "/api/admin/finance/payments",
+    "/api/admin/finance/payments/:paymentId/post",
+    "/api/admin/finance/payments/:paymentId/clear",
+    "/api/admin/finance/payments/:paymentId/fail",
+    "/api/admin/finance/payments/:paymentId/void",
+    "/api/admin/finance/payments/:paymentId/reverse",
+    "/api/admin/finance/bill-applications/payment",
+    "/api/admin/finance/bill-applications/credit",
+    "/api/admin/finance/bill-applications/:applicationId/reverse",
+    "/api/admin/finance/reconciliation-exceptions",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/investigate",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/resolve",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/waive",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/reopen",
   ]) {
     assertFinanceMutationRouteUsesActor(routesSource, "post", financeRoute, financeRoles);
   }
   assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/vendors/:vendorId", financeRoles);
   assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/subscriptions/:subscriptionId", financeRoles);
   assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/bills/:billId", financeRoles);
+  assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/payments/:paymentId", financeRoles);
   assert.match(routesSource, /return res\.status\(400\)\.json\(\{ message: "Invalid finance request" \}\);/);
-  assert.doesNotMatch(routesSource, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:payments|bill-applications|applications)/);
+  assert.doesNotMatch(routesSource, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:payroll|tax|documents|bank|provider)/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/verifier", requireAuth, requireRole\(\['super_admin', 'admin_verifier'\]\)/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/support", requireAuth, requireRole\(\['super_admin', 'admin_support'\]\)/);
   assert.match(routesSource, /"\/api\/localguide\/admin\/cancellation-requests"[\s\S]*requireRole\(\["super_admin", "admin_finance"\]\)/);
@@ -1013,6 +1030,8 @@ test("backend sensitive routes and engagement management APIs do not allow train
     "/api/admin/finance/subscriptions",
     "/api/admin/finance/bills",
     "/api/admin/finance/payments",
+    "/api/admin/finance/bill-applications",
+    "/api/admin/finance/reconciliation-exceptions",
   ]) {
     assertRouteMethodUsesRole(source, "get", financeRoute, financeRoles);
   }
@@ -1028,13 +1047,28 @@ test("backend sensitive routes and engagement management APIs do not allow train
     "/api/admin/finance/bills/:billId/approve",
     "/api/admin/finance/bills/:billId/dispute",
     "/api/admin/finance/bills/:billId/void",
+    "/api/admin/finance/payments",
+    "/api/admin/finance/payments/:paymentId/post",
+    "/api/admin/finance/payments/:paymentId/clear",
+    "/api/admin/finance/payments/:paymentId/fail",
+    "/api/admin/finance/payments/:paymentId/void",
+    "/api/admin/finance/payments/:paymentId/reverse",
+    "/api/admin/finance/bill-applications/payment",
+    "/api/admin/finance/bill-applications/credit",
+    "/api/admin/finance/bill-applications/:applicationId/reverse",
+    "/api/admin/finance/reconciliation-exceptions",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/investigate",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/resolve",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/waive",
+    "/api/admin/finance/reconciliation-exceptions/:exceptionId/reopen",
   ]) {
     assertFinanceMutationRouteUsesActor(source, "post", financeRoute, financeRoles);
   }
   assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/vendors/:vendorId", financeRoles);
   assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/subscriptions/:subscriptionId", financeRoles);
   assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/bills/:billId", financeRoles);
-  assert.doesNotMatch(source, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:payments|bill-applications|applications)/);
+  assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/payments/:paymentId", financeRoles);
+  assert.doesNotMatch(source, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:payroll|tax|documents|bank|provider)/);
 });
 
 test("offer letter APIs use admin or trainee scoped permissions", async () => {

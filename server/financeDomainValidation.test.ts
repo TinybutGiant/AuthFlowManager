@@ -8,6 +8,9 @@ import {
   adminIdentityImpliesEmployment,
   assertCreateAdminIdentityType,
   derivePayrollResultLineTotals,
+  deriveCreditBillBalance,
+  deriveExpensePaymentBalance,
+  deriveVendorBillBalance,
   deriveTaxLiabilityNetAmountCents,
   deriveVendorBillSettlementState,
   validateDocumentLinkSensitivity,
@@ -64,6 +67,7 @@ const taxPayment: TaxAgencyPaymentSnapshot = {
 
 const vendorBill: VendorBillSnapshot = {
   id: 1,
+  legalEntityId: 1,
   vendorId: 44,
   amountCents: 2_000,
   currency: "USD",
@@ -167,6 +171,23 @@ test("finance audit migration is narrow and server-only", async () => {
   assert.match(migration, /REVOKE ALL PRIVILEGES ON TABLE "finance_audit_events" FROM anon, authenticated/);
   assert.match(migration, /CREATE POLICY "finance_audit_events_no_direct_client_access"/);
   assert.doesNotMatch(migration, /expense_payments|vendor_bill_applications|payroll|tax_/);
+});
+
+test("finance audit AP payment migration expands only controlled AP audit scope", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0019_finance_audit_ap_payment_scope.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS "finance_audit_events_entity_type_check"/);
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS "finance_audit_events_action_check"/);
+  for (const entityType of ["expense_payment", "vendor_bill_application", "reconciliation_exception"]) {
+    assert.match(migration, new RegExp(`'${entityType}'`));
+  }
+  for (const action of ["posted", "cleared", "failed", "reversed", "applied", "investigating", "resolved", "waived", "reopened"]) {
+    assert.match(migration, new RegExp(`'${action}'`));
+  }
+  assert.doesNotMatch(migration, /payroll|tax_|bank|plaid|ocr|provider_sync/);
 });
 
 test("worker admin link is optional and one admin can link to at most one worker", async () => {
@@ -323,13 +344,37 @@ test("vendor bill payment state derives from applications", () => {
     deriveVendorBillSettlementState(vendorBill, [{ amountCents: 2_100, status: "active" }]),
     "overpaid",
   );
+  assert.deepEqual(deriveVendorBillBalance(vendorBill, [{ amountCents: 500, status: "active" }]), {
+    originalAmountCents: 2_000,
+    activeAppliedAmountCents: 500,
+    remainingAmountCents: 1_500,
+    settlementState: "partially_paid",
+  });
+  assert.deepEqual(deriveExpensePaymentBalance({ amountCents: 1_000 }, [{ amountCents: 600, status: "active" }]), {
+    paymentAmountCents: 1_000,
+    activeAppliedAmountCents: 600,
+    unappliedAmountCents: 400,
+  });
+  assert.deepEqual(deriveCreditBillBalance({ amountCents: 1_000 }, [{ amountCents: 300, status: "active" }]), {
+    creditAmountCents: 1_000,
+    activeAppliedAmountCents: 300,
+    remainingCreditAmountCents: 700,
+  });
 });
 
 test("AP payment cannot be over-applied", () => {
   assertValidationError(
     () => validateVendorBillPaymentApplicationFromLockedRows({
       targetBill: vendorBill,
-      payment: { id: 7, vendorId: vendorBill.vendorId, amountCents: 1_000, currency: "USD" },
+      payment: {
+        id: 7,
+        legalEntityId: vendorBill.legalEntityId,
+        vendorId: vendorBill.vendorId,
+        amountCents: 1_000,
+        currency: "USD",
+        direction: "outflow",
+        status: "cleared",
+      },
       amountCents: 100,
       currency: "USD",
       existingTargetBillApplications: [],
@@ -342,6 +387,7 @@ test("AP payment cannot be over-applied", () => {
 test("credit bill application validates vendor and currency", () => {
   const creditBill: VendorBillSnapshot = {
     id: 2,
+    legalEntityId: vendorBill.legalEntityId,
     vendorId: vendorBill.vendorId,
     amountCents: 1_000,
     currency: "USD",
