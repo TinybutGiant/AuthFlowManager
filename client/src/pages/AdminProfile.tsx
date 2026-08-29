@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import FeedbackAvailabilityEditor, { formatFeedbackAvailabilityWindow } from "@/components/checkins/FeedbackAvailabilityEditor";
-import { ArrowLeftRight, CalendarDays, Delete, CheckCircle, Download, Edit, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
+import { ArrowLeftRight, BriefcaseBusiness, CalendarDays, Delete, CheckCircle, Download, Edit, Eye, FileText, RefreshCw, Send, XCircle } from "lucide-react";
 import {
   AdminEngagement,
   AdminEngagementDocument,
@@ -49,6 +49,28 @@ interface EngagementEditForm {
 interface ProfileEditForm {
   name: string;
   email: string;
+}
+
+interface AdminPersonnelCompensation {
+  amountCents: number;
+  currency: string;
+  payFrequency: string;
+}
+
+interface AdminPersonnelSummary {
+  worker: {
+    id: number;
+    workerCode: string;
+    legalName: string;
+    lifecycleState: string;
+    currentEmployment: {
+      status: string;
+      payrollParticipation: string;
+      employeeClassification: string;
+      legalEntity: { legalName: string } | null;
+      currentCompensation: AdminPersonnelCompensation | null;
+    } | null;
+  } | null;
 }
 
 const MEETING_STATUS_LABELS: Record<FeedbackMeetingStatus, string> = {
@@ -112,6 +134,12 @@ export default function AdminProfile() {
 
   const { data: allAdmins = [] } = useQuery<AdminUser[]>({
     queryKey: ["/api/admin/users"],
+    enabled: !!adminId,
+    retry: false,
+  });
+
+  const { data: personnelSummary } = useQuery<AdminPersonnelSummary>({
+    queryKey: ["/api/admin/personnel/admin-users", adminId],
     enabled: !!adminId,
     retry: false,
   });
@@ -496,6 +524,18 @@ export default function AdminProfile() {
     return value ? new Date(value).toLocaleString() : "Not set";
   };
 
+  const formatPersonnelValue = (value: string | null | undefined) => {
+    return value ? value.replace(/_/g, " ") : "Not set";
+  };
+
+  const formatCompensation = (compensation: AdminPersonnelCompensation | null | undefined) => {
+    if (!compensation) return "Not set";
+    return `${new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: compensation.currency,
+    }).format(compensation.amountCents / 100)} / ${formatPersonnelValue(compensation.payFrequency)}`;
+  };
+
   const getDocumentStatusBadge = (status: string) => {
     const variants = {
       draft: "secondary",
@@ -655,6 +695,67 @@ export default function AdminProfile() {
 
         {/* Activity and Details */}
         <div className="lg:col-span-2 space-y-8">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <CardTitle className="flex items-center gap-2" data-testid="text-personnel-summary-title">
+                  <BriefcaseBusiness className="h-5 w-5" />
+                  Personnel
+                </CardTitle>
+                <Link href={`/admin-management/personnel?adminUserId=${admin.id}`}>
+                  <Button variant="outline" size="sm" data-testid="button-open-personnel">
+                    Open Personnel
+                  </Button>
+                </Link>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!personnelSummary?.worker ? (
+                <div className="rounded-md border border-border p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium">No worker record linked</p>
+                      <p className="text-sm text-muted-foreground">
+                        This admin identity has no employment or payroll participation record.
+                      </p>
+                    </div>
+                    <Badge variant="outline">Not employed</Badge>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-md border border-border p-4">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium">{personnelSummary.worker.legalName}</p>
+                      <p className="text-sm text-muted-foreground">{personnelSummary.worker.workerCode}</p>
+                    </div>
+                    <Badge variant={personnelSummary.worker.currentEmployment?.status === "active" ? "default" : "secondary"}>
+                      {formatPersonnelValue(personnelSummary.worker.currentEmployment?.status ?? "not employed")}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                    <div>
+                      <span className="text-muted-foreground">System Identity: </span>
+                      <span>{formatPersonnelValue(admin.accountType ?? admin.role)}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Legal Entity: </span>
+                      <span>{personnelSummary.worker.currentEmployment?.legalEntity?.legalName ?? "Not employed"}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Payroll Participation: </span>
+                      <span>{formatPersonnelValue(personnelSummary.worker.currentEmployment?.payrollParticipation)}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Current Compensation: </span>
+                      <span>{formatCompensation(personnelSummary.worker.currentEmployment?.currentCompensation)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Permissions */}
           <Card>
             <CardHeader>

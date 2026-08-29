@@ -1,6 +1,6 @@
 # Overview
 
-This is a role-based admin panel application built with React, Express, and PostgreSQL. The system provides admin user management with hierarchical admin roles (super_admin, admin_finance, admin_verifier, admin_support), approval workflows for admin operations, and internal Finance/AP tools for small-company vendor, subscription, bill, payment application, and reconciliation workflows. Authentication uses JWT bearer tokens issued by the app.
+This is a role-based admin panel application built with React, Express, and PostgreSQL. The system provides admin user management with hierarchical admin roles (super_admin, admin_finance, admin_verifier, admin_support), approval workflows for admin operations, internal Finance/AP tools for small-company vendor, subscription, bill, payment application, and reconciliation workflows, and internal Personnel tools for worker, employment, compensation, and payroll participation setup. Authentication uses JWT bearer tokens issued by the app.
 
 # User Preferences
 
@@ -28,6 +28,7 @@ Preferred communication style: Simple, everyday language.
   - `adminUsers` table for admin-specific data with role and status fields
   - `adminUserApprovals` table for approval workflow management
   - Finance foundation tables for legal entities, vendors, recurring expenses, vendor bills, expense payments, bill applications, documents, external references, finance audit events, and reconciliation exceptions
+  - Personnel foundation tables for workers, employments, compensation terms, and personnel audit events
 - **Role System**: Enum-based admin roles with hierarchical permissions
 
 ## Authentication & Authorization
@@ -42,6 +43,7 @@ Preferred communication style: Simple, everyday language.
 - **Error Handling**: Centralized error handling with proper HTTP status codes
 - **Request/Response**: JSON-based communication with TypeScript interfaces
 - **Internal Finance/AP Routes**: Admin Finance APIs expose vendors, subscriptions, bills, payments, bill applications, and AP-only reconciliation exceptions through deliberate DTOs. Payroll and Tax write APIs are not exposed yet.
+- **Internal Personnel Routes**: Admin Personnel APIs expose workers, employment records, compensation terms, and payroll participation setup through deliberate DTOs. Work Authorization, Payroll Run, and Tax write APIs are not exposed yet.
 
 ## Frontend-Backend Integration
 - **API Client**: Custom fetch wrapper with bearer-token handling and error management

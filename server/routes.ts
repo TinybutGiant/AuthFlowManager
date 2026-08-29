@@ -121,6 +121,38 @@ import {
   updateRecurringExpensePayloadSchema,
   updateVendorPayloadSchema,
 } from './financeExpenseService';
+import { personnelRepository } from './personnelRepository';
+import {
+  PersonnelServiceError,
+  activatePersonnelCompensationTerm,
+  archivePersonnelWorker,
+  createCompensationTermPayloadSchema,
+  createEmploymentPayloadSchema,
+  createPersonnelCompensationTerm,
+  createPersonnelEmployment,
+  createPersonnelWorker,
+  createPersonnelWorkerFromAdminUser,
+  createWorkerFromAdminUserPayloadSchema,
+  createWorkerPayloadSchema,
+  endEmploymentPayloadSchema,
+  getPersonnelForAdminUser,
+  getPersonnelWorker,
+  listPersonnelAdminUsers,
+  listPersonnelCompensationTerms,
+  listPersonnelEmployments,
+  listPersonnelLegalEntities,
+  listPersonnelWorkers,
+  personnelListQuerySchema,
+  transitionPersonnelEmployment,
+  updateCompensationTermPayloadSchema,
+  updateDraftPersonnelCompensationTerm,
+  updateEmploymentPayloadSchema,
+  updatePersonnelEmployment,
+  updatePersonnelWorker,
+  updateWorkerPayloadSchema,
+  voidPersonnelCompensationTerm,
+  voidPersonnelWorker,
+} from './personnelService';
 import { publicCompanyBrandDefaults } from './companyBrandDefaults';
 import { deriveAccountTypeFromLegacyRole } from './adminAccessModel';
 
@@ -732,6 +764,8 @@ async function hasAcceptedOfferForCurrentTrainee(adminUserId: number) {
 
 type FinanceRouteHandler = (req: any, res: any) => Promise<unknown>;
 const financeIdParamSchema = z.coerce.number().int().positive();
+type PersonnelRouteHandler = (req: any, res: any) => Promise<unknown>;
+const personnelIdParamSchema = z.coerce.number().int().positive();
 
 function financeRoute(handler: FinanceRouteHandler) {
   return async (req: any, res: any) => {
@@ -759,6 +793,34 @@ function handleFinanceRouteError(res: any, error: unknown) {
 
   console.error("[finance]", error);
   return res.status(500).json({ message: "Finance request failed" });
+}
+
+function personnelRoute(handler: PersonnelRouteHandler) {
+  return async (req: any, res: any) => {
+    try {
+      const result = await handler(req, res);
+      if (!res.headersSent) {
+        res.json(result);
+      }
+    } catch (error) {
+      handlePersonnelRouteError(res, error);
+    }
+  };
+}
+
+function handlePersonnelRouteError(res: any, error: unknown) {
+  if (error instanceof PersonnelServiceError) {
+    return res.status(error.statusCode).json({
+      message: error.message,
+      code: error.code,
+    });
+  }
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({ message: "Invalid personnel request" });
+  }
+
+  console.error("[personnel]", error);
+  return res.status(500).json({ message: "Personnel request failed" });
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -2208,6 +2270,277 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch stats" });
     }
   });
+
+  app.get(
+    "/api/admin/personnel/admin-users",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => listPersonnelAdminUsers(
+      personnelRepository,
+      personnelListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/admin-users/:adminUserId",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => getPersonnelForAdminUser(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.adminUserId),
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/legal-entities",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async () => listPersonnelLegalEntities(personnelRepository)),
+  );
+
+  app.get(
+    "/api/admin/personnel/workers",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => listPersonnelWorkers(
+      personnelRepository,
+      personnelListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/workers/:workerId",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => getPersonnelWorker(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.workerId),
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/workers",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req, res) => {
+      const worker = await createPersonnelWorker(personnelRepository, {
+        ...createWorkerPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(worker);
+    }),
+  );
+
+  app.post(
+    "/api/admin/personnel/workers/from-admin-user",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req, res) => {
+      const worker = await createPersonnelWorkerFromAdminUser(personnelRepository, {
+        ...createWorkerFromAdminUserPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(worker);
+    }),
+  );
+
+  app.patch(
+    "/api/admin/personnel/workers/:workerId",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => updatePersonnelWorker(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.workerId),
+      {
+        ...updateWorkerPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/workers/:workerId/archive",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => archivePersonnelWorker(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.workerId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/workers/:workerId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => voidPersonnelWorker(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.workerId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/employments",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => listPersonnelEmployments(
+      personnelRepository,
+      personnelListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/employments",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req, res) => {
+      const employment = await createPersonnelEmployment(personnelRepository, {
+        ...createEmploymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(employment);
+    }),
+  );
+
+  app.patch(
+    "/api/admin/personnel/employments/:employmentId",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => updatePersonnelEmployment(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.employmentId),
+      {
+        ...updateEmploymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/employments/:employmentId/activate",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => transitionPersonnelEmployment(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.employmentId),
+      "activate",
+      { actorAdminId: req.adminUser.id },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/employments/:employmentId/place-on-leave",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => transitionPersonnelEmployment(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.employmentId),
+      "place_on_leave",
+      { actorAdminId: req.adminUser.id },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/employments/:employmentId/return",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => transitionPersonnelEmployment(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.employmentId),
+      "return",
+      { actorAdminId: req.adminUser.id },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/employments/:employmentId/end",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => transitionPersonnelEmployment(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.employmentId),
+      "end",
+      {
+        ...endEmploymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/employments/:employmentId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => transitionPersonnelEmployment(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.employmentId),
+      "void",
+      { actorAdminId: req.adminUser.id },
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/employments/:employmentId/compensation",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => listPersonnelCompensationTerms(
+      personnelRepository,
+      {
+        ...personnelListQuerySchema.parse(req.query),
+        employmentId: personnelIdParamSchema.parse(req.params.employmentId),
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/compensation-terms",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req, res) => {
+      const term = await createPersonnelCompensationTerm(personnelRepository, {
+        ...createCompensationTermPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(term);
+    }),
+  );
+
+  app.patch(
+    "/api/admin/personnel/compensation-terms/:termId",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => updateDraftPersonnelCompensationTerm(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.termId),
+      {
+        ...updateCompensationTermPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/compensation-terms/:termId/activate",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => activatePersonnelCompensationTerm(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.termId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/compensation-terms/:termId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => voidPersonnelCompensationTerm(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.termId),
+      req.adminUser.id,
+    )),
+  );
 
   app.get(
     "/api/admin/waitlist/stats",

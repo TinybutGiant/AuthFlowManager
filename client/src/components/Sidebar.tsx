@@ -14,6 +14,7 @@ import {
   Wallet,
   UserRound,
   Bot,
+  BriefcaseBusiness,
   CalendarDays,
   Building2,
   ChevronDown,
@@ -77,6 +78,12 @@ const menuItems: MenuItem[] = [
         title: "Create Admin",
         href: "/admin-management/create",
         icon: BadgePlus,
+        roles: ['super_admin'],
+      },
+      {
+        title: "Personnel",
+        href: "/admin-management/personnel",
+        icon: BriefcaseBusiness,
         roles: ['super_admin'],
       },
       {
