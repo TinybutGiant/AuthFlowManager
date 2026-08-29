@@ -13,6 +13,7 @@ import {
   boolean,
   date,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -297,6 +298,617 @@ export const adminEngagementDocuments = pgTable("admin_engagement_documents", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+export const legalEntities = pgTable("legal_entities", {
+  id: serial("id").primaryKey(),
+  legalName: text("legal_name").notNull(),
+  entityType: text("entity_type").notNull().default("llc"),
+  formationState: text("formation_state"),
+  maskedTaxIdentifier: text("masked_tax_identifier"),
+  status: text("status").notNull().default("active"),
+  createdBy: integer("created_by").references(() => adminUsers.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const vendors = pgTable(
+  "vendors",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    vendorType: text("vendor_type").notNull().default("other"),
+    status: text("status").notNull().default("active"),
+    website: text("website"),
+    contactEmail: text("contact_email"),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_vendors_status").on(table.status),
+  ],
+);
+
+export const taxAgencies = pgTable(
+  "tax_agencies",
+  {
+    id: serial("id").primaryKey(),
+    agencyCode: text("agency_code").notNull(),
+    name: text("name").notNull(),
+    jurisdictionType: text("jurisdiction_type").notNull(),
+    jurisdictionCode: text("jurisdiction_code").notNull(),
+    status: text("status").notNull().default("active"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_tax_agencies_code_unique").on(table.agencyCode),
+    index("idx_tax_agencies_status").on(table.status),
+  ],
+);
+
+export const workers = pgTable(
+  "workers",
+  {
+    id: serial("id").primaryKey(),
+    adminUserId: integer("admin_user_id").references(() => adminUsers.id),
+    workerCode: text("worker_code").notNull(),
+    legalName: text("legal_name").notNull(),
+    preferredName: text("preferred_name"),
+    personnelEmail: text("personnel_email"),
+    archivedAt: timestamp("archived_at"),
+    voidedAt: timestamp("voided_at"),
+    mergedIntoWorkerId: integer("merged_into_worker_id").references((): AnyPgColumn => workers.id),
+    mergedAt: timestamp("merged_at"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_workers_admin_user_unique").on(table.adminUserId).where(sql`${table.adminUserId} IS NOT NULL`),
+    uniqueIndex("idx_workers_code_unique").on(table.workerCode),
+    index("idx_workers_merged_into_worker").on(table.mergedIntoWorkerId),
+  ],
+);
+
+export const employments = pgTable(
+  "employments",
+  {
+    id: serial("id").primaryKey(),
+    workerId: integer("worker_id").notNull().references(() => workers.id),
+    legalEntityId: integer("legal_entity_id").notNull().references(() => legalEntities.id),
+    employeeClassification: text("employee_classification").notNull().default("employee"),
+    payrollParticipation: text("payroll_participation").notNull().default("not_enrolled"),
+    status: text("status").notNull().default("draft"),
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date"),
+    workLocation: text("work_location"),
+    primaryWorkState: text("primary_work_state"),
+    primaryWorkJurisdiction: text("primary_work_jurisdiction"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_employments_worker").on(table.workerId),
+    index("idx_employments_legal_entity").on(table.legalEntityId),
+    index("idx_employments_status").on(table.status),
+    uniqueIndex("idx_employments_one_current_per_worker_entity")
+      .on(table.workerId, table.legalEntityId)
+      .where(sql`${table.status} IN ('draft', 'active', 'on_leave')`),
+  ],
+);
+
+export const compensationTerms = pgTable(
+  "compensation_terms",
+  {
+    id: serial("id").primaryKey(),
+    employmentId: integer("employment_id").notNull().references(() => employments.id),
+    payBasis: text("pay_basis").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    payFrequency: text("pay_frequency").notNull(),
+    expectedHoursPerWeek: integer("expected_hours_per_week"),
+    effectiveFrom: date("effective_from").notNull(),
+    effectiveTo: date("effective_to"),
+    status: text("status").notNull().default("draft"),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_compensation_terms_employment").on(table.employmentId),
+    index("idx_compensation_terms_effective_dates").on(table.effectiveFrom, table.effectiveTo),
+  ],
+);
+
+export const workAuthorizations = pgTable(
+  "work_authorizations",
+  {
+    id: serial("id").primaryKey(),
+    workerId: integer("worker_id").notNull().references(() => workers.id),
+    employmentId: integer("employment_id").references(() => employments.id),
+    adminEngagementId: integer("admin_engagement_id").references(() => adminEngagements.id),
+    authorizationType: text("authorization_type").notNull(),
+    status: text("status").notNull().default("draft"),
+    validFrom: date("valid_from"),
+    validThrough: date("valid_through"),
+    worksiteScope: text("worksite_scope"),
+    maskedExternalRef: text("masked_external_ref"),
+    restrictedNotes: text("restricted_notes"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    supersedesWorkAuthorizationId: integer("supersedes_work_authorization_id").references((): AnyPgColumn => workAuthorizations.id),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_work_authorizations_worker").on(table.workerId),
+    index("idx_work_authorizations_employment").on(table.employmentId),
+    index("idx_work_authorizations_admin_engagement").on(table.adminEngagementId),
+    index("idx_work_authorizations_valid_through").on(table.validThrough),
+    index("idx_work_authorizations_supersedes").on(table.supersedesWorkAuthorizationId),
+  ],
+);
+
+export const payrollRuns = pgTable(
+  "payroll_runs",
+  {
+    id: serial("id").primaryKey(),
+    legalEntityId: integer("legal_entity_id").notNull().references(() => legalEntities.id),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    payDate: date("pay_date").notNull(),
+    runKind: text("run_kind").notNull().default("regular"),
+    sourceType: text("source_type").notNull().default("manual"),
+    sourceVendorId: integer("source_vendor_id").references(() => vendors.id),
+    correctionOfPayrollRunId: integer("correction_of_payroll_run_id").references((): AnyPgColumn => payrollRuns.id),
+    status: text("status").notNull().default("draft"),
+    finalizedAt: timestamp("finalized_at"),
+    finalizedBy: integer("finalized_by").references(() => adminUsers.id),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_payroll_runs_legal_entity").on(table.legalEntityId),
+    index("idx_payroll_runs_status").on(table.status),
+    index("idx_payroll_runs_correction_of").on(table.correctionOfPayrollRunId),
+  ],
+);
+
+export const payrollRunWorkers = pgTable(
+  "payroll_run_workers",
+  {
+    id: serial("id").primaryKey(),
+    payrollRunId: integer("payroll_run_id").notNull().references(() => payrollRuns.id),
+    workerId: integer("worker_id").notNull().references(() => workers.id),
+    employmentId: integer("employment_id").notNull().references(() => employments.id),
+    currency: text("currency").notNull().default("USD"),
+    grossPayCents: integer("gross_pay_cents").notNull().default(0),
+    employeeTaxCents: integer("employee_tax_cents").notNull().default(0),
+    employerTaxCents: integer("employer_tax_cents").notNull().default(0),
+    deductionCents: integer("deduction_cents").notNull().default(0),
+    netPayCents: integer("net_pay_cents").notNull().default(0),
+    sourceMetadata: jsonb("source_metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_payroll_run_workers_run_employment_unique").on(table.payrollRunId, table.employmentId),
+    index("idx_payroll_run_workers_worker").on(table.workerId),
+    index("idx_payroll_run_workers_employment").on(table.employmentId),
+  ],
+);
+
+export const payrollResultLines = pgTable(
+  "payroll_result_lines",
+  {
+    id: serial("id").primaryKey(),
+    payrollRunWorkerId: integer("payroll_run_worker_id").notNull().references(() => payrollRunWorkers.id),
+    lineCategory: text("line_category").notNull(),
+    lineCode: text("line_code").notNull(),
+    description: text("description"),
+    amountEffect: text("amount_effect").notNull().default("increase"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    quantityMicrounits: integer("quantity_microunits"),
+    rateAmountCents: integer("rate_amount_cents"),
+    jurisdictionCode: text("jurisdiction_code"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_payroll_result_lines_run_worker").on(table.payrollRunWorkerId),
+    index("idx_payroll_result_lines_category").on(table.lineCategory),
+  ],
+);
+
+export const payrollPayments = pgTable(
+  "payroll_payments",
+  {
+    id: serial("id").primaryKey(),
+    payrollRunWorkerId: integer("payroll_run_worker_id").notNull().references(() => payrollRunWorkers.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    paymentDate: date("payment_date"),
+    methodType: text("method_type").notNull(),
+    methodLabel: text("method_label"),
+    institutionName: text("institution_name"),
+    maskedLast4: text("masked_last4"),
+    externalConfirmationRef: text("external_confirmation_ref"),
+    status: text("status").notNull().default("pending"),
+    processedAt: timestamp("processed_at"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_payroll_payments_run_worker").on(table.payrollRunWorkerId),
+    index("idx_payroll_payments_status").on(table.status),
+  ],
+);
+
+export const taxRegistrations = pgTable(
+  "tax_registrations",
+  {
+    id: serial("id").primaryKey(),
+    legalEntityId: integer("legal_entity_id").notNull().references(() => legalEntities.id),
+    taxAgencyId: integer("tax_agency_id").notNull().references(() => taxAgencies.id),
+    taxType: text("tax_type").notNull(),
+    jurisdictionType: text("jurisdiction_type").notNull(),
+    jurisdictionCode: text("jurisdiction_code").notNull(),
+    maskedAccountRef: text("masked_account_ref"),
+    effectiveFrom: date("effective_from"),
+    effectiveTo: date("effective_to"),
+    status: text("status").notNull().default("pending"),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_tax_registrations_legal_entity").on(table.legalEntityId),
+    index("idx_tax_registrations_agency").on(table.taxAgencyId),
+    index("idx_tax_registrations_tax_type").on(table.taxType),
+  ],
+);
+
+export const taxLiabilities = pgTable(
+  "tax_liabilities",
+  {
+    id: serial("id").primaryKey(),
+    taxRegistrationId: integer("tax_registration_id").notNull().references(() => taxRegistrations.id),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    dueDate: date("due_date"),
+    component: text("component").notNull(),
+    amountEffect: text("amount_effect").notNull().default("increase"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    sourceType: text("source_type").notNull().default("manual"),
+    sourceMetadata: jsonb("source_metadata").notNull().default(sql`'{}'::jsonb`),
+    adjustsTaxLiabilityId: integer("adjusts_tax_liability_id").references((): AnyPgColumn => taxLiabilities.id),
+    status: text("status").notNull().default("draft"),
+    recognizedAt: timestamp("recognized_at"),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_tax_liabilities_registration").on(table.taxRegistrationId),
+    index("idx_tax_liabilities_period").on(table.periodStart, table.periodEnd),
+    index("idx_tax_liabilities_adjusts").on(table.adjustsTaxLiabilityId),
+  ],
+);
+
+export const taxAgencyPayments = pgTable(
+  "tax_agency_payments",
+  {
+    id: serial("id").primaryKey(),
+    taxRegistrationId: integer("tax_registration_id").notNull().references(() => taxRegistrations.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    paymentDate: date("payment_date"),
+    methodType: text("method_type").notNull(),
+    methodLabel: text("method_label"),
+    institutionName: text("institution_name"),
+    maskedLast4: text("masked_last4"),
+    confirmationRef: text("confirmation_ref"),
+    status: text("status").notNull().default("pending"),
+    submittedAt: timestamp("submitted_at"),
+    clearedAt: timestamp("cleared_at"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_tax_agency_payments_registration").on(table.taxRegistrationId),
+    index("idx_tax_agency_payments_status").on(table.status),
+  ],
+);
+
+export const taxPaymentAllocations = pgTable(
+  "tax_payment_allocations",
+  {
+    id: serial("id").primaryKey(),
+    taxLiabilityId: integer("tax_liability_id").notNull().references(() => taxLiabilities.id),
+    taxAgencyPaymentId: integer("tax_agency_payment_id").notNull().references(() => taxAgencyPayments.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    status: text("status").notNull().default("active"),
+    reversedAt: timestamp("reversed_at"),
+    reversedBy: integer("reversed_by").references(() => adminUsers.id),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_tax_payment_allocations_active_unique")
+      .on(table.taxLiabilityId, table.taxAgencyPaymentId)
+      .where(sql`${table.status} = 'active'`),
+    index("idx_tax_payment_allocations_liability").on(table.taxLiabilityId),
+    index("idx_tax_payment_allocations_payment").on(table.taxAgencyPaymentId),
+  ],
+);
+
+export const taxFilings = pgTable(
+  "tax_filings",
+  {
+    id: serial("id").primaryKey(),
+    taxRegistrationId: integer("tax_registration_id").notNull().references(() => taxRegistrations.id),
+    filingType: text("filing_type").notNull(),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    dueDate: date("due_date"),
+    filedAt: timestamp("filed_at"),
+    acceptedAt: timestamp("accepted_at"),
+    confirmationRef: text("confirmation_ref"),
+    amendsTaxFilingId: integer("amends_tax_filing_id").references((): AnyPgColumn => taxFilings.id),
+    status: text("status").notNull().default("draft"),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_tax_filings_original_unique")
+      .on(table.taxRegistrationId, table.filingType, table.periodStart, table.periodEnd)
+      .where(sql`${table.amendsTaxFilingId} IS NULL AND ${table.status} <> 'voided'`),
+    index("idx_tax_filings_registration").on(table.taxRegistrationId),
+    index("idx_tax_filings_amends").on(table.amendsTaxFilingId),
+  ],
+);
+
+export const recurringExpenses = pgTable(
+  "recurring_expenses",
+  {
+    id: serial("id").primaryKey(),
+    legalEntityId: integer("legal_entity_id").notNull().references(() => legalEntities.id),
+    vendorId: integer("vendor_id").notNull().references(() => vendors.id),
+    categoryCode: text("category_code").notNull(),
+    cadence: text("cadence").notNull(),
+    expectedAmountCents: integer("expected_amount_cents"),
+    currency: text("currency").notNull().default("USD"),
+    variableAmount: boolean("variable_amount").notNull().default(false),
+    billingDay: integer("billing_day"),
+    nextBillingDate: date("next_billing_date"),
+    renewalDate: date("renewal_date"),
+    autoRenew: boolean("auto_renew").notNull().default(false),
+    trialEndsOn: date("trial_ends_on"),
+    cancellationDate: date("cancellation_date"),
+    status: text("status").notNull().default("draft"),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_recurring_expenses_vendor").on(table.vendorId),
+    index("idx_recurring_expenses_legal_entity").on(table.legalEntityId),
+    index("idx_recurring_expenses_status").on(table.status),
+  ],
+);
+
+export const vendorBills = pgTable(
+  "vendor_bills",
+  {
+    id: serial("id").primaryKey(),
+    legalEntityId: integer("legal_entity_id").notNull().references(() => legalEntities.id),
+    vendorId: integer("vendor_id").notNull().references(() => vendors.id),
+    recurringExpenseId: integer("recurring_expense_id").references(() => recurringExpenses.id),
+    invoiceNumber: text("invoice_number"),
+    billKind: text("bill_kind").notNull().default("invoice"),
+    issueDate: date("issue_date"),
+    dueDate: date("due_date"),
+    servicePeriodStart: date("service_period_start"),
+    servicePeriodEnd: date("service_period_end"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    categoryCode: text("category_code").notNull(),
+    status: text("status").notNull().default("draft"),
+    creditForVendorBillId: integer("credit_for_vendor_bill_id").references((): AnyPgColumn => vendorBills.id),
+    notes: text("notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_vendor_bills_vendor").on(table.vendorId),
+    index("idx_vendor_bills_legal_entity").on(table.legalEntityId),
+    index("idx_vendor_bills_recurring_expense").on(table.recurringExpenseId),
+    index("idx_vendor_bills_status").on(table.status),
+  ],
+);
+
+export const expensePayments = pgTable(
+  "expense_payments",
+  {
+    id: serial("id").primaryKey(),
+    legalEntityId: integer("legal_entity_id").notNull().references(() => legalEntities.id),
+    vendorId: integer("vendor_id").references(() => vendors.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    direction: text("direction").notNull().default("outflow"),
+    paymentDate: date("payment_date"),
+    methodType: text("method_type").notNull(),
+    methodLabel: text("method_label"),
+    institutionName: text("institution_name"),
+    maskedLast4: text("masked_last4"),
+    externalConfirmationRef: text("external_confirmation_ref"),
+    status: text("status").notNull().default("pending"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_expense_payments_vendor").on(table.vendorId),
+    index("idx_expense_payments_legal_entity").on(table.legalEntityId),
+    index("idx_expense_payments_status").on(table.status),
+  ],
+);
+
+export const vendorBillApplications = pgTable(
+  "vendor_bill_applications",
+  {
+    id: serial("id").primaryKey(),
+    targetVendorBillId: integer("target_vendor_bill_id").notNull().references(() => vendorBills.id),
+    expensePaymentId: integer("expense_payment_id").references(() => expensePayments.id),
+    creditVendorBillId: integer("credit_vendor_bill_id").references(() => vendorBills.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    status: text("status").notNull().default("active"),
+    reversedAt: timestamp("reversed_at"),
+    reversedBy: integer("reversed_by").references(() => adminUsers.id),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_vendor_bill_payment_applications_active_unique")
+      .on(table.targetVendorBillId, table.expensePaymentId)
+      .where(sql`${table.status} = 'active' AND ${table.expensePaymentId} IS NOT NULL`),
+    uniqueIndex("idx_vendor_bill_credit_applications_active_unique")
+      .on(table.targetVendorBillId, table.creditVendorBillId)
+      .where(sql`${table.status} = 'active' AND ${table.creditVendorBillId} IS NOT NULL`),
+    index("idx_vendor_bill_applications_target").on(table.targetVendorBillId),
+    index("idx_vendor_bill_applications_payment").on(table.expensePaymentId),
+    index("idx_vendor_bill_applications_credit").on(table.creditVendorBillId),
+  ],
+);
+
+export const documents = pgTable(
+  "documents",
+  {
+    id: serial("id").primaryKey(),
+    storageProvider: text("storage_provider").notNull().default("r2"),
+    fileKey: text("file_key").notNull(),
+    fileSha256: text("file_sha256").notNull(),
+    fileContentType: text("file_content_type").notNull(),
+    fileSizeBytes: integer("file_size_bytes").notNull(),
+    originalFilename: text("original_filename"),
+    documentType: text("document_type").notNull(),
+    sensitivityClass: text("sensitivity_class").notNull(),
+    status: text("status").notNull().default("active"),
+    voidedAt: timestamp("voided_at"),
+    voidedBy: integer("voided_by").references(() => adminUsers.id),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_documents_file_key_unique").on(table.fileKey),
+    index("idx_documents_sha256").on(table.fileSha256),
+    index("idx_documents_sensitivity").on(table.sensitivityClass),
+  ],
+);
+
+export const documentLinks = pgTable(
+  "document_links",
+  {
+    id: serial("id").primaryKey(),
+    documentId: integer("document_id").notNull().references(() => documents.id),
+    entityType: text("entity_type").notNull(),
+    entityId: integer("entity_id").notNull(),
+    linkType: text("link_type").notNull(),
+    requiredSensitivityClass: text("required_sensitivity_class").notNull(),
+    status: text("status").notNull().default("active"),
+    voidedAt: timestamp("voided_at"),
+    voidedBy: integer("voided_by").references(() => adminUsers.id),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_document_links_active_unique")
+      .on(table.documentId, table.entityType, table.entityId, table.linkType)
+      .where(sql`${table.status} = 'active'`),
+    index("idx_document_links_entity").on(table.entityType, table.entityId),
+  ],
+);
+
+export const externalRecordRefs = pgTable(
+  "external_record_refs",
+  {
+    id: serial("id").primaryKey(),
+    entityType: text("entity_type").notNull(),
+    entityId: integer("entity_id").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceVendorId: integer("source_vendor_id").references(() => vendors.id),
+    sourceNamespace: text("source_namespace").notNull().default("default"),
+    externalRecordType: text("external_record_type").notNull(),
+    externalRecordId: text("external_record_id").notNull(),
+    importedAt: timestamp("imported_at"),
+    payloadHash: text("payload_hash"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    status: text("status").notNull().default("active"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_external_record_refs_entity").on(table.entityType, table.entityId),
+    index("idx_external_record_refs_vendor").on(table.sourceVendorId),
+  ],
+);
+
+export const reconciliationExceptions = pgTable(
+  "reconciliation_exceptions",
+  {
+    id: serial("id").primaryKey(),
+    domain: text("domain").notNull(),
+    expectedEntityType: text("expected_entity_type"),
+    expectedEntityId: integer("expected_entity_id"),
+    actualEntityType: text("actual_entity_type"),
+    actualEntityId: integer("actual_entity_id"),
+    currency: text("currency"),
+    expectedAmountCents: integer("expected_amount_cents"),
+    actualAmountCents: integer("actual_amount_cents"),
+    differenceAmountCents: integer("difference_amount_cents"),
+    reasonCode: text("reason_code").notNull(),
+    summary: text("summary").notNull(),
+    status: text("status").notNull().default("open"),
+    ownerAdminId: integer("owner_admin_id").references(() => adminUsers.id),
+    resolvedAt: timestamp("resolved_at"),
+    resolvedBy: integer("resolved_by").references(() => adminUsers.id),
+    resolutionNotes: text("resolution_notes"),
+    createdBy: integer("created_by").references(() => adminUsers.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_reconciliation_exceptions_expected_entity").on(table.expectedEntityType, table.expectedEntityId),
+    index("idx_reconciliation_exceptions_actual_entity").on(table.actualEntityType, table.actualEntityId),
+    index("idx_reconciliation_exceptions_status").on(table.status),
+    index("idx_reconciliation_exceptions_domain").on(table.domain),
+  ],
+);
 
 // Relations
 export const adminUsersRelations = relations(adminUsers, ({ one, many }) => ({
@@ -586,6 +1198,150 @@ export const insertAdminEngagementDocumentSchema = createInsertSchema(adminEngag
   updatedAt: true,
 });
 
+export const insertLegalEntitySchema = createInsertSchema(legalEntities).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertWorkerSchema = createInsertSchema(workers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertEmploymentSchema = createInsertSchema(employments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertCompensationTermSchema = createInsertSchema(compensationTerms).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertWorkAuthorizationSchema = createInsertSchema(workAuthorizations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertPayrollRunWorkerSchema = createInsertSchema(payrollRunWorkers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertPayrollResultLineSchema = createInsertSchema(payrollResultLines).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertPayrollPaymentSchema = createInsertSchema(payrollPayments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTaxAgencySchema = createInsertSchema(taxAgencies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTaxRegistrationSchema = createInsertSchema(taxRegistrations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTaxLiabilitySchema = createInsertSchema(taxLiabilities).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTaxAgencyPaymentSchema = createInsertSchema(taxAgencyPayments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTaxPaymentAllocationSchema = createInsertSchema(taxPaymentAllocations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTaxFilingSchema = createInsertSchema(taxFilings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertVendorSchema = createInsertSchema(vendors).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertRecurringExpenseSchema = createInsertSchema(recurringExpenses).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertVendorBillSchema = createInsertSchema(vendorBills).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertExpensePaymentSchema = createInsertSchema(expensePayments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertVendorBillApplicationSchema = createInsertSchema(vendorBillApplications).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertDocumentSchema = createInsertSchema(documents).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertDocumentLinkSchema = createInsertSchema(documentLinks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertExternalRecordRefSchema = createInsertSchema(externalRecordRefs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertReconciliationExceptionSchema = createInsertSchema(reconciliationExceptions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Types
 export type AdminUser = typeof adminUsers.$inferSelect;
 export type InsertAdminUser = z.infer<typeof insertAdminUserSchema>;
@@ -609,6 +1365,54 @@ export type AdminDocumentTemplate = typeof adminDocumentTemplates.$inferSelect;
 export type InsertAdminDocumentTemplate = z.infer<typeof insertAdminDocumentTemplateSchema>;
 export type AdminEngagementDocument = typeof adminEngagementDocuments.$inferSelect;
 export type InsertAdminEngagementDocument = z.infer<typeof insertAdminEngagementDocumentSchema>;
+export type LegalEntity = typeof legalEntities.$inferSelect;
+export type InsertLegalEntity = z.infer<typeof insertLegalEntitySchema>;
+export type Worker = typeof workers.$inferSelect;
+export type InsertWorker = z.infer<typeof insertWorkerSchema>;
+export type Employment = typeof employments.$inferSelect;
+export type InsertEmployment = z.infer<typeof insertEmploymentSchema>;
+export type CompensationTerm = typeof compensationTerms.$inferSelect;
+export type InsertCompensationTerm = z.infer<typeof insertCompensationTermSchema>;
+export type WorkAuthorization = typeof workAuthorizations.$inferSelect;
+export type InsertWorkAuthorization = z.infer<typeof insertWorkAuthorizationSchema>;
+export type PayrollRun = typeof payrollRuns.$inferSelect;
+export type InsertPayrollRun = z.infer<typeof insertPayrollRunSchema>;
+export type PayrollRunWorker = typeof payrollRunWorkers.$inferSelect;
+export type InsertPayrollRunWorker = z.infer<typeof insertPayrollRunWorkerSchema>;
+export type PayrollResultLine = typeof payrollResultLines.$inferSelect;
+export type InsertPayrollResultLine = z.infer<typeof insertPayrollResultLineSchema>;
+export type PayrollPayment = typeof payrollPayments.$inferSelect;
+export type InsertPayrollPayment = z.infer<typeof insertPayrollPaymentSchema>;
+export type TaxAgency = typeof taxAgencies.$inferSelect;
+export type InsertTaxAgency = z.infer<typeof insertTaxAgencySchema>;
+export type TaxRegistration = typeof taxRegistrations.$inferSelect;
+export type InsertTaxRegistration = z.infer<typeof insertTaxRegistrationSchema>;
+export type TaxLiability = typeof taxLiabilities.$inferSelect;
+export type InsertTaxLiability = z.infer<typeof insertTaxLiabilitySchema>;
+export type TaxAgencyPayment = typeof taxAgencyPayments.$inferSelect;
+export type InsertTaxAgencyPayment = z.infer<typeof insertTaxAgencyPaymentSchema>;
+export type TaxPaymentAllocation = typeof taxPaymentAllocations.$inferSelect;
+export type InsertTaxPaymentAllocation = z.infer<typeof insertTaxPaymentAllocationSchema>;
+export type TaxFiling = typeof taxFilings.$inferSelect;
+export type InsertTaxFiling = z.infer<typeof insertTaxFilingSchema>;
+export type Vendor = typeof vendors.$inferSelect;
+export type InsertVendor = z.infer<typeof insertVendorSchema>;
+export type RecurringExpense = typeof recurringExpenses.$inferSelect;
+export type InsertRecurringExpense = z.infer<typeof insertRecurringExpenseSchema>;
+export type VendorBill = typeof vendorBills.$inferSelect;
+export type InsertVendorBill = z.infer<typeof insertVendorBillSchema>;
+export type ExpensePayment = typeof expensePayments.$inferSelect;
+export type InsertExpensePayment = z.infer<typeof insertExpensePaymentSchema>;
+export type VendorBillApplication = typeof vendorBillApplications.$inferSelect;
+export type InsertVendorBillApplication = z.infer<typeof insertVendorBillApplicationSchema>;
+export type Document = typeof documents.$inferSelect;
+export type InsertDocument = z.infer<typeof insertDocumentSchema>;
+export type DocumentLink = typeof documentLinks.$inferSelect;
+export type InsertDocumentLink = z.infer<typeof insertDocumentLinkSchema>;
+export type ExternalRecordRef = typeof externalRecordRefs.$inferSelect;
+export type InsertExternalRecordRef = z.infer<typeof insertExternalRecordRefSchema>;
+export type ReconciliationException = typeof reconciliationExceptions.$inferSelect;
+export type InsertReconciliationException = z.infer<typeof insertReconciliationExceptionSchema>;
 
 export type AdminRole = 'super_admin' | 'admin_finance' | 'admin_verifier' | 'admin_support' | 'trainee_access';
 export type AdminAccountType = 'admin_staff' | 'trainee' | 'contractor' | 'employee' | 'advisor';
@@ -676,3 +1480,79 @@ export type AdminEngagementDocumentStatus =
   | 'voided';
 export type AdminDocumentTemplateStatus = 'draft' | 'active' | 'archived';
 export type AdminDocumentContentFormat = 'plain_text';
+export type LegalEntityStatus = 'active' | 'inactive';
+export type WorkerLifecycleState = 'normal' | 'archived' | 'merged' | 'voided';
+export type EmploymentStatus = 'draft' | 'active' | 'on_leave' | 'ended' | 'voided';
+export type EmployeeClassification = 'employee' | 'paid_intern' | 'other_employee';
+export type PayrollParticipation = 'not_enrolled' | 'eligible' | 'active' | 'inactive';
+export type CompensationPayBasis = 'hourly' | 'salary' | 'stipend' | 'other';
+export type CompensationStatus = 'draft' | 'active' | 'superseded' | 'voided';
+export type WorkerWorkAuthorizationType = 'stem_opt' | 'h1b' | 'other_employment_authorized' | 'other';
+export type WorkerWorkAuthorizationStatus = 'draft' | 'active' | 'superseded' | 'voided';
+export type PayrollRunKind = 'regular' | 'off_cycle' | 'bonus' | 'correction' | 'adjustment';
+export type FinanceSourceType = 'provider' | 'csv_import' | 'manual' | 'internal';
+export type PayrollRunStatus = 'draft' | 'reviewed' | 'finalized';
+export type AmountEffect = 'increase' | 'decrease';
+export type PayrollResultLineCategory =
+  | 'earning'
+  | 'deduction'
+  | 'employee_tax'
+  | 'employer_tax'
+  | 'reimbursement'
+  | 'other';
+export type PaymentProcessingStatus =
+  | 'pending'
+  | 'sent'
+  | 'submitted'
+  | 'posted'
+  | 'cleared'
+  | 'failed'
+  | 'reversed'
+  | 'voided';
+export type TaxAgencyStatus = 'active' | 'inactive';
+export type TaxRegistrationStatus = 'pending' | 'active' | 'inactive' | 'closed';
+export type TaxLiabilityStatus = 'draft' | 'recognized' | 'disputed' | 'voided';
+export type TaxFilingStatus = 'draft' | 'ready' | 'filed' | 'accepted' | 'rejected' | 'voided';
+export type VendorStatus = 'active' | 'inactive' | 'archived';
+export type RecurringExpenseStatus = 'draft' | 'trial' | 'active' | 'paused' | 'cancelled' | 'expired';
+export type VendorBillStatus = 'draft' | 'received' | 'approved' | 'disputed' | 'voided';
+export type VendorBillKind = 'invoice' | 'bill' | 'credit_memo' | 'statement' | 'other';
+export type AllocationStatus = 'active' | 'reversed' | 'voided';
+export type DocumentStatus = 'active' | 'voided';
+export type DocumentSensitivityClass =
+  | 'ordinary_finance'
+  | 'employment'
+  | 'payroll'
+  | 'tax'
+  | 'work_authorization';
+export type ExternalRecordRefStatus = 'active' | 'superseded' | 'voided';
+export type ReconciliationDomain = 'payroll' | 'tax' | 'ap' | 'documents' | 'provider_sync';
+export type ReconciliationExceptionStatus =
+  | 'open'
+  | 'investigating'
+  | 'resolved'
+  | 'waived'
+  | 'voided';
+export type FinanceEntityType =
+  | 'legal_entities'
+  | 'workers'
+  | 'employments'
+  | 'compensation_terms'
+  | 'work_authorizations'
+  | 'payroll_runs'
+  | 'payroll_run_workers'
+  | 'payroll_result_lines'
+  | 'payroll_payments'
+  | 'tax_agencies'
+  | 'tax_registrations'
+  | 'tax_liabilities'
+  | 'tax_agency_payments'
+  | 'tax_payment_allocations'
+  | 'tax_filings'
+  | 'vendors'
+  | 'recurring_expenses'
+  | 'vendor_bills'
+  | 'expense_payments'
+  | 'vendor_bill_applications'
+  | 'documents'
+  | 'reconciliation_exceptions';
