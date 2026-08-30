@@ -55,8 +55,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
+import FinanceTaxPanel from "./FinanceTaxPanel";
 
-type FinanceSection = "overview" | "expenses" | "subscriptions" | "vendors" | "payroll";
+type FinanceSection = "overview" | "expenses" | "subscriptions" | "vendors" | "payroll" | "tax";
 
 type CurrencyAmount = {
   currency: string;
@@ -540,7 +541,7 @@ type FinanceMutationRequest = {
   onSuccess?: () => void;
 };
 
-const sections: FinanceSection[] = ["overview", "expenses", "subscriptions", "vendors", "payroll"];
+const sections: FinanceSection[] = ["overview", "expenses", "subscriptions", "vendors", "payroll", "tax"];
 const financeRolesQueryPrefix = "/api/admin/finance";
 const noSelection = "__none__";
 
@@ -601,7 +602,7 @@ export default function FinanceManagement() {
   const { user } = useAuth();
   const isSuperAdmin = (user as { role?: string } | undefined)?.role === "super_admin";
   const requestedSection = sectionFromLocation(location);
-  const selectedSection = requestedSection === "payroll" && !isSuperAdmin ? "overview" : requestedSection;
+  const selectedSection = (requestedSection === "payroll" || requestedSection === "tax") && !isSuperAdmin ? "overview" : requestedSection;
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [vendorDialog, setVendorDialog] = React.useState<VendorDialogState | null>(null);
@@ -1230,12 +1231,13 @@ export default function FinanceManagement() {
         }}
         className="space-y-6"
       >
-        <TabsList className={`grid w-full grid-cols-2 ${isSuperAdmin ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
+        <TabsList className={`grid w-full grid-cols-2 ${isSuperAdmin ? "lg:grid-cols-6" : "lg:grid-cols-4"}`}>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="expenses">Expenses</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
           <TabsTrigger value="vendors">Vendors</TabsTrigger>
           {isSuperAdmin && <TabsTrigger value="payroll">Payroll</TabsTrigger>}
+          {isSuperAdmin && <TabsTrigger value="tax">Tax</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -1306,6 +1308,12 @@ export default function FinanceManagement() {
               onRecordPayment={openRecordPayrollPayment}
               onPaymentTransition={transitionPayrollPaymentRecord}
             />
+          </TabsContent>
+        )}
+
+        {isSuperAdmin && (
+          <TabsContent value="tax" className="space-y-6">
+            <FinanceTaxPanel />
           </TabsContent>
         )}
       </Tabs>

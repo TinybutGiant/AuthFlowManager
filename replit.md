@@ -1,6 +1,6 @@
 # Overview
 
-This is a role-based admin panel application built with React, Express, and PostgreSQL. The system provides admin user management with hierarchical admin roles (super_admin, admin_finance, admin_verifier, admin_support), approval workflows for admin operations, internal Finance/AP tools for small-company vendor, subscription, bill, payment application, and reconciliation workflows, super-admin-only Payroll record/control-plane tools, and internal Personnel tools for worker, employment, compensation, payroll participation setup, and Work Authorization tracking. Authentication uses JWT bearer tokens issued by the app.
+This is a role-based admin panel application built with React, Express, and PostgreSQL. The system provides admin user management with hierarchical admin roles (super_admin, admin_finance, admin_verifier, admin_support), approval workflows for admin operations, internal Finance/AP tools for small-company vendor, subscription, bill, payment application, and reconciliation workflows, super-admin-only Payroll and Tax record/control-plane tools, and internal Personnel tools for worker, employment, compensation, payroll participation setup, and Work Authorization tracking. Authentication uses JWT bearer tokens issued by the app.
 
 # User Preferences
 
@@ -27,7 +27,7 @@ Preferred communication style: Simple, everyday language.
 - **Schema Structure**: 
   - `adminUsers` table for admin-specific data with role and status fields
   - `adminUserApprovals` table for approval workflow management
-  - Finance foundation tables for legal entities, vendors, recurring expenses, vendor bills, expense payments, bill applications, documents, external references, finance audit events, payroll audit events, and reconciliation exceptions
+  - Finance foundation tables for legal entities, vendors, recurring expenses, vendor bills, expense payments, bill applications, documents, external references, finance audit events, payroll audit events, tax audit events, and reconciliation exceptions
   - Personnel foundation tables for workers, employments, compensation terms, work authorizations, and personnel audit events
 - **Role System**: Enum-based admin roles with hierarchical permissions
 
@@ -44,7 +44,9 @@ Preferred communication style: Simple, everyday language.
 - **Request/Response**: JSON-based communication with TypeScript interfaces
 - **Internal Finance/AP Routes**: Admin Finance APIs expose vendors, subscriptions, bills, payments, bill applications, and AP-only reconciliation exceptions through deliberate DTOs.
 - **Internal Payroll Routes**: Super-admin-only Payroll APIs expose payroll runs, worker result snapshots, controlled result lines, employee payment records, lifecycle transitions, correction runs, and external references. Payroll stores externally calculated or manually entered payroll facts; correction runs are replacement snapshots in a single successor chain, overview totals use effective finalized snapshots, and settled paid amounts come from cleared payments only. Payroll does not calculate payroll, execute ACH, or generate Tax-domain liabilities/payments/filings.
-- **Internal Personnel Routes**: Admin Personnel APIs expose workers, employment records, compensation terms, payroll participation setup, and super-admin-only Work Authorization tracking through deliberate DTOs. Tax write APIs are not exposed yet.
+- **Internal Personnel Routes**: Admin Personnel APIs expose workers, employment records, compensation terms, payroll participation setup, and super-admin-only Work Authorization tracking through deliberate DTOs.
+- **Internal Tax Routes**: Super-admin-only Tax APIs expose agencies, legal-entity registrations, recognized liability facts, adjustments, filings, amendments, and external references through deliberate DTOs. Tax 4A does not expose tax payment/allocation mutations, calculate payroll tax, generate liabilities from Payroll, or file returns electronically.
+- **Migration Gate**: Local commits may be made after static and unit verification, but the migration chain through the latest Finance/Personnel/Payroll/Tax migration must be applied on disposable or staging PostgreSQL before any production migration.
 
 ## Frontend-Backend Integration
 - **API Client**: Custom fetch wrapper with bearer-token handling and error management

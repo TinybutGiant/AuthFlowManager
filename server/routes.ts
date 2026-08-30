@@ -160,6 +160,52 @@ import {
   updatePayrollRunWorker,
   updatePayrollRunWorkerPayloadSchema,
 } from './payrollService';
+import { taxRepository } from './taxRepository';
+import {
+  TaxServiceError,
+  createTaxAgency,
+  createTaxAgencyPayloadSchema,
+  createTaxExternalRecordRef,
+  createTaxExternalRefPayloadSchema,
+  createTaxFiling,
+  createTaxFilingAmendment,
+  createTaxFilingAmendmentPayloadSchema,
+  createTaxFilingPayloadSchema,
+  createTaxLiability,
+  createTaxLiabilityAdjustment,
+  createTaxLiabilityAdjustmentPayloadSchema,
+  createTaxLiabilityPayloadSchema,
+  createTaxRegistration,
+  createTaxRegistrationPayloadSchema,
+  getTaxAgency,
+  getTaxFiling,
+  getTaxLiability,
+  getTaxOverview,
+  getTaxRegistration,
+  listTaxAgencies,
+  listTaxFilings,
+  listTaxLegalEntities,
+  listTaxLiabilities,
+  listTaxRegistrations,
+  taxAgencyListQuerySchema,
+  taxFilingListQuerySchema,
+  taxFilingTransitionPayloadSchema,
+  taxLiabilityListQuerySchema,
+  taxLiabilityTransitionPayloadSchema,
+  taxRegistrationListQuerySchema,
+  taxRegistrationTransitionPayloadSchema,
+  transitionTaxFiling,
+  transitionTaxLiability,
+  transitionTaxRegistration,
+  updateTaxAgency,
+  updateTaxAgencyPayloadSchema,
+  updateTaxFiling,
+  updateTaxFilingPayloadSchema,
+  updateTaxLiability,
+  updateTaxLiabilityPayloadSchema,
+  updateTaxRegistration,
+  updateTaxRegistrationPayloadSchema,
+} from './taxService';
 import { personnelRepository } from './personnelRepository';
 import {
   PersonnelServiceError,
@@ -817,6 +863,8 @@ type FinanceRouteHandler = (req: any, res: any) => Promise<unknown>;
 const financeIdParamSchema = z.coerce.number().int().positive();
 type PayrollRouteHandler = (req: any, res: any) => Promise<unknown>;
 const payrollIdParamSchema = z.coerce.number().int().positive();
+type TaxRouteHandler = (req: any, res: any) => Promise<unknown>;
+const taxIdParamSchema = z.coerce.number().int().positive();
 type PersonnelRouteHandler = (req: any, res: any) => Promise<unknown>;
 const personnelIdParamSchema = z.coerce.number().int().positive();
 
@@ -874,6 +922,34 @@ function handlePayrollRouteError(res: any, error: unknown) {
 
   console.error("[payroll]", error);
   return res.status(500).json({ message: "Payroll request failed" });
+}
+
+function taxRoute(handler: TaxRouteHandler) {
+  return async (req: any, res: any) => {
+    try {
+      const result = await handler(req, res);
+      if (!res.headersSent) {
+        res.json(result);
+      }
+    } catch (error) {
+      handleTaxRouteError(res, error);
+    }
+  };
+}
+
+function handleTaxRouteError(res: any, error: unknown) {
+  if (error instanceof TaxServiceError) {
+    return res.status(error.statusCode).json({
+      message: error.message,
+      code: error.code,
+    });
+  }
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({ message: "Invalid tax request" });
+  }
+
+  console.error("[tax]", error);
+  return res.status(500).json({ message: "Tax request failed" });
 }
 
 function personnelRoute(handler: PersonnelRouteHandler) {
@@ -3096,6 +3172,403 @@ export async function registerRoutes(app: Express): Promise<Server> {
     payrollRoute(async (req, res) => {
       const ref = await createPayrollExternalRecordRef(payrollRepository, {
         ...createPayrollExternalRefPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(ref);
+    }),
+  );
+
+  // Finance / Tax routes (tax control plane, super-admin only)
+  app.get(
+    "/api/admin/finance/tax",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async () => getTaxOverview(taxRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/overview",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async () => getTaxOverview(taxRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/legal-entities",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async () => listTaxLegalEntities(taxRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/agencies",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => listTaxAgencies(
+      taxRepository,
+      taxAgencyListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/agencies",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const agency = await createTaxAgency(taxRepository, {
+        ...createTaxAgencyPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(agency);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/agencies/:agencyId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => getTaxAgency(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.agencyId),
+    )),
+  );
+
+  app.patch(
+    "/api/admin/finance/tax/agencies/:agencyId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => updateTaxAgency(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.agencyId),
+      {
+        ...updateTaxAgencyPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/registrations",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => listTaxRegistrations(
+      taxRepository,
+      taxRegistrationListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/registrations",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const registration = await createTaxRegistration(taxRepository, {
+        ...createTaxRegistrationPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(registration);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/registrations/:registrationId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => getTaxRegistration(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.registrationId),
+    )),
+  );
+
+  app.patch(
+    "/api/admin/finance/tax/registrations/:registrationId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => updateTaxRegistration(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.registrationId),
+      {
+        ...updateTaxRegistrationPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/registrations/:registrationId/activate",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxRegistration(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.registrationId),
+      {
+        ...taxRegistrationTransitionPayloadSchema.parse({ ...req.body, status: "active" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/registrations/:registrationId/deactivate",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxRegistration(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.registrationId),
+      {
+        ...taxRegistrationTransitionPayloadSchema.parse({ ...req.body, status: "inactive" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/registrations/:registrationId/close",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxRegistration(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.registrationId),
+      {
+        ...taxRegistrationTransitionPayloadSchema.parse({ ...req.body, status: "closed" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/liabilities",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => listTaxLiabilities(
+      taxRepository,
+      taxLiabilityListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/liabilities",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const liability = await createTaxLiability(taxRepository, {
+        ...createTaxLiabilityPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(liability);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/liabilities/:liabilityId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => getTaxLiability(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.liabilityId),
+    )),
+  );
+
+  app.patch(
+    "/api/admin/finance/tax/liabilities/:liabilityId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => updateTaxLiability(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.liabilityId),
+      {
+        ...updateTaxLiabilityPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/liabilities/:liabilityId/recognize",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxLiability(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.liabilityId),
+      {
+        ...taxLiabilityTransitionPayloadSchema.parse({ ...req.body, status: "recognized" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/liabilities/:liabilityId/dispute",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxLiability(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.liabilityId),
+      {
+        ...taxLiabilityTransitionPayloadSchema.parse({ ...req.body, status: "disputed" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/liabilities/:liabilityId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxLiability(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.liabilityId),
+      {
+        ...taxLiabilityTransitionPayloadSchema.parse({ ...req.body, status: "voided" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/liabilities/:liabilityId/adjustments",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const liability = await createTaxLiabilityAdjustment(
+        taxRepository,
+        taxIdParamSchema.parse(req.params.liabilityId),
+        {
+          ...createTaxLiabilityAdjustmentPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      res.status(201).json(liability);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/filings",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => listTaxFilings(
+      taxRepository,
+      taxFilingListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/filings",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const filing = await createTaxFiling(taxRepository, {
+        ...createTaxFilingPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(filing);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/filings/:filingId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => getTaxFiling(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.filingId),
+    )),
+  );
+
+  app.patch(
+    "/api/admin/finance/tax/filings/:filingId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => updateTaxFiling(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.filingId),
+      {
+        ...updateTaxFilingPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/filings/:filingId/ready",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxFiling(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.filingId),
+      {
+        ...taxFilingTransitionPayloadSchema.parse({ ...req.body, status: "ready" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/filings/:filingId/file",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxFiling(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.filingId),
+      {
+        ...taxFilingTransitionPayloadSchema.parse({ ...req.body, status: "filed" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/filings/:filingId/accept",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxFiling(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.filingId),
+      {
+        ...taxFilingTransitionPayloadSchema.parse({ ...req.body, status: "accepted" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/filings/:filingId/reject",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxFiling(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.filingId),
+      {
+        ...taxFilingTransitionPayloadSchema.parse({ ...req.body, status: "rejected" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/filings/:filingId/amendments",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const filing = await createTaxFilingAmendment(
+        taxRepository,
+        taxIdParamSchema.parse(req.params.filingId),
+        {
+          ...createTaxFilingAmendmentPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      res.status(201).json(filing);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/external-record-refs",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const ref = await createTaxExternalRecordRef(taxRepository, {
+        ...createTaxExternalRefPayloadSchema.parse(req.body),
         actorAdminId: req.adminUser.id,
       });
       res.status(201).json(ref);

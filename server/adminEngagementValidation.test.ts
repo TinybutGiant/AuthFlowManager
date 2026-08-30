@@ -764,7 +764,7 @@ test("Phase C.2 admin operations use explicit access groups without global super
   assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/bills/:billId", financeRoles);
   assertFinanceMutationRouteUsesActor(routesSource, "patch", "/api/admin/finance/payments/:paymentId", financeRoles);
   assert.match(routesSource, /return res\.status\(400\)\.json\(\{ message: "Invalid finance request" \}\);/);
-  assert.doesNotMatch(routesSource, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:tax|documents|bank|provider)/);
+  assert.doesNotMatch(routesSource, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:documents|bank|provider)/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/verifier", requireAuth, requireRole\(\['super_admin', 'admin_verifier'\]\)/);
   assert.match(routesSource, /app\.get\("\/api\/admin\/support", requireAuth, requireRole\(\['super_admin', 'admin_support'\]\)/);
   assert.match(routesSource, /"\/api\/localguide\/admin\/cancellation-requests"[\s\S]*requireRole\(\["super_admin", "admin_finance"\]\)/);
@@ -1068,7 +1068,7 @@ test("backend sensitive routes and engagement management APIs do not allow train
   assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/subscriptions/:subscriptionId", financeRoles);
   assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/bills/:billId", financeRoles);
   assertFinanceMutationRouteUsesActor(source, "patch", "/api/admin/finance/payments/:paymentId", financeRoles);
-  assert.doesNotMatch(source, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:tax|documents|bank|provider)/);
+  assert.doesNotMatch(source, /app\.(post|patch|put|delete)\(\s*["`]\/api\/admin\/finance\/(?:documents|bank|provider)/);
 });
 
 test("offer letter APIs use admin or trainee scoped permissions", async () => {
