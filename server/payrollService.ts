@@ -1383,7 +1383,14 @@ function paymentDateForTransition(existing: PayrollPayment, input: PayrollPaymen
   return input.paymentDate;
 }
 
-async function assertExternalRefTarget(repo: PayrollRepository, entityType: PayrollExternalRefEntityType, entityId: number) {
+function assertPayrollExternalRefEntityType(entityType: string): asserts entityType is PayrollExternalRefEntityType {
+  if (!PAYROLL_EXTERNAL_REF_ENTITY_TYPES.includes(entityType as PayrollExternalRefEntityType)) {
+    fail(400, "PAYROLL_EXTERNAL_REF_ENTITY_TYPE_UNSUPPORTED", "Unsupported payroll external reference entity type.");
+  }
+}
+
+async function assertExternalRefTarget(repo: PayrollRepository, entityType: string, entityId: number) {
+  assertPayrollExternalRefEntityType(entityType);
   switch (entityType) {
     case "payroll_runs":
       assertRunExists(await repo.getPayrollRun(entityId), entityId);

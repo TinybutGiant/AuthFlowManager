@@ -1992,7 +1992,14 @@ async function validateTaxReconciliationEntityTargets(
   }
 }
 
-async function assertExternalRefTarget(repo: TaxRepository, entityType: TaxExternalRefEntityType, entityId: number) {
+function assertTaxExternalRefEntityType(entityType: string): asserts entityType is TaxExternalRefEntityType {
+  if (!TAX_EXTERNAL_REF_ENTITY_TYPES.includes(entityType as TaxExternalRefEntityType)) {
+    fail(400, "TAX_EXTERNAL_REF_ENTITY_TYPE_UNSUPPORTED", "Unsupported tax external reference entity type.");
+  }
+}
+
+async function assertExternalRefTarget(repo: TaxRepository, entityType: string, entityId: number) {
+  assertTaxExternalRefEntityType(entityType);
   switch (entityType) {
     case "tax_agencies":
       assertTaxAgencyExists(await repo.getTaxAgency(entityId), entityId);
