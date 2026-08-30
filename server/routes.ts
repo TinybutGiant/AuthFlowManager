@@ -163,7 +163,10 @@ import {
 import { taxRepository } from './taxRepository';
 import {
   TaxServiceError,
+  applyTaxPaymentAllocation,
+  applyTaxPaymentAllocationPayloadSchema,
   createTaxAgency,
+  createTaxAgencyPaymentPayloadSchema,
   createTaxAgencyPayloadSchema,
   createTaxExternalRecordRef,
   createTaxExternalRefPayloadSchema,
@@ -175,29 +178,47 @@ import {
   createTaxLiabilityAdjustment,
   createTaxLiabilityAdjustmentPayloadSchema,
   createTaxLiabilityPayloadSchema,
+  createTaxReconciliationException,
+  createTaxReconciliationExceptionPayloadSchema,
   createTaxRegistration,
   createTaxRegistrationPayloadSchema,
+  getTaxAgencyPayment,
   getTaxAgency,
   getTaxFiling,
   getTaxLiability,
   getTaxOverview,
   getTaxRegistration,
+  listTaxAgencyPayments,
   listTaxAgencies,
   listTaxFilings,
   listTaxLegalEntities,
   listTaxLiabilities,
+  listTaxPaymentAllocations,
+  listTaxReconciliationExceptions,
   listTaxRegistrations,
+  recordTaxAgencyPayment,
+  reverseTaxAgencyPayment,
+  reverseTaxPaymentAllocation,
   taxAgencyListQuerySchema,
+  taxAgencyPaymentListQuerySchema,
+  taxAgencyPaymentTransitionPayloadSchema,
   taxFilingListQuerySchema,
   taxFilingTransitionPayloadSchema,
   taxLiabilityListQuerySchema,
   taxLiabilityTransitionPayloadSchema,
+  taxPaymentAllocationListQuerySchema,
+  taxReconciliationExceptionTransitionPayloadSchema,
+  taxReconciliationListQuerySchema,
   taxRegistrationListQuerySchema,
   taxRegistrationTransitionPayloadSchema,
+  transitionTaxAgencyPayment,
   transitionTaxFiling,
   transitionTaxLiability,
+  transitionTaxReconciliationException,
   transitionTaxRegistration,
   updateTaxAgency,
+  updateTaxAgencyPayment,
+  updateTaxAgencyPaymentPayloadSchema,
   updateTaxAgencyPayloadSchema,
   updateTaxFiling,
   updateTaxFilingPayloadSchema,
@@ -3443,6 +3464,154 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   app.get(
+    "/api/admin/finance/tax/payments",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => listTaxAgencyPayments(
+      taxRepository,
+      taxAgencyPaymentListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payments",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const payment = await recordTaxAgencyPayment(taxRepository, {
+        ...createTaxAgencyPaymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(payment);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/payments/:paymentId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => getTaxAgencyPayment(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.paymentId),
+    )),
+  );
+
+  app.patch(
+    "/api/admin/finance/tax/payments/:paymentId",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => updateTaxAgencyPayment(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.paymentId),
+      {
+        ...updateTaxAgencyPaymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payments/:paymentId/submit",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxAgencyPayment(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.paymentId),
+      {
+        ...taxAgencyPaymentTransitionPayloadSchema.parse({ ...req.body, status: "submitted" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payments/:paymentId/clear",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxAgencyPayment(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.paymentId),
+      {
+        ...taxAgencyPaymentTransitionPayloadSchema.parse({ ...req.body, status: "cleared" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payments/:paymentId/fail",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxAgencyPayment(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.paymentId),
+      {
+        ...taxAgencyPaymentTransitionPayloadSchema.parse({ ...req.body, status: "failed" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payments/:paymentId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxAgencyPayment(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.paymentId),
+      {
+        ...taxAgencyPaymentTransitionPayloadSchema.parse({ ...req.body, status: "voided" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payments/:paymentId/reverse",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => reverseTaxAgencyPayment(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.paymentId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/payment-allocations",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => listTaxPaymentAllocations(
+      taxRepository,
+      taxPaymentAllocationListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payment-allocations",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const allocation = await applyTaxPaymentAllocation(taxRepository, {
+        ...applyTaxPaymentAllocationPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(allocation);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/payment-allocations/:allocationId/reverse",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => reverseTaxPaymentAllocation(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.allocationId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.get(
     "/api/admin/finance/tax/filings",
     requireAuth,
     requireRole(['super_admin']),
@@ -3560,6 +3729,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       res.status(201).json(filing);
     }),
+  );
+
+  app.get(
+    "/api/admin/finance/tax/reconciliation-exceptions",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => listTaxReconciliationExceptions(
+      taxRepository,
+      taxReconciliationListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/reconciliation-exceptions",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req, res) => {
+      const exception = await createTaxReconciliationException(taxRepository, {
+        ...createTaxReconciliationExceptionPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(exception);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/reconciliation-exceptions/:exceptionId/investigate",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxReconciliationException(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.exceptionId),
+      "investigate",
+      {
+        ...taxReconciliationExceptionTransitionPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/reconciliation-exceptions/:exceptionId/resolve",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxReconciliationException(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.exceptionId),
+      "resolve",
+      {
+        ...taxReconciliationExceptionTransitionPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/reconciliation-exceptions/:exceptionId/waive",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxReconciliationException(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.exceptionId),
+      "waive",
+      {
+        ...taxReconciliationExceptionTransitionPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/tax/reconciliation-exceptions/:exceptionId/reopen",
+    requireAuth,
+    requireRole(['super_admin']),
+    taxRoute(async (req) => transitionTaxReconciliationException(
+      taxRepository,
+      taxIdParamSchema.parse(req.params.exceptionId),
+      "reopen",
+      {
+        ...taxReconciliationExceptionTransitionPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
   );
 
   app.post(

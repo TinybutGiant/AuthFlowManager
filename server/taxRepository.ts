@@ -1,25 +1,35 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import {
   externalRecordRefs,
+  reconciliationExceptions,
   legalEntities,
   taxAgencies,
+  taxAgencyPayments,
   taxAuditEvents,
   taxFilings,
   taxLiabilities,
+  taxPaymentAllocations,
   taxRegistrations,
   vendors,
+  type FinanceEntityType,
   type InsertExternalRecordRef,
+  type InsertReconciliationException,
   type InsertTaxAgency,
+  type InsertTaxAgencyPayment,
   type InsertTaxAuditEvent,
   type InsertTaxFiling,
   type InsertTaxLiability,
+  type InsertTaxPaymentAllocation,
   type InsertTaxRegistration,
 } from "@shared/schema";
 import { db } from "./db";
 import type {
   TaxAgencyListFilters,
+  TaxAgencyPaymentListFilters,
   TaxFilingListFilters,
   TaxLiabilityListFilters,
+  TaxPaymentAllocationListFilters,
+  TaxReconciliationListFilters,
   TaxRegistrationOverlapCandidate,
   TaxRegistrationListFilters,
   TaxRepository,
@@ -73,6 +83,21 @@ function createRepository(database: DrizzleDb): TaxRepository {
     },
     lockTaxFiling: async (id) => {
       await database.execute(sql`SELECT "id" FROM "tax_filings" WHERE "id" = ${id} FOR UPDATE`);
+    },
+    lockTaxAgencyPayment: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "tax_agency_payments" WHERE "id" = ${id} FOR UPDATE`);
+    },
+    lockTaxPaymentAllocation: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "tax_payment_allocations" WHERE "id" = ${id} FOR UPDATE`);
+    },
+    lockTaxPaymentAllocationsForPayment: async (taxAgencyPaymentId) => {
+      await database.execute(sql`SELECT "id" FROM "tax_payment_allocations" WHERE "tax_agency_payment_id" = ${taxAgencyPaymentId} FOR UPDATE`);
+    },
+    lockTaxPaymentAllocationsForLiability: async (taxLiabilityId) => {
+      await database.execute(sql`SELECT "id" FROM "tax_payment_allocations" WHERE "tax_liability_id" = ${taxLiabilityId} FOR UPDATE`);
+    },
+    lockReconciliationException: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "reconciliation_exceptions" WHERE "id" = ${id} AND "domain" = 'tax' FOR UPDATE`);
     },
 
     getLegalEntity: async (id) => {
@@ -187,7 +212,9 @@ function createRepository(database: DrizzleDb): TaxRepository {
       const [liability] = await database.select({ id: taxLiabilities.id }).from(taxLiabilities).where(eq(taxLiabilities.taxRegistrationId, id)).limit(1);
       if (liability) return true;
       const [filing] = await database.select({ id: taxFilings.id }).from(taxFilings).where(eq(taxFilings.taxRegistrationId, id)).limit(1);
-      return Boolean(filing);
+      if (filing) return true;
+      const [payment] = await database.select({ id: taxAgencyPayments.id }).from(taxAgencyPayments).where(eq(taxAgencyPayments.taxRegistrationId, id)).limit(1);
+      return Boolean(payment);
     },
 
     getTaxLiability: async (id) => {
@@ -224,6 +251,71 @@ function createRepository(database: DrizzleDb): TaxRepository {
         .update(taxLiabilities)
         .set(compact({ ...values, updatedAt: new Date() }))
         .where(eq(taxLiabilities.id, id))
+        .returning();
+      return row;
+    },
+
+    getTaxAgencyPayment: async (id) => {
+      const [row] = await database.select().from(taxAgencyPayments).where(eq(taxAgencyPayments.id, id));
+      return row;
+    },
+    listTaxAgencyPayments: async (filters: TaxAgencyPaymentListFilters) => {
+      const conditions = [];
+      if (filters.status && filters.status !== "all") {
+        conditions.push(eq(taxAgencyPayments.status, filters.status));
+      }
+      if (filters.taxRegistrationId) {
+        conditions.push(eq(taxAgencyPayments.taxRegistrationId, filters.taxRegistrationId));
+      }
+      let query = database.select().from(taxAgencyPayments).$dynamic();
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions));
+      }
+      return await query.orderBy(desc(taxAgencyPayments.paymentDate), desc(taxAgencyPayments.createdAt), desc(taxAgencyPayments.id)).limit(listLimit(filters.pageSize));
+    },
+    createTaxAgencyPayment: async (values: InsertTaxAgencyPayment) => {
+      const [row] = await database.insert(taxAgencyPayments).values(compact(values)).returning();
+      return row;
+    },
+    updateTaxAgencyPayment: async (id, values: Partial<InsertTaxAgencyPayment>) => {
+      const [row] = await database
+        .update(taxAgencyPayments)
+        .set(compact({ ...values, updatedAt: new Date() }))
+        .where(eq(taxAgencyPayments.id, id))
+        .returning();
+      return row;
+    },
+
+    getTaxPaymentAllocation: async (id) => {
+      const [row] = await database.select().from(taxPaymentAllocations).where(eq(taxPaymentAllocations.id, id));
+      return row;
+    },
+    listTaxPaymentAllocations: async (filters: TaxPaymentAllocationListFilters) => {
+      const conditions = [];
+      if (filters.status && filters.status !== "all") {
+        conditions.push(eq(taxPaymentAllocations.status, filters.status));
+      }
+      if (filters.taxLiabilityId) {
+        conditions.push(eq(taxPaymentAllocations.taxLiabilityId, filters.taxLiabilityId));
+      }
+      if (filters.taxAgencyPaymentId) {
+        conditions.push(eq(taxPaymentAllocations.taxAgencyPaymentId, filters.taxAgencyPaymentId));
+      }
+      let query = database.select().from(taxPaymentAllocations).$dynamic();
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions));
+      }
+      return await query.orderBy(desc(taxPaymentAllocations.createdAt), desc(taxPaymentAllocations.id)).limit(listLimit(filters.pageSize));
+    },
+    createTaxPaymentAllocation: async (values: InsertTaxPaymentAllocation) => {
+      const [row] = await database.insert(taxPaymentAllocations).values(compact(values)).returning();
+      return row;
+    },
+    updateTaxPaymentAllocation: async (id, values: Partial<InsertTaxPaymentAllocation>) => {
+      const [row] = await database
+        .update(taxPaymentAllocations)
+        .set(compact({ ...values, updatedAt: new Date() }))
+        .where(eq(taxPaymentAllocations.id, id))
         .returning();
       return row;
     },
@@ -300,6 +392,71 @@ function createRepository(database: DrizzleDb): TaxRepository {
     createExternalRecordRef: async (values: InsertExternalRecordRef) => {
       const [row] = await database.insert(externalRecordRefs).values(compact(values)).returning();
       return row;
+    },
+
+    getReconciliationException: async (id) => {
+      const [row] = await database
+        .select()
+        .from(reconciliationExceptions)
+        .where(and(
+          eq(reconciliationExceptions.id, id),
+          eq(reconciliationExceptions.domain, "tax"),
+        ));
+      return row;
+    },
+    listReconciliationExceptions: async (filters: TaxReconciliationListFilters) => {
+      const conditions = [eq(reconciliationExceptions.domain, "tax")];
+      if (filters.status && filters.status !== "all") {
+        conditions.push(eq(reconciliationExceptions.status, filters.status));
+      }
+      return await database
+        .select()
+        .from(reconciliationExceptions)
+        .where(and(...conditions))
+        .orderBy(desc(reconciliationExceptions.createdAt), desc(reconciliationExceptions.id))
+        .limit(listLimit(filters.pageSize));
+    },
+    createReconciliationException: async (values: InsertReconciliationException) => {
+      const [row] = await database.insert(reconciliationExceptions).values(compact(values)).returning();
+      return row;
+    },
+    updateReconciliationException: async (id, values: Partial<InsertReconciliationException>) => {
+      const [row] = await database
+        .update(reconciliationExceptions)
+        .set(compact({ ...values, updatedAt: new Date() }))
+        .where(and(
+          eq(reconciliationExceptions.id, id),
+          eq(reconciliationExceptions.domain, "tax"),
+        ))
+        .returning();
+      return row;
+    },
+
+    entityExists: async (entityType: FinanceEntityType, entityId: number) => {
+      const tableByEntity: Partial<Record<FinanceEntityType, any>> = {
+        tax_agencies: taxAgencies,
+        tax_registrations: taxRegistrations,
+        tax_liabilities: taxLiabilities,
+        tax_agency_payments: taxAgencyPayments,
+        tax_payment_allocations: taxPaymentAllocations,
+        tax_filings: taxFilings,
+        reconciliation_exceptions: reconciliationExceptions,
+      };
+      const table = tableByEntity[entityType];
+      if (!table) return false;
+      if (entityType === "reconciliation_exceptions") {
+        const [row] = await database
+          .select({ id: reconciliationExceptions.id })
+          .from(reconciliationExceptions)
+          .where(and(
+            eq(reconciliationExceptions.id, entityId),
+            eq(reconciliationExceptions.domain, "tax"),
+          ))
+          .limit(1);
+        return Boolean(row);
+      }
+      const [row] = await database.select({ id: table.id }).from(table).where(eq(table.id, entityId)).limit(1);
+      return Boolean(row);
     },
 
     createTaxAuditEvent: async (values: InsertTaxAuditEvent) => {

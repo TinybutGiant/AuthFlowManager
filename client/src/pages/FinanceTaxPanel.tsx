@@ -5,9 +5,12 @@ import {
   Building2,
   CalendarClock,
   CheckCircle2,
+  CreditCard,
   Edit3,
   FileText,
   Landmark,
+  Link2,
+  ListChecks,
   Plus,
   RotateCcw,
   Scale,
@@ -92,14 +95,74 @@ type TaxLiability = {
   amountCents: number;
   signedAmountCents: number;
   effectiveAmountCents: number;
+  clearedAllocatedAmountCents: number;
+  inFlightAllocatedAmountCents: number;
+  activeAllocatedAmountCents: number;
+  outstandingAmountCents: number;
+  overappliedAmountCents: number;
+  settlementState: string;
   currency: string;
   sourceType: string;
   adjustsTaxLiabilityId?: number | null;
   adjustmentCount: number;
-  paymentTrackingStatus: "not_yet_tracked";
+  paymentTrackingStatus: string;
   status: string;
   recognizedAt?: string | null;
   notes?: string | null;
+};
+
+type TaxPayment = {
+  id: number;
+  taxRegistrationId: number;
+  registration?: TaxRegistration | null;
+  amountCents: number;
+  currency: string;
+  paymentDate?: string | null;
+  methodType: string;
+  methodLabel?: string | null;
+  institutionName?: string | null;
+  maskedLast4?: string | null;
+  confirmationRef?: string | null;
+  status: string;
+  submittedAt?: string | null;
+  clearedAt?: string | null;
+  activeAllocatedAmountCents: number;
+  clearedAllocatedAmountCents: number;
+  inFlightAllocatedAmountCents: number;
+  unappliedAmountCents: number;
+  settlementImpact: string;
+};
+
+type TaxPaymentAllocation = {
+  id: number;
+  taxLiabilityId: number;
+  taxAgencyPaymentId: number;
+  amountCents: number;
+  currency: string;
+  status: string;
+  reversedAt?: string | null;
+  reversedBy?: number | null;
+  createdBy?: number | null;
+  createdAt?: string | null;
+};
+
+type TaxReconciliationException = {
+  id: number;
+  domain: "tax";
+  expectedEntityType?: string | null;
+  expectedEntityId?: number | null;
+  actualEntityType?: string | null;
+  actualEntityId?: number | null;
+  currency?: string | null;
+  expectedAmountCents?: number | null;
+  actualAmountCents?: number | null;
+  differenceAmountCents?: number | null;
+  reasonCode: string;
+  summary: string;
+  status: string;
+  ownerAdminId?: number | null;
+  resolvedAt?: string | null;
+  resolvedBy?: number | null;
 };
 
 type TaxFiling = {
@@ -135,9 +198,13 @@ type TaxOverview = {
   overdueFilingCount: number;
   filingStatusCounts: Record<string, number>;
   openAdjustmentOrDisputeCount: number;
+  openReconciliationIssueCount: number;
   recentRegistrations: TaxRegistration[];
   recentLiabilities: TaxLiability[];
+  recentPayments: TaxPayment[];
+  recentPaymentAllocations: TaxPaymentAllocation[];
   recentFilings: TaxFiling[];
+  recentReconciliationExceptions: TaxReconciliationException[];
 };
 
 type TaxAgencyFormState = {
@@ -183,6 +250,38 @@ type TaxFilingFormState = {
   notes: string;
 };
 
+type TaxPaymentFormState = {
+  taxRegistrationId: string;
+  amount: string;
+  currency: string;
+  paymentDate: string;
+  methodType: string;
+  methodLabel: string;
+  institutionName: string;
+  maskedLast4: string;
+  confirmationRef: string;
+  status: string;
+};
+
+type TaxAllocationFormState = {
+  taxLiabilityId: string;
+  taxAgencyPaymentId: string;
+  amount: string;
+  currency: string;
+};
+
+type TaxReconciliationFormState = {
+  expectedEntityType: string;
+  expectedEntityId: string;
+  actualEntityType: string;
+  actualEntityId: string;
+  currency: string;
+  expectedAmount: string;
+  actualAmount: string;
+  reasonCode: string;
+  summary: string;
+};
+
 type TaxAgencyDialogState = {
   mode: "create" | "edit";
   agency?: TaxAgency;
@@ -205,6 +304,22 @@ type TaxFilingDialogState = {
   mode: "create" | "edit" | "amendment";
   filing?: TaxFiling;
   form: TaxFilingFormState;
+};
+
+type TaxPaymentDialogState = {
+  mode: "create" | "edit";
+  payment?: TaxPayment;
+  form: TaxPaymentFormState;
+};
+
+type TaxAllocationDialogState = {
+  payment?: TaxPayment;
+  liability?: TaxLiability;
+  form: TaxAllocationFormState;
+};
+
+type TaxReconciliationDialogState = {
+  form: TaxReconciliationFormState;
 };
 
 type TaxMutationRequest = {
@@ -243,6 +358,26 @@ const taxLiabilityComponents = [
 ] as const;
 const taxAmountEffects = ["increase", "decrease"] as const;
 const taxSourceTypes = ["manual", "provider", "csv_import", "internal"] as const;
+const taxPaymentMethods = ["provider", "ach", "check", "card", "manual", "other"] as const;
+const taxPaymentCreateStatuses = ["pending", "submitted", "cleared"] as const;
+const taxReconciliationEntityTypes = [
+  "tax_agencies",
+  "tax_registrations",
+  "tax_liabilities",
+  "tax_agency_payments",
+  "tax_payment_allocations",
+  "tax_filings",
+] as const;
+const taxReconciliationReasons = [
+  "tax_underpayment",
+  "overpayment_unapplied_agency_payment",
+  "amount_mismatch",
+  "duplicate_agency_payment",
+  "missing_payment_confirmation",
+  "provider_agency_mismatch",
+  "stale_outstanding_liability",
+  "other_tax_discrepancy",
+] as const;
 
 export default function FinanceTaxPanel() {
   const queryClient = useQueryClient();
@@ -251,6 +386,9 @@ export default function FinanceTaxPanel() {
   const [registrationDialog, setRegistrationDialog] = React.useState<TaxRegistrationDialogState | null>(null);
   const [liabilityDialog, setLiabilityDialog] = React.useState<TaxLiabilityDialogState | null>(null);
   const [filingDialog, setFilingDialog] = React.useState<TaxFilingDialogState | null>(null);
+  const [paymentDialog, setPaymentDialog] = React.useState<TaxPaymentDialogState | null>(null);
+  const [allocationDialog, setAllocationDialog] = React.useState<TaxAllocationDialogState | null>(null);
+  const [reconciliationDialog, setReconciliationDialog] = React.useState<TaxReconciliationDialogState | null>(null);
 
   const overviewQuery = useQuery<TaxOverview>({
     queryKey: [`${taxQueryPrefix}/overview`],
@@ -267,8 +405,17 @@ export default function FinanceTaxPanel() {
   const liabilitiesQuery = useQuery<TaxLiability[]>({
     queryKey: [`${taxQueryPrefix}/liabilities?pageSize=100`],
   });
+  const paymentsQuery = useQuery<TaxPayment[]>({
+    queryKey: [`${taxQueryPrefix}/payments?pageSize=100`],
+  });
+  const allocationsQuery = useQuery<TaxPaymentAllocation[]>({
+    queryKey: [`${taxQueryPrefix}/payment-allocations?pageSize=100`],
+  });
   const filingsQuery = useQuery<TaxFiling[]>({
     queryKey: [`${taxQueryPrefix}/filings?pageSize=100`],
+  });
+  const reconciliationQuery = useQuery<TaxReconciliationException[]>({
+    queryKey: [`${taxQueryPrefix}/reconciliation-exceptions?pageSize=100`],
   });
 
   const taxMutation = useMutation({
@@ -295,20 +442,30 @@ export default function FinanceTaxPanel() {
   const registrations = registrationsQuery.data ?? [];
   const activeRegistrations = registrations.filter((registration) => registration.status !== "closed");
   const liabilities = liabilitiesQuery.data ?? [];
+  const baseLiabilities = liabilities.filter((liability) => !liability.adjustsTaxLiabilityId);
+  const payments = paymentsQuery.data ?? [];
+  const allocations = allocationsQuery.data ?? [];
   const filings = filingsQuery.data ?? [];
+  const reconciliationExceptions = reconciliationQuery.data ?? [];
   const isLoading = overviewQuery.isLoading
     || legalEntitiesQuery.isLoading
     || agenciesQuery.isLoading
     || registrationsQuery.isLoading
     || liabilitiesQuery.isLoading
-    || filingsQuery.isLoading;
+    || paymentsQuery.isLoading
+    || allocationsQuery.isLoading
+    || filingsQuery.isLoading
+    || reconciliationQuery.isLoading;
   const isMutating = taxMutation.isPending;
   const error = overviewQuery.error
     || legalEntitiesQuery.error
     || agenciesQuery.error
     || registrationsQuery.error
     || liabilitiesQuery.error
-    || filingsQuery.error;
+    || paymentsQuery.error
+    || allocationsQuery.error
+    || filingsQuery.error
+    || reconciliationQuery.error;
 
   function openCreateAgency() {
     setAgencyDialog({ mode: "create", form: emptyAgencyForm() });
@@ -512,6 +669,152 @@ export default function FinanceTaxPanel() {
     });
   }
 
+  function openCreatePayment() {
+    setPaymentDialog({
+      mode: "create",
+      form: emptyPaymentForm(activeRegistrations[0]),
+    });
+  }
+
+  function openEditPayment(payment: TaxPayment) {
+    setPaymentDialog({
+      mode: "edit",
+      payment,
+      form: paymentFormFromRecord(payment),
+    });
+  }
+
+  function submitPayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!paymentDialog) return;
+    try {
+      const body = paymentPayload(paymentDialog);
+      taxMutation.mutate({
+        method: paymentDialog.mode === "create" ? "POST" : "PATCH",
+        url: paymentDialog.mode === "create"
+          ? `${taxQueryPrefix}/payments`
+          : `${taxQueryPrefix}/payments/${paymentDialog.payment?.id}`,
+        body,
+        successTitle: paymentDialog.mode === "create" ? "Tax payment recorded" : "Tax payment updated",
+        onSuccess: () => setPaymentDialog(null),
+      });
+    } catch (error) {
+      toast({
+        title: "Tax payment needs attention",
+        description: error instanceof Error ? error.message : "Check the payment fields.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function transitionPayment(payment: TaxPayment, action: "submit" | "clear" | "fail" | "void" | "reverse") {
+    if ((action === "void" || action === "reverse") && !window.confirm(`${humanize(action)} payment #${payment.id}?`)) return;
+    const body: Record<string, unknown> = {};
+    if (action === "submit" || action === "clear") {
+      const confirmationRef = window.prompt("Confirmation reference", payment.confirmationRef ?? "");
+      if (confirmationRef === null) return;
+      body.confirmationRef = optionalString(confirmationRef);
+    }
+    taxMutation.mutate({
+      method: "POST",
+      url: `${taxQueryPrefix}/payments/${payment.id}/${action}`,
+      body,
+      successTitle: `Tax payment ${action === "submit" ? "submitted" : action === "clear" ? "cleared" : action === "fail" ? "failed" : action === "void" ? "voided" : "reversed"}`,
+    });
+  }
+
+  function openCreateAllocation(payment?: TaxPayment, liability?: TaxLiability) {
+    const fallbackLiability = liability ?? baseLiabilities.find((item) => (
+      ["recognized", "disputed"].includes(item.status)
+      && item.outstandingAmountCents > 0
+      && (!payment || (item.taxRegistrationId === payment.taxRegistrationId && item.currency === payment.currency))
+    ));
+    const fallbackPayment = payment ?? payments.find((item) => (
+      ["submitted", "cleared"].includes(item.status)
+      && item.unappliedAmountCents > 0
+      && (!fallbackLiability || (item.taxRegistrationId === fallbackLiability.taxRegistrationId && item.currency === fallbackLiability.currency))
+    ));
+    setAllocationDialog({
+      payment,
+      liability: fallbackLiability,
+      form: emptyAllocationForm(
+        fallbackPayment,
+        fallbackLiability,
+      ),
+    });
+  }
+
+  function submitAllocation(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!allocationDialog) return;
+    try {
+      const body = allocationPayload(allocationDialog.form);
+      taxMutation.mutate({
+        method: "POST",
+        url: `${taxQueryPrefix}/payment-allocations`,
+        body,
+        successTitle: "Tax payment allocated",
+        onSuccess: () => setAllocationDialog(null),
+      });
+    } catch (error) {
+      toast({
+        title: "Tax allocation needs attention",
+        description: error instanceof Error ? error.message : "Check the allocation fields.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function reverseAllocation(allocation: TaxPaymentAllocation) {
+    if (!window.confirm(`Reverse allocation #${allocation.id}?`)) return;
+    taxMutation.mutate({
+      method: "POST",
+      url: `${taxQueryPrefix}/payment-allocations/${allocation.id}/reverse`,
+      body: {},
+      successTitle: "Tax allocation reversed",
+    });
+  }
+
+  function openCreateReconciliation() {
+    setReconciliationDialog({ form: emptyReconciliationForm() });
+  }
+
+  function submitReconciliation(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reconciliationDialog) return;
+    try {
+      const body = reconciliationPayload(reconciliationDialog.form);
+      taxMutation.mutate({
+        method: "POST",
+        url: `${taxQueryPrefix}/reconciliation-exceptions`,
+        body,
+        successTitle: "Tax reconciliation exception opened",
+        onSuccess: () => setReconciliationDialog(null),
+      });
+    } catch (error) {
+      toast({
+        title: "Tax reconciliation needs attention",
+        description: error instanceof Error ? error.message : "Check the reconciliation fields.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function transitionReconciliation(exception: TaxReconciliationException, action: "investigate" | "resolve" | "waive" | "reopen") {
+    const body: Record<string, unknown> = {};
+    if (action === "resolve" || action === "waive") {
+      const resolutionNotes = window.prompt("Resolution note", "");
+      if (resolutionNotes === null) return;
+      body.resolutionNotes = optionalString(resolutionNotes);
+    }
+    taxMutation.mutate({
+      method: "POST",
+      url: `${taxQueryPrefix}/reconciliation-exceptions/${exception.id}/${action}`,
+      body,
+      successTitle: `Tax reconciliation ${action === "investigate" ? "moved to investigating" : action === "resolve" ? "resolved" : action === "waive" ? "waived" : "reopened"}`,
+    });
+  }
+
   return (
     <div className="space-y-6">
       {error && (
@@ -522,12 +825,13 @@ export default function FinanceTaxPanel() {
         </Alert>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <MetricCard title="Registrations" value={overviewQuery.data?.activeRegistrationCount ?? 0} detail="Active" icon={Landmark} />
         <MetricCard title="Liabilities" value={formatTaxTotals(overviewQuery.data?.effectiveLiabilityTotalsByCurrency)} detail="Recognized and disputed" icon={Scale} />
         <MetricCard title="Liability due" value={(overviewQuery.data?.dueSoonLiabilityCount ?? 0) + (overviewQuery.data?.overdueLiabilityCount ?? 0)} detail={`${overviewQuery.data?.overdueLiabilityCount ?? 0} overdue`} icon={CalendarClock} />
+        <MetricCard title="Payments" value={overviewQuery.data?.recentPayments?.length ?? 0} detail="Recent agency payments" icon={CreditCard} />
         <MetricCard title="Filings due" value={(overviewQuery.data?.dueSoonFilingCount ?? 0) + (overviewQuery.data?.overdueFilingCount ?? 0)} detail={`${overviewQuery.data?.overdueFilingCount ?? 0} overdue`} icon={FileText} />
-        <MetricCard title="Open issues" value={overviewQuery.data?.openAdjustmentOrDisputeCount ?? 0} detail="Disputes and adjustments" icon={AlertCircle} />
+        <MetricCard title="Open issues" value={(overviewQuery.data?.openAdjustmentOrDisputeCount ?? 0) + (overviewQuery.data?.openReconciliationIssueCount ?? 0)} detail={`${overviewQuery.data?.openReconciliationIssueCount ?? 0} reconciliation`} icon={AlertCircle} />
       </div>
 
       <Card>
@@ -543,6 +847,50 @@ export default function FinanceTaxPanel() {
         </CardHeader>
         <CardContent>
           <TaxAgenciesTable agencies={agencies} isLoading={isLoading} isMutating={isMutating} onEdit={openEditAgency} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <CardTitle className="flex items-center gap-2">
+            <CreditCard className="h-5 w-5" />
+            Agency Payments
+          </CardTitle>
+          <Button size="sm" onClick={openCreatePayment} disabled={isMutating || activeRegistrations.length === 0}>
+            <Plus className="h-4 w-4" />
+            Payment
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <TaxPaymentsTable
+            payments={payments}
+            isLoading={isLoading}
+            isMutating={isMutating}
+            onEdit={openEditPayment}
+            onApply={(payment) => openCreateAllocation(payment)}
+            onTransition={transitionPayment}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <CardTitle className="flex items-center gap-2">
+            <Link2 className="h-5 w-5" />
+            Payment Allocations
+          </CardTitle>
+          <Button size="sm" onClick={() => openCreateAllocation()} disabled={isMutating || baseLiabilities.length === 0 || payments.length === 0}>
+            <Plus className="h-4 w-4" />
+            Allocation
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <TaxAllocationsTable
+            allocations={allocations}
+            isLoading={isLoading}
+            isMutating={isMutating}
+            onReverse={reverseAllocation}
+          />
         </CardContent>
       </Card>
 
@@ -614,6 +962,27 @@ export default function FinanceTaxPanel() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <CardTitle className="flex items-center gap-2">
+            <ListChecks className="h-5 w-5" />
+            Tax Reconciliation
+          </CardTitle>
+          <Button size="sm" onClick={openCreateReconciliation} disabled={isMutating}>
+            <Plus className="h-4 w-4" />
+            Exception
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <TaxReconciliationTable
+            exceptions={reconciliationExceptions}
+            isLoading={isLoading}
+            isMutating={isMutating}
+            onTransition={transitionReconciliation}
+          />
+        </CardContent>
+      </Card>
+
       <TaxAgencyDialog
         state={agencyDialog}
         isPending={isMutating}
@@ -645,6 +1014,30 @@ export default function FinanceTaxPanel() {
         onClose={() => setFilingDialog(null)}
         onChange={(form) => setFilingDialog((current) => current ? { ...current, form } : current)}
         onSubmit={submitFiling}
+      />
+      <TaxPaymentDialog
+        state={paymentDialog}
+        registrations={activeRegistrations}
+        isPending={isMutating}
+        onClose={() => setPaymentDialog(null)}
+        onChange={(form) => setPaymentDialog((current) => current ? { ...current, form } : current)}
+        onSubmit={submitPayment}
+      />
+      <TaxAllocationDialog
+        state={allocationDialog}
+        liabilities={baseLiabilities}
+        payments={payments}
+        isPending={isMutating}
+        onClose={() => setAllocationDialog(null)}
+        onChange={(form) => setAllocationDialog((current) => current ? { ...current, form } : current)}
+        onSubmit={submitAllocation}
+      />
+      <TaxReconciliationDialog
+        state={reconciliationDialog}
+        isPending={isMutating}
+        onClose={() => setReconciliationDialog(null)}
+        onChange={(form) => setReconciliationDialog((current) => current ? { ...current, form } : current)}
+        onSubmit={submitReconciliation}
       />
     </div>
   );
@@ -809,15 +1202,18 @@ function TaxLiabilitiesTable({
           <TableHead>Component</TableHead>
           <TableHead className="text-right">Amount</TableHead>
           <TableHead className="text-right">Effective</TableHead>
+          <TableHead className="text-right">Cleared</TableHead>
+          <TableHead className="text-right">In flight</TableHead>
+          <TableHead className="text-right">Open</TableHead>
           <TableHead>Status</TableHead>
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {isLoading ? (
-          <EmptyRow colSpan={8} label="Loading liabilities..." />
+          <EmptyRow colSpan={11} label="Loading liabilities..." />
         ) : liabilities.length === 0 ? (
-          <EmptyRow colSpan={8} label="No liabilities." />
+          <EmptyRow colSpan={11} label="No liabilities." />
         ) : (
           liabilities.map((liability) => {
             const isAdjustment = Boolean(liability.adjustsTaxLiabilityId);
@@ -838,11 +1234,23 @@ function TaxLiabilitiesTable({
                 </TableCell>
                 <TableCell className="text-right">{formatSignedMoney(liability.signedAmountCents, liability.currency)}</TableCell>
                 <TableCell className="text-right">{formatMoney(liability.effectiveAmountCents, liability.currency)}</TableCell>
+                <TableCell className="text-right">{isAdjustment ? "-" : formatMoney(liability.clearedAllocatedAmountCents, liability.currency)}</TableCell>
+                <TableCell className="text-right">{isAdjustment ? "-" : formatMoney(liability.inFlightAllocatedAmountCents, liability.currency)}</TableCell>
+                <TableCell className="text-right">
+                  {isAdjustment
+                    ? "-"
+                    : liability.overappliedAmountCents > 0
+                      ? formatMoney(liability.overappliedAmountCents, liability.currency)
+                      : formatMoney(liability.outstandingAmountCents, liability.currency)}
+                  {!isAdjustment && liability.overappliedAmountCents > 0 && (
+                    <div className="text-xs text-muted-foreground">Overapplied</div>
+                  )}
+                </TableCell>
                 <TableCell>
                   <div className="flex flex-col items-start gap-1">
                     {statusBadge(liability.status)}
                     <Badge variant="outline" className="border-muted bg-muted text-muted-foreground">
-                      {humanize(liability.paymentTrackingStatus)}
+                      {humanize(liability.settlementState)}
                     </Badge>
                   </div>
                 </TableCell>
@@ -889,6 +1297,251 @@ function TaxLiabilitiesTable({
               </TableRow>
             );
           })
+        )}
+      </TableBody>
+    </Table>
+  );
+}
+
+function TaxPaymentsTable({
+  payments,
+  isLoading,
+  isMutating,
+  onEdit,
+  onApply,
+  onTransition,
+}: {
+  payments: TaxPayment[];
+  isLoading: boolean;
+  isMutating: boolean;
+  onEdit: (payment: TaxPayment) => void;
+  onApply: (payment: TaxPayment) => void;
+  onTransition: (payment: TaxPayment, action: "submit" | "clear" | "fail" | "void" | "reverse") => void;
+}) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Registration</TableHead>
+          <TableHead>Method</TableHead>
+          <TableHead>Date</TableHead>
+          <TableHead className="text-right">Amount</TableHead>
+          <TableHead className="text-right">Allocated</TableHead>
+          <TableHead className="text-right">Unapplied</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead className="text-right">Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {isLoading ? (
+          <EmptyRow colSpan={8} label="Loading tax payments..." />
+        ) : payments.length === 0 ? (
+          <EmptyRow colSpan={8} label="No tax payments." />
+        ) : (
+          payments.map((payment) => (
+            <TableRow key={payment.id}>
+              <TableCell>
+                <div className="font-medium">{payment.registration?.taxAgency?.agencyCode || `Registration #${payment.taxRegistrationId}`}</div>
+                <div className="text-xs text-muted-foreground">{payment.registration?.legalEntity?.legalName || "Legal entity"}</div>
+              </TableCell>
+              <TableCell>
+                <div>{humanize(payment.methodType)}</div>
+                <div className="text-xs text-muted-foreground">{payment.confirmationRef || payment.methodLabel || "-"}</div>
+              </TableCell>
+              <TableCell>{formatDate(payment.paymentDate)}</TableCell>
+              <TableCell className="text-right">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
+              <TableCell className="text-right">
+                <div>{formatMoney(payment.activeAllocatedAmountCents, payment.currency)}</div>
+                <div className="text-xs text-muted-foreground">{humanize(payment.settlementImpact)}</div>
+              </TableCell>
+              <TableCell className="text-right">{formatMoney(payment.unappliedAmountCents, payment.currency)}</TableCell>
+              <TableCell>{statusBadge(payment.status)}</TableCell>
+              <TableCell>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {payment.status === "pending" && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => onEdit(payment)} disabled={isMutating}>
+                        <Edit3 className="h-4 w-4" />
+                        Edit
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(payment, "submit")} disabled={isMutating}>
+                        <CheckCircle2 className="h-4 w-4" />
+                        Submit
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(payment, "fail")} disabled={isMutating}>
+                        <XCircle className="h-4 w-4" />
+                        Fail
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(payment, "void")} disabled={isMutating}>
+                        <XCircle className="h-4 w-4" />
+                        Void
+                      </Button>
+                    </>
+                  )}
+                  {payment.status === "submitted" && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => onApply(payment)} disabled={isMutating || payment.unappliedAmountCents <= 0}>
+                        <Link2 className="h-4 w-4" />
+                        Apply
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(payment, "clear")} disabled={isMutating}>
+                        <CheckCircle2 className="h-4 w-4" />
+                        Clear
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(payment, "fail")} disabled={isMutating}>
+                        <XCircle className="h-4 w-4" />
+                        Fail
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(payment, "reverse")} disabled={isMutating}>
+                        <RotateCcw className="h-4 w-4" />
+                        Reverse
+                      </Button>
+                    </>
+                  )}
+                  {payment.status === "cleared" && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => onApply(payment)} disabled={isMutating || payment.unappliedAmountCents <= 0}>
+                        <Link2 className="h-4 w-4" />
+                        Apply
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(payment, "reverse")} disabled={isMutating}>
+                        <RotateCcw className="h-4 w-4" />
+                        Reverse
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))
+        )}
+      </TableBody>
+    </Table>
+  );
+}
+
+function TaxAllocationsTable({
+  allocations,
+  isLoading,
+  isMutating,
+  onReverse,
+}: {
+  allocations: TaxPaymentAllocation[];
+  isLoading: boolean;
+  isMutating: boolean;
+  onReverse: (allocation: TaxPaymentAllocation) => void;
+}) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Allocation</TableHead>
+          <TableHead>Liability</TableHead>
+          <TableHead>Payment</TableHead>
+          <TableHead className="text-right">Amount</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead className="text-right">Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {isLoading ? (
+          <EmptyRow colSpan={6} label="Loading tax allocations..." />
+        ) : allocations.length === 0 ? (
+          <EmptyRow colSpan={6} label="No tax allocations." />
+        ) : (
+          allocations.map((allocation) => (
+            <TableRow key={allocation.id}>
+              <TableCell className="font-medium">#{allocation.id}</TableCell>
+              <TableCell>#{allocation.taxLiabilityId}</TableCell>
+              <TableCell>#{allocation.taxAgencyPaymentId}</TableCell>
+              <TableCell className="text-right">{formatMoney(allocation.amountCents, allocation.currency)}</TableCell>
+              <TableCell>{statusBadge(allocation.status)}</TableCell>
+              <TableCell>
+                <div className="flex justify-end">
+                  {allocation.status === "active" && (
+                    <Button size="sm" variant="outline" onClick={() => onReverse(allocation)} disabled={isMutating}>
+                      <RotateCcw className="h-4 w-4" />
+                      Reverse
+                    </Button>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))
+        )}
+      </TableBody>
+    </Table>
+  );
+}
+
+function TaxReconciliationTable({
+  exceptions,
+  isLoading,
+  isMutating,
+  onTransition,
+}: {
+  exceptions: TaxReconciliationException[];
+  isLoading: boolean;
+  isMutating: boolean;
+  onTransition: (exception: TaxReconciliationException, action: "investigate" | "resolve" | "waive" | "reopen") => void;
+}) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Reason</TableHead>
+          <TableHead>Summary</TableHead>
+          <TableHead>Expected</TableHead>
+          <TableHead>Actual</TableHead>
+          <TableHead className="text-right">Difference</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead className="text-right">Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {isLoading ? (
+          <EmptyRow colSpan={7} label="Loading tax reconciliation..." />
+        ) : exceptions.length === 0 ? (
+          <EmptyRow colSpan={7} label="No tax reconciliation exceptions." />
+        ) : (
+          exceptions.map((exception) => (
+            <TableRow key={exception.id}>
+              <TableCell className="font-medium">{humanize(exception.reasonCode)}</TableCell>
+              <TableCell>{exception.summary}</TableCell>
+              <TableCell>{entityLabel(exception.expectedEntityType, exception.expectedEntityId)}</TableCell>
+              <TableCell>{entityLabel(exception.actualEntityType, exception.actualEntityId)}</TableCell>
+              <TableCell className="text-right">{formatMoney(exception.differenceAmountCents, exception.currency ?? "USD")}</TableCell>
+              <TableCell>{statusBadge(exception.status)}</TableCell>
+              <TableCell>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {exception.status === "open" && (
+                    <Button size="sm" variant="outline" onClick={() => onTransition(exception, "investigate")} disabled={isMutating}>
+                      <ListChecks className="h-4 w-4" />
+                      Investigate
+                    </Button>
+                  )}
+                  {["open", "investigating"].includes(exception.status) && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(exception, "resolve")} disabled={isMutating}>
+                        <CheckCircle2 className="h-4 w-4" />
+                        Resolve
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => onTransition(exception, "waive")} disabled={isMutating}>
+                        <XCircle className="h-4 w-4" />
+                        Waive
+                      </Button>
+                    </>
+                  )}
+                  {["resolved", "waived"].includes(exception.status) && (
+                    <Button size="sm" variant="outline" onClick={() => onTransition(exception, "reopen")} disabled={isMutating}>
+                      <RotateCcw className="h-4 w-4" />
+                      Reopen
+                    </Button>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))
         )}
       </TableBody>
     </Table>
@@ -1406,6 +2059,305 @@ function TaxFilingDialog({
   );
 }
 
+function TaxPaymentDialog({
+  state,
+  registrations,
+  isPending,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  state: TaxPaymentDialogState | null;
+  registrations: TaxRegistration[];
+  isPending: boolean;
+  onClose: () => void;
+  onChange: (form: TaxPaymentFormState) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!state) return null;
+  const form = state.form;
+  const update = <K extends keyof TaxPaymentFormState>(key: K, value: TaxPaymentFormState[K]) => {
+    onChange({ ...form, [key]: value });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-3xl">
+        <form onSubmit={onSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>{state.mode === "create" ? "Record Tax Payment" : "Edit Tax Payment"}</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Registration">
+              <Select value={form.taxRegistrationId} onValueChange={(value) => update("taxRegistrationId", value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select registration" />
+                </SelectTrigger>
+                <SelectContent>
+                  {registrations.map((registration) => (
+                    <SelectItem key={registration.id} value={String(registration.id)}>
+                      {registration.taxAgency?.agencyCode || `Registration #${registration.id}`} - {humanize(registration.taxType)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Amount">
+              <Input inputMode="decimal" value={form.amount} onChange={(event) => update("amount", event.target.value)} placeholder="0.00" required />
+            </FormField>
+            <FormField label="Currency">
+              <Input value={form.currency} onChange={(event) => update("currency", event.target.value.toUpperCase())} maxLength={3} required />
+            </FormField>
+            <FormField label="Payment date">
+              <Input type="date" value={form.paymentDate} onChange={(event) => update("paymentDate", event.target.value)} />
+            </FormField>
+            <FormField label="Method">
+              <Select value={form.methodType} onValueChange={(value) => update("methodType", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {taxPaymentMethods.map((method) => (
+                    <SelectItem key={method} value={method}>{humanize(method)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            {state.mode === "create" && (
+              <FormField label="Initial status">
+                <Select value={form.status} onValueChange={(value) => update("status", value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {taxPaymentCreateStatuses.map((status) => (
+                      <SelectItem key={status} value={status}>{humanize(status)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormField>
+            )}
+            <FormField label="Method label">
+              <Input value={form.methodLabel} onChange={(event) => update("methodLabel", event.target.value)} maxLength={120} />
+            </FormField>
+            <FormField label="Institution">
+              <Input value={form.institutionName} onChange={(event) => update("institutionName", event.target.value)} maxLength={160} />
+            </FormField>
+            <FormField label="Last 4">
+              <Input value={form.maskedLast4} onChange={(event) => update("maskedLast4", event.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" maxLength={4} />
+            </FormField>
+            <FormField label="Confirmation">
+              <Input value={form.confirmationRef} onChange={(event) => update("confirmationRef", event.target.value)} maxLength={200} />
+            </FormField>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              <CheckCircle2 className="h-4 w-4" />
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TaxAllocationDialog({
+  state,
+  liabilities,
+  payments,
+  isPending,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  state: TaxAllocationDialogState | null;
+  liabilities: TaxLiability[];
+  payments: TaxPayment[];
+  isPending: boolean;
+  onClose: () => void;
+  onChange: (form: TaxAllocationFormState) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!state) return null;
+  const form = state.form;
+  const selectedPayment = payments.find((payment) => String(payment.id) === form.taxAgencyPaymentId) ?? state.payment;
+  const selectedLiability = liabilities.find((liability) => String(liability.id) === form.taxLiabilityId) ?? state.liability;
+  const eligibleLiabilities = liabilities.filter((liability) => (
+    ["recognized", "disputed"].includes(liability.status)
+    && liability.outstandingAmountCents > 0
+    && (!selectedPayment || (liability.taxRegistrationId === selectedPayment.taxRegistrationId && liability.currency === selectedPayment.currency))
+  ));
+  const eligiblePayments = payments.filter((payment) => (
+    ["submitted", "cleared"].includes(payment.status)
+    && payment.unappliedAmountCents > 0
+    && (!selectedLiability || (payment.taxRegistrationId === selectedLiability.taxRegistrationId && payment.currency === selectedLiability.currency))
+  ));
+  const update = <K extends keyof TaxAllocationFormState>(key: K, value: TaxAllocationFormState[K]) => {
+    onChange({ ...form, [key]: value });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-3xl">
+        <form onSubmit={onSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>Apply Tax Payment</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Base liability">
+              <Select value={form.taxLiabilityId} onValueChange={(value) => update("taxLiabilityId", value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select liability" />
+                </SelectTrigger>
+                <SelectContent>
+                  {eligibleLiabilities.map((liability) => (
+                    <SelectItem key={liability.id} value={String(liability.id)}>
+                      #{liability.id} - {formatMoney(liability.outstandingAmountCents, liability.currency)} open
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Agency payment">
+              <Select value={form.taxAgencyPaymentId} onValueChange={(value) => update("taxAgencyPaymentId", value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select payment" />
+                </SelectTrigger>
+                <SelectContent>
+                  {eligiblePayments.map((payment) => (
+                    <SelectItem key={payment.id} value={String(payment.id)}>
+                      #{payment.id} - {formatMoney(payment.unappliedAmountCents, payment.currency)} unapplied
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Amount">
+              <Input inputMode="decimal" value={form.amount} onChange={(event) => update("amount", event.target.value)} placeholder="0.00" required />
+            </FormField>
+            <FormField label="Currency">
+              <Input value={form.currency} onChange={(event) => update("currency", event.target.value.toUpperCase())} maxLength={3} required />
+            </FormField>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              <CheckCircle2 className="h-4 w-4" />
+              Apply
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TaxReconciliationDialog({
+  state,
+  isPending,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  state: TaxReconciliationDialogState | null;
+  isPending: boolean;
+  onClose: () => void;
+  onChange: (form: TaxReconciliationFormState) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!state) return null;
+  const form = state.form;
+  const update = <K extends keyof TaxReconciliationFormState>(key: K, value: TaxReconciliationFormState[K]) => {
+    onChange({ ...form, [key]: value });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-3xl">
+        <form onSubmit={onSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>Open Tax Reconciliation Exception</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Reason">
+              <Select value={form.reasonCode} onValueChange={(value) => update("reasonCode", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {taxReconciliationReasons.map((reason) => (
+                    <SelectItem key={reason} value={reason}>{humanize(reason)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Currency">
+              <Input value={form.currency} onChange={(event) => update("currency", event.target.value.toUpperCase())} maxLength={3} />
+            </FormField>
+            <FormField label="Expected type">
+              <Select value={form.expectedEntityType} onValueChange={(value) => update("expectedEntityType", value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Optional" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {taxReconciliationEntityTypes.map((type) => (
+                    <SelectItem key={type} value={type}>{humanize(type)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Expected id">
+              <Input inputMode="numeric" value={form.expectedEntityId} onChange={(event) => update("expectedEntityId", event.target.value)} />
+            </FormField>
+            <FormField label="Actual type">
+              <Select value={form.actualEntityType} onValueChange={(value) => update("actualEntityType", value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Optional" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {taxReconciliationEntityTypes.map((type) => (
+                    <SelectItem key={type} value={type}>{humanize(type)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Actual id">
+              <Input inputMode="numeric" value={form.actualEntityId} onChange={(event) => update("actualEntityId", event.target.value)} />
+            </FormField>
+            <FormField label="Expected amount">
+              <Input inputMode="decimal" value={form.expectedAmount} onChange={(event) => update("expectedAmount", event.target.value)} placeholder="0.00" />
+            </FormField>
+            <FormField label="Actual amount">
+              <Input inputMode="decimal" value={form.actualAmount} onChange={(event) => update("actualAmount", event.target.value)} placeholder="0.00" />
+            </FormField>
+          </div>
+
+          <FormField label="Summary">
+            <Textarea value={form.summary} onChange={(event) => update("summary", event.target.value)} rows={3} maxLength={600} required />
+          </FormField>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              <CheckCircle2 className="h-4 w-4" />
+              Open
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function MetricCard({
   title,
   value,
@@ -1581,6 +2533,70 @@ function emptyFilingAmendmentForm(filing: TaxFiling): TaxFilingFormState {
   };
 }
 
+function emptyPaymentForm(registration?: TaxRegistration): TaxPaymentFormState {
+  return {
+    taxRegistrationId: registration ? String(registration.id) : "",
+    amount: "",
+    currency: "USD",
+    paymentDate: "",
+    methodType: "ach",
+    methodLabel: "",
+    institutionName: "",
+    maskedLast4: "",
+    confirmationRef: "",
+    status: "pending",
+  };
+}
+
+function paymentFormFromRecord(payment: TaxPayment): TaxPaymentFormState {
+  return {
+    taxRegistrationId: String(payment.taxRegistrationId),
+    amount: formatCentsForInput(payment.amountCents),
+    currency: payment.currency,
+    paymentDate: dateForInput(payment.paymentDate),
+    methodType: payment.methodType,
+    methodLabel: payment.methodLabel ?? "",
+    institutionName: payment.institutionName ?? "",
+    maskedLast4: payment.maskedLast4 ?? "",
+    confirmationRef: payment.confirmationRef ?? "",
+    status: payment.status,
+  };
+}
+
+function emptyAllocationForm(
+  selectedPayment?: TaxPayment,
+  selectedLiability?: TaxLiability,
+  fallbackLiability?: TaxLiability,
+  fallbackPayment?: TaxPayment,
+): TaxAllocationFormState {
+  const liability = selectedLiability ?? fallbackLiability;
+  const payment = selectedPayment ?? fallbackPayment;
+  const suggestedAmount = Math.min(
+    liability?.outstandingAmountCents ?? payment?.unappliedAmountCents ?? 0,
+    payment?.unappliedAmountCents ?? liability?.outstandingAmountCents ?? 0,
+  );
+  return {
+    taxLiabilityId: liability ? String(liability.id) : "",
+    taxAgencyPaymentId: payment ? String(payment.id) : "",
+    amount: suggestedAmount > 0 ? formatCentsForInput(suggestedAmount) : "",
+    currency: liability?.currency ?? payment?.currency ?? "USD",
+  };
+}
+
+function emptyReconciliationForm(): TaxReconciliationFormState {
+  return {
+    expectedEntityType: "none",
+    expectedEntityId: "",
+    actualEntityType: "none",
+    actualEntityId: "",
+    currency: "USD",
+    expectedAmount: "",
+    actualAmount: "",
+    reasonCode: "tax_underpayment",
+    summary: "",
+  };
+}
+
 function registrationPayload(state: TaxRegistrationDialogState) {
   const form = state.form;
   const common = compactPayload({
@@ -1642,6 +2658,49 @@ function filingPayload(state: TaxFilingDialogState) {
   });
 }
 
+function paymentPayload(state: TaxPaymentDialogState) {
+  const form = state.form;
+  const common = compactPayload({
+    taxRegistrationId: parsePositiveId(form.taxRegistrationId, "Tax registration"),
+    amountCents: parseMoneyToCents(form.amount),
+    currency: form.currency.trim().toUpperCase(),
+    paymentDate: dateOrNull(form.paymentDate),
+    methodType: form.methodType,
+    methodLabel: optionalString(form.methodLabel),
+    institutionName: optionalString(form.institutionName),
+    maskedLast4: optionalString(form.maskedLast4),
+    confirmationRef: optionalString(form.confirmationRef),
+  });
+  return state.mode === "create"
+    ? { ...common, status: form.status }
+    : common;
+}
+
+function allocationPayload(form: TaxAllocationFormState) {
+  return {
+    taxLiabilityId: parsePositiveId(form.taxLiabilityId, "Tax liability"),
+    taxAgencyPaymentId: parsePositiveId(form.taxAgencyPaymentId, "Tax payment"),
+    amountCents: parseMoneyToCents(form.amount),
+    currency: form.currency.trim().toUpperCase(),
+  };
+}
+
+function reconciliationPayload(form: TaxReconciliationFormState) {
+  const expectedEntityType = form.expectedEntityType === "none" ? null : form.expectedEntityType;
+  const actualEntityType = form.actualEntityType === "none" ? null : form.actualEntityType;
+  return compactPayload({
+    expectedEntityType,
+    expectedEntityId: expectedEntityType ? parsePositiveId(form.expectedEntityId, "Expected entity id") : null,
+    actualEntityType,
+    actualEntityId: actualEntityType ? parsePositiveId(form.actualEntityId, "Actual entity id") : null,
+    currency: optionalString(form.currency),
+    expectedAmountCents: optionalMoneyToCents(form.expectedAmount),
+    actualAmountCents: optionalMoneyToCents(form.actualAmount),
+    reasonCode: form.reasonCode,
+    summary: form.summary.trim(),
+  });
+}
+
 function optionalString(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
@@ -1674,6 +2733,10 @@ function parseMoneyToCents(value: string) {
     throw new Error("Amount must be positive.");
   }
   return cents;
+}
+
+function optionalMoneyToCents(value: string) {
+  return value.trim() ? parseMoneyToCents(value) : null;
 }
 
 function formatCentsForInput(value?: number | null) {
@@ -1724,15 +2787,20 @@ function humanize(value?: string | null) {
   return value ? value.replace(/_/g, " ") : "-";
 }
 
+function entityLabel(entityType?: string | null, entityId?: number | null) {
+  if (!entityType || !entityId) return "-";
+  return `${humanize(entityType)} #${entityId}`;
+}
+
 function statusBadge(status: string) {
   const className =
-    ["active", "accepted", "recognized", "ready", "filed"].includes(status)
+    ["active", "accepted", "recognized", "ready", "filed", "cleared", "paid", "resolved"].includes(status)
       ? "border-green-500/20 bg-green-500/10 text-green-700"
-      : ["pending", "draft", "not_due"].includes(status)
+      : ["pending", "draft", "not_due", "submitted", "in_flight"].includes(status)
         ? "border-blue-500/20 bg-blue-500/10 text-blue-700"
-        : ["disputed", "rejected", "due_soon", "inactive", "not_yet_tracked"].includes(status)
+        : ["disputed", "rejected", "due_soon", "inactive", "partial", "investigating", "waived"].includes(status)
           ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-700"
-          : ["voided", "closed", "overdue"].includes(status)
+          : ["voided", "closed", "overdue", "failed", "reversed", "overpaid"].includes(status)
             ? "border-red-500/20 bg-red-500/10 text-red-700"
             : "border-muted bg-muted text-muted-foreground";
 

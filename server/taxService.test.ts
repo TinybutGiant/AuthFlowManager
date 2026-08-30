@@ -4,27 +4,44 @@ import test from "node:test";
 
 import {
   TaxServiceError,
+  applyTaxPaymentAllocation,
   createTaxAgency,
+  createTaxAgencyPaymentPayloadSchema,
   createTaxFiling,
   createTaxFilingAmendment,
   createTaxFilingAmendmentPayloadSchema,
   createTaxLiability,
   createTaxLiabilityAdjustment,
+  createTaxReconciliationException,
+  createTaxReconciliationExceptionPayloadSchema,
   createTaxRegistration,
+  getTaxAgencyPayment,
   getTaxFiling,
   getTaxLiability,
   getTaxOverview,
+  listTaxAgencyPayments,
   listTaxFilings,
   listTaxLiabilities,
+  listTaxPaymentAllocations,
+  listTaxReconciliationExceptions,
+  recordTaxAgencyPayment,
+  reverseTaxAgencyPayment,
+  reverseTaxPaymentAllocation,
   transitionTaxFiling,
   transitionTaxLiability,
+  transitionTaxAgencyPayment,
+  transitionTaxReconciliationException,
   transitionTaxRegistration,
+  updateTaxAgencyPayment,
   updateTaxFiling,
   updateTaxLiability,
   updateTaxRegistration,
   type TaxAgencyListFilters,
+  type TaxAgencyPaymentListFilters,
   type TaxFilingListFilters,
   type TaxLiabilityListFilters,
+  type TaxPaymentAllocationListFilters,
+  type TaxReconciliationListFilters,
   type TaxRegistrationOverlapCandidate,
   type TaxRegistrationListFilters,
   type TaxRepository,
@@ -36,7 +53,10 @@ type TaxState = {
   taxAgencies: any[];
   taxRegistrations: any[];
   taxLiabilities: any[];
+  taxAgencyPayments: any[];
+  taxPaymentAllocations: any[];
   taxFilings: any[];
+  reconciliationExceptions: any[];
   externalRecordRefs: any[];
   taxAuditEvents: any[];
   locks: string[];
@@ -83,7 +103,10 @@ function restoreState(state: TaxState, snapshot: TaxState) {
   state.taxAgencies = snapshot.taxAgencies;
   state.taxRegistrations = snapshot.taxRegistrations;
   state.taxLiabilities = snapshot.taxLiabilities;
+  state.taxAgencyPayments = snapshot.taxAgencyPayments;
+  state.taxPaymentAllocations = snapshot.taxPaymentAllocations;
   state.taxFilings = snapshot.taxFilings;
+  state.reconciliationExceptions = snapshot.reconciliationExceptions;
   state.externalRecordRefs = snapshot.externalRecordRefs;
   state.taxAuditEvents = snapshot.taxAuditEvents;
   state.locks = snapshot.locks;
@@ -98,7 +121,10 @@ function makeState(): TaxState {
     taxAgencies: [],
     taxRegistrations: [],
     taxLiabilities: [],
+    taxAgencyPayments: [],
+    taxPaymentAllocations: [],
     taxFilings: [],
+    reconciliationExceptions: [],
     externalRecordRefs: [],
     taxAuditEvents: [],
     locks: [],
@@ -109,7 +135,10 @@ function makeState(): TaxState {
       taxAgency: 1,
       taxRegistration: 1,
       taxLiability: 1,
+      taxAgencyPayment: 1,
+      taxPaymentAllocation: 1,
       taxFiling: 1,
+      reconciliationException: 1,
       externalRecordRef: 1,
       taxAuditEvent: 1,
     },
@@ -134,6 +163,25 @@ function makeRepo(state = makeState()): TaxRepository & { state: TaxState } {
     lockTaxLiability: async (id) => { state.locks.push(`tax_liability:${id}`); },
     lockTaxLiabilityAdjustments: async (id) => { state.locks.push(`tax_liability_adjustments:${id}`); },
     lockTaxFiling: async (id) => { state.locks.push(`tax_filing:${id}`); },
+    lockTaxAgencyPayment: async (id) => { state.locks.push(`tax_agency_payment:${id}`); },
+    lockTaxPaymentAllocation: async (id) => { state.locks.push(`tax_payment_allocation:${id}`); },
+    lockTaxPaymentAllocationsForPayment: async (id) => {
+      state.locks.push(`tax_payment_allocations_for_payment:${id}`);
+      const callback = (repo as any).__afterLockTaxPaymentAllocationsForPayment;
+      if (typeof callback === "function") {
+        delete (repo as any).__afterLockTaxPaymentAllocationsForPayment;
+        callback();
+      }
+    },
+    lockTaxPaymentAllocationsForLiability: async (id) => {
+      state.locks.push(`tax_payment_allocations_for_liability:${id}`);
+      const callback = (repo as any).__afterLockTaxPaymentAllocationsForLiability;
+      if (typeof callback === "function") {
+        delete (repo as any).__afterLockTaxPaymentAllocationsForLiability;
+        callback();
+      }
+    },
+    lockReconciliationException: async (id) => { state.locks.push(`reconciliation_exception:${id}`); },
 
     getLegalEntity: async (id) => state.legalEntities.find((item) => item.id === id),
     listLegalEntities: async () => state.legalEntities
@@ -216,6 +264,7 @@ function makeRepo(state = makeState()): TaxRepository & { state: TaxState } {
     registrationHasTaxFacts: async (id) => (
       state.taxLiabilities.some((item) => item.taxRegistrationId === id)
       || state.taxFilings.some((item) => item.taxRegistrationId === id)
+      || state.taxAgencyPayments.some((item) => item.taxRegistrationId === id)
     ),
 
     getTaxLiability: async (id) => state.taxLiabilities.find((item) => item.id === id),
@@ -251,6 +300,70 @@ function makeRepo(state = makeState()): TaxRepository & { state: TaxState } {
     },
     updateTaxLiability: async (id, values) => {
       const existing = state.taxLiabilities.find((item) => item.id === id);
+      if (!existing) return undefined;
+      Object.assign(existing, compact(values), { updatedAt: now() });
+      return existing;
+    },
+
+    getTaxAgencyPayment: async (id) => state.taxAgencyPayments.find((item) => item.id === id),
+    listTaxAgencyPayments: async (filters: TaxAgencyPaymentListFilters) => state.taxAgencyPayments
+      .filter((item) => !filters.status || filters.status === "all" || item.status === filters.status)
+      .filter((item) => !filters.taxRegistrationId || item.taxRegistrationId === filters.taxRegistrationId)
+      .slice(0, filters.pageSize ?? 100),
+    createTaxAgencyPayment: async (values) => {
+      const payment = {
+        id: state.ids.taxAgencyPayment++,
+        taxRegistrationId: values.taxRegistrationId,
+        amountCents: values.amountCents,
+        currency: values.currency ?? "USD",
+        paymentDate: values.paymentDate ?? null,
+        methodType: values.methodType,
+        methodLabel: values.methodLabel ?? null,
+        institutionName: values.institutionName ?? null,
+        maskedLast4: values.maskedLast4 ?? null,
+        confirmationRef: values.confirmationRef ?? null,
+        status: values.status ?? "pending",
+        submittedAt: values.submittedAt ?? null,
+        clearedAt: values.clearedAt ?? null,
+        createdBy: values.createdBy ?? null,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      state.taxAgencyPayments.push(payment);
+      return payment as any;
+    },
+    updateTaxAgencyPayment: async (id, values) => {
+      const existing = state.taxAgencyPayments.find((item) => item.id === id);
+      if (!existing) return undefined;
+      Object.assign(existing, compact(values), { updatedAt: now() });
+      return existing;
+    },
+
+    getTaxPaymentAllocation: async (id) => state.taxPaymentAllocations.find((item) => item.id === id),
+    listTaxPaymentAllocations: async (filters: TaxPaymentAllocationListFilters) => state.taxPaymentAllocations
+      .filter((item) => !filters.status || filters.status === "all" || item.status === filters.status)
+      .filter((item) => !filters.taxLiabilityId || item.taxLiabilityId === filters.taxLiabilityId)
+      .filter((item) => !filters.taxAgencyPaymentId || item.taxAgencyPaymentId === filters.taxAgencyPaymentId)
+      .slice(0, filters.pageSize ?? 100),
+    createTaxPaymentAllocation: async (values) => {
+      const allocation = {
+        id: state.ids.taxPaymentAllocation++,
+        taxLiabilityId: values.taxLiabilityId,
+        taxAgencyPaymentId: values.taxAgencyPaymentId,
+        amountCents: values.amountCents,
+        currency: values.currency ?? "USD",
+        status: values.status ?? "active",
+        reversedAt: values.reversedAt ?? null,
+        reversedBy: values.reversedBy ?? null,
+        createdBy: values.createdBy ?? null,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      state.taxPaymentAllocations.push(allocation);
+      return allocation as any;
+    },
+    updateTaxPaymentAllocation: async (id, values) => {
+      const existing = state.taxPaymentAllocations.find((item) => item.id === id);
       if (!existing) return undefined;
       Object.assign(existing, compact(values), { updatedAt: now() });
       return existing;
@@ -319,6 +432,57 @@ function makeRepo(state = makeState()): TaxRepository & { state: TaxState } {
       };
       state.externalRecordRefs.push(ref);
       return ref as any;
+    },
+
+    getReconciliationException: async (id) => state.reconciliationExceptions.find((item) => item.id === id && item.domain === "tax"),
+    listReconciliationExceptions: async (filters: TaxReconciliationListFilters) => state.reconciliationExceptions
+      .filter((item) => item.domain === "tax")
+      .filter((item) => !filters.status || filters.status === "all" || item.status === filters.status)
+      .slice(0, filters.pageSize ?? 100),
+    createReconciliationException: async (values) => {
+      const exception = {
+        id: state.ids.reconciliationException++,
+        domain: values.domain,
+        expectedEntityType: values.expectedEntityType ?? null,
+        expectedEntityId: values.expectedEntityId ?? null,
+        actualEntityType: values.actualEntityType ?? null,
+        actualEntityId: values.actualEntityId ?? null,
+        currency: values.currency ?? null,
+        expectedAmountCents: values.expectedAmountCents ?? null,
+        actualAmountCents: values.actualAmountCents ?? null,
+        differenceAmountCents: values.differenceAmountCents ?? null,
+        reasonCode: values.reasonCode,
+        summary: values.summary,
+        status: values.status ?? "open",
+        ownerAdminId: values.ownerAdminId ?? null,
+        resolvedAt: values.resolvedAt ?? null,
+        resolvedBy: values.resolvedBy ?? null,
+        resolutionNotes: values.resolutionNotes ?? null,
+        createdBy: values.createdBy ?? null,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      state.reconciliationExceptions.push(exception);
+      return exception as any;
+    },
+    updateReconciliationException: async (id, values) => {
+      const existing = state.reconciliationExceptions.find((item) => item.id === id && item.domain === "tax");
+      if (!existing) return undefined;
+      Object.assign(existing, compact(values), { updatedAt: now() });
+      return existing;
+    },
+
+    entityExists: async (entityType, entityId) => {
+      const collections: Record<string, any[]> = {
+        tax_agencies: state.taxAgencies,
+        tax_registrations: state.taxRegistrations,
+        tax_liabilities: state.taxLiabilities,
+        tax_agency_payments: state.taxAgencyPayments,
+        tax_payment_allocations: state.taxPaymentAllocations,
+        tax_filings: state.taxFilings,
+        reconciliation_exceptions: state.reconciliationExceptions.filter((item) => item.domain === "tax"),
+      };
+      return Boolean(collections[entityType]?.some((item) => item.id === entityId));
     },
 
     createTaxAuditEvent: async (values) => {
@@ -441,6 +605,52 @@ function seedLiability(repo: { state: TaxState }, values: Partial<Record<string,
   return liability;
 }
 
+function seedPayment(repo: { state: TaxState }, values: Partial<Record<string, unknown>> = {}) {
+  const taxRegistrationId = values.taxRegistrationId ?? seedRegistration(repo).id;
+  const payment = {
+    id: repo.state.ids.taxAgencyPayment++,
+    taxRegistrationId,
+    amountCents: 10_600,
+    currency: "USD",
+    paymentDate: "2026-07-15",
+    methodType: "ach",
+    methodLabel: "ACH",
+    institutionName: "Bank",
+    maskedLast4: "1234",
+    confirmationRef: "IRS-10600",
+    status: "cleared",
+    submittedAt: now(),
+    clearedAt: now(),
+    createdBy: 1,
+    createdAt: now(),
+    updatedAt: now(),
+    ...values,
+  };
+  repo.state.taxAgencyPayments.push(payment);
+  return payment;
+}
+
+function seedAllocation(repo: { state: TaxState }, values: Partial<Record<string, unknown>> = {}) {
+  const taxLiabilityId = values.taxLiabilityId ?? seedLiability(repo, { status: "recognized" }).id;
+  const taxAgencyPaymentId = values.taxAgencyPaymentId ?? seedPayment(repo).id;
+  const allocation = {
+    id: repo.state.ids.taxPaymentAllocation++,
+    taxLiabilityId,
+    taxAgencyPaymentId,
+    amountCents: 10_600,
+    currency: "USD",
+    status: "active",
+    reversedAt: null,
+    reversedBy: null,
+    createdBy: 1,
+    createdAt: now(),
+    updatedAt: now(),
+    ...values,
+  };
+  repo.state.taxPaymentAllocations.push(allocation);
+  return allocation;
+}
+
 function seedFiling(repo: { state: TaxState }, values: Partial<Record<string, unknown>> = {}) {
   const taxRegistrationId = values.taxRegistrationId ?? seedRegistration(repo).id;
   const filing = {
@@ -463,6 +673,34 @@ function seedFiling(repo: { state: TaxState }, values: Partial<Record<string, un
   };
   repo.state.taxFilings.push(filing);
   return filing;
+}
+
+function seedReconciliationException(repo: { state: TaxState }, values: Partial<Record<string, unknown>> = {}) {
+  const exception = {
+    id: repo.state.ids.reconciliationException++,
+    domain: "tax",
+    expectedEntityType: null,
+    expectedEntityId: null,
+    actualEntityType: null,
+    actualEntityId: null,
+    currency: "USD",
+    expectedAmountCents: 10_626,
+    actualAmountCents: 10_600,
+    differenceAmountCents: 26,
+    reasonCode: "tax_underpayment",
+    summary: "Unresolved tax underpayment",
+    status: "open",
+    ownerAdminId: null,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolutionNotes: null,
+    createdBy: 1,
+    createdAt: now(),
+    updatedAt: now(),
+    ...values,
+  };
+  repo.state.reconciliationExceptions.push(exception);
+  return exception;
 }
 
 async function assertTaxRejects(fn: () => Promise<unknown>, code: string) {
@@ -711,13 +949,15 @@ test("recognized tax liability cannot rewrite historical facts", async () => {
   assert.equal(updated.notes, "Reviewed by accountant");
 });
 
-test("tax liability payment state is not stored in V1", async () => {
+test("tax liability settlement state is derived, not stored on the liability row", async () => {
   const repo = makeRepo();
   const liability = seedLiability(repo, { status: "recognized" });
   const response = await getTaxLiability(repo, liability.id, "2026-08-30");
 
   assert.doesNotMatch(taxLiabilitiesSchemaBlock(), /paymentStatus|payment_status|paid|unpaid|partially_paid/);
-  assert.equal(response.paymentTrackingStatus, "not_yet_tracked");
+  assert.equal(response.settlementState, "unpaid");
+  assert.equal(response.paymentTrackingStatus, "unpaid");
+  assert.equal(response.outstandingAmountCents, 10_626);
 });
 
 test("increase adjustment raises effective liability after recognition", async () => {
@@ -1126,8 +1366,632 @@ test("tax liabilities and filings are independent obligation records", async () 
   assert.equal(liabilityAfter.status, "draft");
 });
 
-test("tax routes do not expose agency payment or allocation mutations in 4A", () => {
-  assert.doesNotMatch(taxBlock(), /finance\/tax\/(?:agency-)?payments|finance\/tax\/(?:payment-)?allocations/);
+test("tax agency payment can be edited only while pending", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const payment = await recordTaxAgencyPayment(repo, {
+    taxRegistrationId: registration.id,
+    amountCents: 10_000,
+    methodType: "ach",
+    status: "pending",
+    actorAdminId: 7,
+  });
+
+  const edited = await updateTaxAgencyPayment(repo, payment.id, {
+    amountCents: 10_500,
+    confirmationRef: "draft-ref",
+    actorAdminId: 7,
+  });
+  assert.equal(edited.amountCents, 10_500);
+
+  await transitionTaxAgencyPayment(repo, payment.id, { status: "submitted", actorAdminId: 7 }, now());
+  await assertTaxRejects(
+    () => updateTaxAgencyPayment(repo, payment.id, { amountCents: 10_600, actorAdminId: 7 }),
+    "TAX_AGENCY_PAYMENT_NOT_PENDING",
+  );
+});
+
+test("cleared tax payment fully allocated to matching liability derives paid settlement", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "cleared" });
+
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const [settledLiability] = await listTaxLiabilities(repo, { pageSize: 100 });
+  const [settledPayment] = await listTaxAgencyPayments(repo, { pageSize: 100 });
+  assert.equal(settledLiability.effectiveAmountCents, 10_000);
+  assert.equal(settledLiability.clearedAllocatedAmountCents, 10_000);
+  assert.equal(settledLiability.outstandingAmountCents, 0);
+  assert.equal(settledLiability.settlementState, "paid");
+  assert.equal(settledPayment.activeAllocatedAmountCents, 10_000);
+  assert.equal(settledPayment.unappliedAmountCents, 0);
+  assert.equal(settledPayment.settlementImpact, "settled");
+});
+
+test("tax payment allocation can leave payment partially unapplied", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "cleared" });
+
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 6_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const liabilityResponse = await getTaxLiability(repo, liability.id, "2026-08-30");
+  const paymentResponse = await getTaxAgencyPayment(repo, payment.id, "2026-08-30");
+  assert.equal(liabilityResponse.clearedAllocatedAmountCents, 6_000);
+  assert.equal(liabilityResponse.outstandingAmountCents, 4_000);
+  assert.equal(liabilityResponse.settlementState, "partial");
+  assert.equal(paymentResponse.activeAllocatedAmountCents, 6_000);
+  assert.equal(paymentResponse.unappliedAmountCents, 4_000);
+});
+
+test("one tax agency payment can allocate across multiple compatible liabilities", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const firstLiability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const secondLiability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 5_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 15_000, status: "cleared" });
+
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: firstLiability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: secondLiability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 5_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  assert.equal((await getTaxLiability(repo, firstLiability.id, "2026-08-30")).settlementState, "paid");
+  assert.equal((await getTaxLiability(repo, secondLiability.id, "2026-08-30")).settlementState, "paid");
+  assert.equal((await getTaxAgencyPayment(repo, payment.id, "2026-08-30")).unappliedAmountCents, 0);
+});
+
+test("one tax liability can receive allocations from multiple payments", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const firstPayment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 6_000, status: "cleared" });
+  const secondPayment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 4_000, status: "cleared" });
+
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: firstPayment.id,
+    amountCents: 6_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: secondPayment.id,
+    amountCents: 4_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const response = await getTaxLiability(repo, liability.id, "2026-08-30");
+  assert.equal(response.clearedAllocatedAmountCents, 10_000);
+  assert.equal(response.settlementState, "paid");
+});
+
+test("tax payment may exceed known liability and remain unapplied", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = await recordTaxAgencyPayment(repo, {
+    taxRegistrationId: registration.id,
+    amountCents: 12_000,
+    methodType: "ach",
+    status: "cleared",
+    actorAdminId: 7,
+  }, now());
+
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const paymentResponse = await getTaxAgencyPayment(repo, payment.id, "2026-08-30");
+  assert.equal(paymentResponse.amountCents, 12_000);
+  assert.equal(paymentResponse.activeAllocatedAmountCents, 10_000);
+  assert.equal(paymentResponse.unappliedAmountCents, 2_000);
+});
+
+test("submitted tax payment allocation is in-flight and does not settle liability", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "submitted", clearedAt: null });
+
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const response = await getTaxLiability(repo, liability.id, "2026-08-30");
+  assert.equal(response.inFlightAllocatedAmountCents, 10_000);
+  assert.equal(response.clearedAllocatedAmountCents, 0);
+  assert.equal(response.outstandingAmountCents, 10_000);
+  assert.equal(response.settlementState, "unpaid");
+});
+
+test("failed tax payment allocation does not count as liability settlement", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "failed", clearedAt: null });
+  seedAllocation(repo, { taxLiabilityId: liability.id, taxAgencyPaymentId: payment.id, amountCents: 10_000 });
+
+  const response = await getTaxLiability(repo, liability.id, "2026-08-30");
+  assert.equal(response.clearedAllocatedAmountCents, 0);
+  assert.equal(response.inFlightAllocatedAmountCents, 0);
+  assert.equal(response.outstandingAmountCents, 10_000);
+});
+
+test("reversed tax payment allocation does not count as liability settlement", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "reversed" });
+  seedAllocation(repo, { taxLiabilityId: liability.id, taxAgencyPaymentId: payment.id, amountCents: 10_000 });
+
+  const response = await getTaxLiability(repo, liability.id, "2026-08-30");
+  assert.equal(response.clearedAllocatedAmountCents, 0);
+  assert.equal(response.outstandingAmountCents, 10_000);
+});
+
+test("tax allocation rejects currency mismatch", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000, currency: "USD" });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, currency: "USD" });
+
+  await assertTaxRejects(
+    () => applyTaxPaymentAllocation(repo, {
+      taxLiabilityId: liability.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 10_000,
+      currency: "EUR",
+      actorAdminId: 7,
+    }),
+    "TAX_ALLOCATION_CURRENCY_MISMATCH",
+  );
+});
+
+test("tax allocation rejects tax registration mismatch", async () => {
+  const repo = makeRepo();
+  const liability = seedLiability(repo, { status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: seedRegistration(repo).id, amountCents: 10_000 });
+
+  await assertTaxRejects(
+    () => applyTaxPaymentAllocation(repo, {
+      taxLiabilityId: liability.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 10_000,
+      currency: "USD",
+      actorAdminId: 7,
+    }),
+    "TAX_ALLOCATION_REGISTRATION_MISMATCH",
+  );
+});
+
+test("tax allocation rejects draft and voided liabilities", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const draft = seedLiability(repo, { taxRegistrationId: registration.id, status: "draft", amountCents: 10_000 });
+  const voided = seedLiability(repo, { taxRegistrationId: registration.id, status: "voided", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000 });
+
+  await assertTaxRejects(
+    () => applyTaxPaymentAllocation(repo, {
+      taxLiabilityId: draft.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 1_000,
+      currency: "USD",
+      actorAdminId: 7,
+    }),
+    "TAX_ALLOCATION_LIABILITY_STATUS_INVALID",
+  );
+  await assertTaxRejects(
+    () => applyTaxPaymentAllocation(repo, {
+      taxLiabilityId: voided.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 1_000,
+      currency: "USD",
+      actorAdminId: 7,
+    }),
+    "TAX_ALLOCATION_LIABILITY_STATUS_INVALID",
+  );
+});
+
+test("tax allocation rejects adjustment rows as targets", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const base = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const adjustment = seedLiability(repo, {
+    taxRegistrationId: registration.id,
+    adjustsTaxLiabilityId: base.id,
+    status: "recognized",
+    amountEffect: "increase",
+    amountCents: 1_000,
+  });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 1_000 });
+
+  await assertTaxRejects(
+    () => applyTaxPaymentAllocation(repo, {
+      taxLiabilityId: adjustment.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 1_000,
+      currency: "USD",
+      actorAdminId: 7,
+    }),
+    "TAX_ALLOCATION_TARGET_ADJUSTMENT",
+  );
+});
+
+test("stale tax payment over-allocation is prevented after locks are acquired", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const firstLiability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 8_000 });
+  const secondLiability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000 });
+  let injected = false;
+  (repo as any).__afterLockTaxPaymentAllocationsForPayment = () => {
+    injected = true;
+    seedAllocation(repo, {
+      taxLiabilityId: firstLiability.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 8_000,
+    });
+  };
+
+  await assertTaxRejects(
+    () => applyTaxPaymentAllocation(repo, {
+      taxLiabilityId: secondLiability.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 3_000,
+      currency: "USD",
+      actorAdminId: 7,
+    }),
+    "TAX_PAYMENT_OVER_ALLOCATED",
+  );
+  assert.equal(injected, true);
+  assert.equal(repo.state.taxPaymentAllocations.length, 0);
+});
+
+test("stale tax liability over-allocation is prevented after locks are acquired", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const firstPayment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 8_000 });
+  const secondPayment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000 });
+  let injected = false;
+  (repo as any).__afterLockTaxPaymentAllocationsForLiability = () => {
+    injected = true;
+    seedAllocation(repo, {
+      taxLiabilityId: liability.id,
+      taxAgencyPaymentId: firstPayment.id,
+      amountCents: 8_000,
+    });
+  };
+
+  await assertTaxRejects(
+    () => applyTaxPaymentAllocation(repo, {
+      taxLiabilityId: liability.id,
+      taxAgencyPaymentId: secondPayment.id,
+      amountCents: 3_000,
+      currency: "USD",
+      actorAdminId: 7,
+    }),
+    "TAX_LIABILITY_OVER_ALLOCATED",
+  );
+  assert.equal(injected, true);
+  assert.equal(repo.state.taxPaymentAllocations.length, 0);
+});
+
+test("tax allocation reversal restores derived balances", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000 });
+  const allocation = await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const reversed = await reverseTaxPaymentAllocation(repo, allocation.id, 8, now());
+  const liabilityAfter = await getTaxLiability(repo, liability.id, "2026-08-30");
+  const paymentAfter = await getTaxAgencyPayment(repo, payment.id, "2026-08-30");
+  assert.equal(reversed.status, "reversed");
+  assert.equal(reversed.reversedBy, 8);
+  assert.equal(liabilityAfter.outstandingAmountCents, 10_000);
+  assert.equal(paymentAfter.unappliedAmountCents, 10_000);
+});
+
+test("tax allocation double reversal is idempotent and does not corrupt balances", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000 });
+  const allocation = await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  await reverseTaxPaymentAllocation(repo, allocation.id, 8, now());
+  await reverseTaxPaymentAllocation(repo, allocation.id, 8, now());
+
+  const reversalAudits = repo.state.taxAuditEvents.filter((event) => (
+    event.entityType === "tax_payment_allocation" && event.action === "reversed"
+  ));
+  assert.equal(reversalAudits.length, 1);
+  assert.equal((await getTaxLiability(repo, liability.id, "2026-08-30")).outstandingAmountCents, 10_000);
+});
+
+test("tax agency payment with active allocation cannot be reversed directly", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "cleared" });
+  seedAllocation(repo, { taxLiabilityId: liability.id, taxAgencyPaymentId: payment.id, amountCents: 10_000 });
+
+  await assertTaxRejects(
+    () => reverseTaxAgencyPayment(repo, payment.id, 7),
+    "TAX_AGENCY_PAYMENT_HAS_ACTIVE_ALLOCATIONS",
+  );
+});
+
+test("later decrease adjustment can create overapplied tax state without rewriting history", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "cleared" });
+  const allocation = await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const adjustment = await createTaxLiabilityAdjustment(repo, liability.id, {
+    amountEffect: "decrease",
+    amountCents: 2_000,
+    actorAdminId: 7,
+  });
+  await transitionTaxLiability(repo, adjustment.id, { status: "recognized", actorAdminId: 7 }, now());
+
+  const response = await getTaxLiability(repo, liability.id, "2026-08-30");
+  assert.equal(response.effectiveAmountCents, 8_000);
+  assert.equal(response.clearedAllocatedAmountCents, 10_000);
+  assert.equal(response.overappliedAmountCents, 2_000);
+  assert.equal(response.settlementState, "overpaid");
+  assert.equal(repo.state.taxPaymentAllocations.find((item) => item.id === allocation.id)?.amountCents, 10_000);
+});
+
+test("tax payment operations do not mutate filing lifecycle", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const filing = seedFiling(repo, { taxRegistrationId: registration.id, status: "draft" });
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_000, status: "cleared" });
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_000,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  assert.equal(repo.state.taxFilings.find((item) => item.id === filing.id)?.status, "draft");
+});
+
+test("tax reconciliation creation forces tax domain and rejects domain injection", async () => {
+  const repo = makeRepo();
+  const liability = seedLiability(repo, { status: "recognized", amountCents: 10_626 });
+  const payment = seedPayment(repo, { taxRegistrationId: liability.taxRegistrationId, amountCents: 10_600 });
+
+  assert.equal(createTaxReconciliationExceptionPayloadSchema.safeParse({
+    domain: "ap",
+    expectedEntityType: "tax_liabilities",
+    expectedEntityId: liability.id,
+    actualEntityType: "tax_agency_payments",
+    actualEntityId: payment.id,
+    currency: "USD",
+    expectedAmountCents: 10_626,
+    actualAmountCents: 10_600,
+    reasonCode: "tax_underpayment",
+    summary: "Unresolved underpayment",
+  }).success, false);
+
+  const exception = await createTaxReconciliationException(repo, {
+    expectedEntityType: "tax_liabilities",
+    expectedEntityId: liability.id,
+    actualEntityType: "tax_agency_payments",
+    actualEntityId: payment.id,
+    currency: "USD",
+    expectedAmountCents: 10_626,
+    actualAmountCents: 10_600,
+    reasonCode: "tax_underpayment",
+    summary: "Unresolved underpayment",
+    domain: "payroll",
+    actorAdminId: 7,
+  } as any);
+  seedReconciliationException(repo, { domain: "ap", reasonCode: "amount_mismatch", summary: "AP issue" });
+
+  assert.equal(exception.domain, "tax");
+  assert.equal(exception.differenceAmountCents, 26);
+  assert.equal((await listTaxReconciliationExceptions(repo, { pageSize: 100 })).length, 1);
+});
+
+test("tax reconciliation lifecycle preserves actor attribution", async () => {
+  const repo = makeRepo();
+  const exception = seedReconciliationException(repo);
+
+  const investigating = await transitionTaxReconciliationException(repo, exception.id, "investigate", { actorAdminId: 7 }, now());
+  const resolved = await transitionTaxReconciliationException(repo, exception.id, "resolve", {
+    resolutionNotes: "Agency credit posted",
+    actorAdminId: 8,
+  }, now());
+  const reopened = await transitionTaxReconciliationException(repo, exception.id, "reopen", { actorAdminId: 9 }, now());
+
+  assert.equal(investigating.status, "investigating");
+  assert.equal(resolved.status, "resolved");
+  assert.equal(resolved.resolvedBy, 8);
+  assert.equal(reopened.status, "open");
+  assert.equal(reopened.resolvedBy, null);
+  assert.deepEqual(
+    repo.state.taxAuditEvents
+      .filter((event) => event.entityType === "reconciliation_exception")
+      .map((event) => event.action),
+    ["investigating", "resolved", "reopened"],
+  );
+});
+
+test("admin_finance cannot read tax payment or reconciliation routes", () => {
+  const block = taxBlock();
+  assert.match(block, /finance\/tax\/payments/);
+  assert.match(block, /finance\/tax\/payment-allocations/);
+  assert.match(block, /finance\/tax\/reconciliation-exceptions/);
+  assert.equal(block.includes("admin_finance"), false);
+});
+
+test("tax payment, allocation, and reconciliation audit failures roll back business writes", async () => {
+  const paymentRepo = makeRepo();
+  const registration = seedRegistration(paymentRepo);
+  paymentRepo.state.failAudit = true;
+  await assert.rejects(
+    () => recordTaxAgencyPayment(paymentRepo, {
+      taxRegistrationId: registration.id,
+      amountCents: 10_000,
+      methodType: "ach",
+      actorAdminId: 7,
+    }),
+    /audit insert failed/,
+  );
+  assert.equal(paymentRepo.state.taxAgencyPayments.length, 0);
+
+  const allocationRepo = makeRepo();
+  const allocationRegistration = seedRegistration(allocationRepo);
+  const liability = seedLiability(allocationRepo, { taxRegistrationId: allocationRegistration.id, status: "recognized", amountCents: 10_000 });
+  const payment = seedPayment(allocationRepo, { taxRegistrationId: allocationRegistration.id, amountCents: 10_000 });
+  allocationRepo.state.failAudit = true;
+  await assert.rejects(
+    () => applyTaxPaymentAllocation(allocationRepo, {
+      taxLiabilityId: liability.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: 10_000,
+      currency: "USD",
+      actorAdminId: 7,
+    }),
+    /audit insert failed/,
+  );
+  assert.equal(allocationRepo.state.taxPaymentAllocations.length, 0);
+
+  const reconciliationRepo = makeRepo();
+  reconciliationRepo.state.failAudit = true;
+  await assert.rejects(
+    () => createTaxReconciliationException(reconciliationRepo, {
+      reasonCode: "other_tax_discrepancy",
+      summary: "Audit failure rollback",
+      actorAdminId: 7,
+    }),
+    /audit insert failed/,
+  );
+  assert.equal(reconciliationRepo.state.reconciliationExceptions.length, 0);
+});
+
+test("exact 106.26 liability and 106.00 agency payment leaves 0.26 tax reconciliation issue", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const liability = seedLiability(repo, { taxRegistrationId: registration.id, status: "recognized", amountCents: 10_626 });
+  const payment = seedPayment(repo, { taxRegistrationId: registration.id, amountCents: 10_600, status: "cleared" });
+  await applyTaxPaymentAllocation(repo, {
+    taxLiabilityId: liability.id,
+    taxAgencyPaymentId: payment.id,
+    amountCents: 10_600,
+    currency: "USD",
+    actorAdminId: 7,
+  });
+
+  const response = await getTaxLiability(repo, liability.id, "2026-08-30");
+  const exception = await createTaxReconciliationException(repo, {
+    expectedEntityType: "tax_liabilities",
+    expectedEntityId: liability.id,
+    actualEntityType: "tax_agency_payments",
+    actualEntityId: payment.id,
+    currency: "USD",
+    expectedAmountCents: response.effectiveAmountCents,
+    actualAmountCents: response.clearedAllocatedAmountCents,
+    reasonCode: "tax_underpayment",
+    summary: "Q2 liability remains underpaid by 26 cents.",
+    actorAdminId: 7,
+  });
+
+  assert.equal(response.effectiveAmountCents, 10_626);
+  assert.equal(response.clearedAllocatedAmountCents, 10_600);
+  assert.equal(response.outstandingAmountCents, 26);
+  assert.equal(response.settlementState, "partial");
+  assert.equal(exception.status, "open");
+  assert.equal(exception.differenceAmountCents, 26);
+  assert.equal(repo.state.taxLiabilities.find((item) => item.id === liability.id)?.amountCents, 10_626);
+  assert.equal(repo.state.taxAgencyPayments.find((item) => item.id === payment.id)?.amountCents, 10_600);
+});
+
+test("tax payment schema accepts committed method types only", () => {
+  assert.equal(createTaxAgencyPaymentPayloadSchema.safeParse({
+    taxRegistrationId: 1,
+    amountCents: 100,
+    methodType: "wire",
+  }).success, false);
+  assert.equal(createTaxAgencyPaymentPayloadSchema.safeParse({
+    taxRegistrationId: 1,
+    amountCents: 100,
+    methodType: "ach",
+  }).success, true);
+});
+
+test("tax payment and reconciliation audit scope is forward migration only", () => {
+  const migration23 = readFileSync("migrations/0023_tax_audit_events.sql", "utf8");
+  const migration24 = readFileSync("migrations/0024_tax_payment_reconciliation_audit_scope.sql", "utf8");
+  assert.doesNotMatch(migration23, /tax_agency_payment|tax_payment_allocation|reconciliation_exception/);
+  assert.match(migration24, /DROP CONSTRAINT IF EXISTS "tax_audit_events_entity_type_check"/);
+  assert.match(migration24, /'tax_agency_payment'/);
+  assert.match(migration24, /'tax_payment_allocation'/);
+  assert.match(migration24, /'reconciliation_exception'/);
+  assert.match(migration24, /'allocation_created'/);
+  assert.match(migration24, /'reopened'/);
 });
 
 test("tax read routes are super-admin only", () => {
@@ -1226,11 +2090,26 @@ test("tax audit events are forward migration service-role records", () => {
   assert.match(migration, /USING \(false\)/);
 });
 
-test("tax registration scope cannot change after liabilities or filings exist", async () => {
+test("tax registration scope cannot change after tax facts exist", async () => {
   const repo = makeRepo();
   const registration = seedRegistration(repo);
   const otherAgency = seedTaxAgency(repo, { agencyCode: "CA-EDD", name: "California EDD", jurisdictionType: "state", jurisdictionCode: "CA" });
   seedLiability(repo, { taxRegistrationId: registration.id });
+
+  await assertTaxRejects(
+    () => updateTaxRegistration(repo, registration.id, {
+      taxAgencyId: otherAgency.id,
+      actorAdminId: 7,
+    }),
+    "TAX_REGISTRATION_SCOPE_IMMUTABLE",
+  );
+});
+
+test("tax registration scope cannot change after agency payments exist", async () => {
+  const repo = makeRepo();
+  const registration = seedRegistration(repo);
+  const otherAgency = seedTaxAgency(repo, { agencyCode: "NY-DTF", name: "New York Department of Taxation", jurisdictionType: "state", jurisdictionCode: "NY" });
+  seedPayment(repo, { taxRegistrationId: registration.id });
 
   await assertTaxRejects(
     () => updateTaxRegistration(repo, registration.id, {

@@ -1,19 +1,28 @@
 import { z } from "zod";
 import type {
+  AllocationStatus,
   AmountEffect,
   ExternalRecordRef,
+  FinanceEntityType,
   FinanceSourceType,
   InsertExternalRecordRef,
+  InsertReconciliationException,
   InsertTaxAgency,
+  InsertTaxAgencyPayment,
   InsertTaxAuditEvent,
   InsertTaxFiling,
   InsertTaxLiability,
+  InsertTaxPaymentAllocation,
   InsertTaxRegistration,
   LegalEntity,
+  ReconciliationException,
+  ReconciliationExceptionStatus,
   TaxAgency,
+  TaxAgencyPayment,
   TaxAuditEvent,
   TaxFiling,
   TaxLiability,
+  TaxPaymentAllocation,
   TaxRegistration,
   Vendor,
 } from "@shared/schema";
@@ -80,20 +89,49 @@ const TAX_LIABILITY_EFFECTIVE_STATUSES = ["recognized", "disputed"] as const;
 const TAX_LIABILITY_TRANSITION_STATUSES = ["recognized", "disputed", "voided"] as const;
 const TAX_FILING_STATUSES = ["draft", "ready", "filed", "accepted", "rejected", "voided"] as const;
 const TAX_FILING_TRANSITION_STATUSES = ["ready", "filed", "accepted", "rejected"] as const;
+const TAX_AGENCY_PAYMENT_METHODS = ["provider", "ach", "check", "card", "manual", "other"] as const;
+const TAX_AGENCY_PAYMENT_STATUSES = ["pending", "submitted", "cleared", "failed", "reversed", "voided"] as const;
+const TAX_AGENCY_PAYMENT_MUTABLE_STATUSES = ["pending"] as const;
+const TAX_AGENCY_PAYMENT_TRANSITION_STATUSES = ["submitted", "cleared", "failed", "voided"] as const;
+const TAX_ALLOCATION_STATUSES = ["active", "reversed", "voided"] as const;
+const TAX_RECONCILIATION_ENTITY_TYPES = [
+  "tax_agencies",
+  "tax_registrations",
+  "tax_liabilities",
+  "tax_agency_payments",
+  "tax_payment_allocations",
+  "tax_filings",
+] as const satisfies readonly FinanceEntityType[];
+const TAX_RECONCILIATION_REASON_CODES = [
+  "tax_underpayment",
+  "overpayment_unapplied_agency_payment",
+  "amount_mismatch",
+  "duplicate_agency_payment",
+  "missing_payment_confirmation",
+  "provider_agency_mismatch",
+  "stale_outstanding_liability",
+  "other_tax_discrepancy",
+] as const;
 const TAX_SOURCE_TYPES = ["provider", "csv_import", "manual", "internal"] as const;
 const AMOUNT_EFFECTS = ["increase", "decrease"] as const;
 const TAX_EXTERNAL_REF_ENTITY_TYPES = [
   "tax_agencies",
   "tax_registrations",
   "tax_liabilities",
+  "tax_agency_payments",
+  "tax_payment_allocations",
   "tax_filings",
+  "reconciliation_exceptions",
 ] as const;
 const EXTERNAL_RECORD_REF_STATUSES = ["active", "superseded", "voided"] as const;
 const TAX_AUDIT_ENTITY_TYPES = [
   "tax_agency",
   "tax_registration",
   "tax_liability",
+  "tax_agency_payment",
+  "tax_payment_allocation",
   "tax_filing",
+  "reconciliation_exception",
 ] as const;
 const TAX_AUDIT_ACTIONS = [
   "created",
@@ -101,15 +139,24 @@ const TAX_AUDIT_ACTIONS = [
   "activated",
   "deactivated",
   "closed",
+  "submitted",
+  "cleared",
+  "failed",
+  "reversed",
   "recognized",
   "disputed",
   "voided",
   "adjustment_created",
+  "allocation_created",
   "ready",
   "filed",
   "accepted",
   "rejected",
   "amendment_created",
+  "investigating",
+  "resolved",
+  "waived",
+  "reopened",
 ] as const;
 const TAX_AGENCY_AUDIT_FIELDS = [
   "agencyCode",
@@ -155,6 +202,45 @@ const TAX_FILING_AUDIT_FIELDS = [
   "amendsTaxFilingId",
   "status",
 ] as const;
+const TAX_AGENCY_PAYMENT_AUDIT_FIELDS = [
+  "taxRegistrationId",
+  "amountCents",
+  "currency",
+  "paymentDate",
+  "methodType",
+  "methodLabel",
+  "institutionName",
+  "maskedLast4",
+  "confirmationRef",
+  "status",
+  "submittedAt",
+  "clearedAt",
+] as const;
+const TAX_PAYMENT_ALLOCATION_AUDIT_FIELDS = [
+  "taxLiabilityId",
+  "taxAgencyPaymentId",
+  "amountCents",
+  "currency",
+  "status",
+  "reversedAt",
+  "reversedBy",
+] as const;
+const TAX_RECONCILIATION_EXCEPTION_AUDIT_FIELDS = [
+  "domain",
+  "expectedEntityType",
+  "expectedEntityId",
+  "actualEntityType",
+  "actualEntityId",
+  "currency",
+  "expectedAmountCents",
+  "actualAmountCents",
+  "differenceAmountCents",
+  "reasonCode",
+  "status",
+  "ownerAdminId",
+  "resolvedAt",
+  "resolvedBy",
+] as const;
 
 const positiveIdSchema = z.coerce.number().int().positive();
 const optionalIdSchema = z.preprocess(
@@ -172,7 +258,15 @@ const currencySchema = z
   .trim()
   .regex(/^[a-zA-Z]{3}$/)
   .transform((value) => value.toUpperCase());
+const optionalCurrencySchema = z.preprocess(
+  (value) => value === undefined || value === "" || value === null ? undefined : value,
+  currencySchema.optional(),
+);
 const metadataSchema = z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).default({});
+const optionalNonnegativeAmountSchema = z.preprocess(
+  (value) => value === "" || value === undefined || value === null ? null : value,
+  z.coerce.number().int().min(0).nullable().optional(),
+);
 
 function requiredText(max: number) {
   return z.string().trim().min(1).max(max);
@@ -423,6 +517,134 @@ export const createTaxFilingAmendmentPayloadSchema = z.object({
   notes: optionalText(4000),
 }).strict();
 
+export const taxAgencyPaymentListQuerySchema = z.object({
+  status: z.enum(["all", ...TAX_AGENCY_PAYMENT_STATUSES]).default("all"),
+  taxRegistrationId: z.preprocess(
+    (value) => value === "" || value === undefined ? undefined : value,
+    z.coerce.number().int().positive().optional(),
+  ),
+  pageSize: z.preprocess(
+    (value) => value === "" || value === undefined ? 100 : value,
+    z.coerce.number().int().min(1).max(250).default(100),
+  ),
+}).strict();
+
+export const createTaxAgencyPaymentPayloadSchema = z.object({
+  taxRegistrationId: positiveIdSchema,
+  amountCents: amountCentsSchema,
+  currency: currencySchema.default("USD"),
+  paymentDate: optionalDateOnlySchema,
+  methodType: z.enum(TAX_AGENCY_PAYMENT_METHODS),
+  methodLabel: optionalText(120),
+  institutionName: optionalText(160),
+  maskedLast4: z.preprocess(
+    (value) => value === undefined || value === "" || value === null ? null : value,
+    z.string().regex(/^\d{4}$/).nullable().optional(),
+  ),
+  confirmationRef: optionalText(200),
+  status: z.enum(["pending", "submitted", "cleared"]).default("pending"),
+  submittedAt: optionalTimestamp(),
+  clearedAt: optionalTimestamp(),
+}).strict();
+
+export const updateTaxAgencyPaymentPayloadSchema = z
+  .object({
+    taxRegistrationId: positiveIdSchema.optional(),
+    amountCents: amountCentsSchema.optional(),
+    currency: currencySchema.optional(),
+    paymentDate: optionalDateOnlySchema,
+    methodType: z.enum(TAX_AGENCY_PAYMENT_METHODS).optional(),
+    methodLabel: optionalText(120),
+    institutionName: optionalText(160),
+    maskedLast4: z.preprocess(
+      (value) => value === undefined || value === "" || value === null ? null : value,
+      z.string().regex(/^\d{4}$/).nullable().optional(),
+    ),
+    confirmationRef: optionalText(200),
+  })
+  .strict()
+  .refine(nonEmptyPatch, "At least one tax agency payment field is required.");
+
+export const taxAgencyPaymentTransitionPayloadSchema = z.object({
+  status: z.enum(TAX_AGENCY_PAYMENT_TRANSITION_STATUSES),
+  paymentDate: optionalDateOnlySchema,
+  submittedAt: optionalTimestamp(),
+  clearedAt: optionalTimestamp(),
+  confirmationRef: optionalText(200),
+}).strict();
+
+export const taxPaymentAllocationListQuerySchema = z.object({
+  status: z.enum(["all", ...TAX_ALLOCATION_STATUSES]).default("all"),
+  taxLiabilityId: z.preprocess(
+    (value) => value === "" || value === undefined ? undefined : value,
+    z.coerce.number().int().positive().optional(),
+  ),
+  taxAgencyPaymentId: z.preprocess(
+    (value) => value === "" || value === undefined ? undefined : value,
+    z.coerce.number().int().positive().optional(),
+  ),
+  pageSize: z.preprocess(
+    (value) => value === "" || value === undefined ? 100 : value,
+    z.coerce.number().int().min(1).max(250).default(100),
+  ),
+}).strict();
+
+export const applyTaxPaymentAllocationPayloadSchema = z.object({
+  taxLiabilityId: positiveIdSchema,
+  taxAgencyPaymentId: positiveIdSchema,
+  amountCents: amountCentsSchema,
+  currency: currencySchema.default("USD"),
+}).strict();
+
+function refineReconciliationEntityPair(data: Record<string, unknown>, ctx: z.RefinementCtx) {
+  for (const side of ["expected", "actual"] as const) {
+    const entityType = data[`${side}EntityType`];
+    const entityId = data[`${side}EntityId`];
+    if (entityType && !entityId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [`${side}EntityId`],
+        message: "Entity id is required when entity type is provided.",
+      });
+    }
+    if (!entityType && entityId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [`${side}EntityType`],
+        message: "Entity type is required when entity id is provided.",
+      });
+    }
+  }
+}
+
+export const taxReconciliationListQuerySchema = z.object({
+  status: z.enum(["all", "open", "investigating", "resolved", "waived", "voided"]).default("all"),
+  pageSize: z.preprocess(
+    (value) => value === "" || value === undefined ? 100 : value,
+    z.coerce.number().int().min(1).max(250).default(100),
+  ),
+}).strict();
+
+export const createTaxReconciliationExceptionPayloadSchema = z
+  .object({
+    expectedEntityType: z.enum(TAX_RECONCILIATION_ENTITY_TYPES).nullable().optional(),
+    expectedEntityId: optionalIdSchema,
+    actualEntityType: z.enum(TAX_RECONCILIATION_ENTITY_TYPES).nullable().optional(),
+    actualEntityId: optionalIdSchema,
+    currency: optionalCurrencySchema,
+    expectedAmountCents: optionalNonnegativeAmountSchema,
+    actualAmountCents: optionalNonnegativeAmountSchema,
+    reasonCode: z.enum(TAX_RECONCILIATION_REASON_CODES),
+    summary: requiredText(600),
+    ownerAdminId: optionalIdSchema,
+  })
+  .strict()
+  .superRefine(refineReconciliationEntityPair);
+
+export const taxReconciliationExceptionTransitionPayloadSchema = z.object({
+  resolutionNotes: optionalText(1000),
+}).strict();
+
 export const createTaxExternalRefPayloadSchema = z.object({
   entityType: z.enum(TAX_EXTERNAL_REF_ENTITY_TYPES),
   entityId: positiveIdSchema,
@@ -458,6 +680,18 @@ export type CreateTaxFilingPayload = z.infer<typeof createTaxFilingPayloadSchema
 export type UpdateTaxFilingPayload = z.infer<typeof updateTaxFilingPayloadSchema>;
 export type TaxFilingTransitionPayload = z.infer<typeof taxFilingTransitionPayloadSchema>;
 export type CreateTaxFilingAmendmentPayload = z.infer<typeof createTaxFilingAmendmentPayloadSchema>;
+export type TaxAgencyPaymentListQuery = z.infer<typeof taxAgencyPaymentListQuerySchema>;
+export type TaxAgencyPaymentListFilters = Partial<TaxAgencyPaymentListQuery>;
+export type CreateTaxAgencyPaymentPayload = z.infer<typeof createTaxAgencyPaymentPayloadSchema>;
+export type UpdateTaxAgencyPaymentPayload = z.infer<typeof updateTaxAgencyPaymentPayloadSchema>;
+export type TaxAgencyPaymentTransitionPayload = z.infer<typeof taxAgencyPaymentTransitionPayloadSchema>;
+export type TaxPaymentAllocationListQuery = z.infer<typeof taxPaymentAllocationListQuerySchema>;
+export type TaxPaymentAllocationListFilters = Partial<TaxPaymentAllocationListQuery>;
+export type ApplyTaxPaymentAllocationPayload = z.infer<typeof applyTaxPaymentAllocationPayloadSchema>;
+export type TaxReconciliationListQuery = z.infer<typeof taxReconciliationListQuerySchema>;
+export type TaxReconciliationListFilters = Partial<TaxReconciliationListQuery>;
+export type CreateTaxReconciliationExceptionPayload = z.infer<typeof createTaxReconciliationExceptionPayloadSchema>;
+export type TaxReconciliationExceptionTransitionPayload = z.infer<typeof taxReconciliationExceptionTransitionPayloadSchema>;
 export type CreateTaxExternalRefPayload = z.infer<typeof createTaxExternalRefPayloadSchema>;
 
 export interface TaxRegistrationOverlapCandidate {
@@ -475,6 +709,8 @@ type TaxAuditEntityType = typeof TAX_AUDIT_ENTITY_TYPES[number];
 type TaxAuditAction = typeof TAX_AUDIT_ACTIONS[number];
 type TaxExternalRefEntityType = typeof TAX_EXTERNAL_REF_ENTITY_TYPES[number];
 type TaxDueState = "none" | "not_due" | "due_soon" | "overdue" | "complete";
+type TaxAgencyPaymentStatus = typeof TAX_AGENCY_PAYMENT_STATUSES[number];
+type TaxLiabilitySettlementState = "unpaid" | "partial" | "paid" | "overpaid" | "voided" | "not_applicable";
 
 export interface TaxLegalEntitySummary {
   id: number;
@@ -532,16 +768,82 @@ export interface TaxLiabilityResponse {
   amountCents: number;
   signedAmountCents: number;
   effectiveAmountCents: number;
+  clearedAllocatedAmountCents: number;
+  inFlightAllocatedAmountCents: number;
+  activeAllocatedAmountCents: number;
+  outstandingAmountCents: number;
+  overappliedAmountCents: number;
+  settlementState: TaxLiabilitySettlementState;
   currency: string;
   sourceType: FinanceSourceType;
   adjustsTaxLiabilityId: number | null;
   adjustmentCount: number;
-  paymentTrackingStatus: "not_yet_tracked";
+  paymentTrackingStatus: TaxLiabilitySettlementState;
   status: string;
   recognizedAt: Date | string | null;
   notes: string | null;
   adjustments?: TaxLiabilityResponse[];
   externalRefs?: TaxExternalRefResponse[];
+  createdAt: Date | string | null;
+  updatedAt: Date | string | null;
+}
+
+export interface TaxAgencyPaymentResponse {
+  id: number;
+  taxRegistrationId: number;
+  registration: TaxRegistrationResponse | null;
+  amountCents: number;
+  currency: string;
+  paymentDate: Date | string | null;
+  methodType: string;
+  methodLabel: string | null;
+  institutionName: string | null;
+  maskedLast4: string | null;
+  confirmationRef: string | null;
+  status: TaxAgencyPaymentStatus;
+  submittedAt: Date | string | null;
+  clearedAt: Date | string | null;
+  activeAllocatedAmountCents: number;
+  clearedAllocatedAmountCents: number;
+  inFlightAllocatedAmountCents: number;
+  unappliedAmountCents: number;
+  settlementImpact: "settled" | "in_flight" | "none";
+  externalRefs?: TaxExternalRefResponse[];
+  createdAt: Date | string | null;
+  updatedAt: Date | string | null;
+}
+
+export interface TaxPaymentAllocationResponse {
+  id: number;
+  taxLiabilityId: number;
+  taxAgencyPaymentId: number;
+  amountCents: number;
+  currency: string;
+  status: AllocationStatus;
+  reversedAt: Date | string | null;
+  reversedBy: number | null;
+  createdBy: number | null;
+  createdAt: Date | string | null;
+  updatedAt: Date | string | null;
+}
+
+export interface TaxReconciliationExceptionResponse {
+  id: number;
+  domain: "tax";
+  expectedEntityType: FinanceEntityType | null;
+  expectedEntityId: number | null;
+  actualEntityType: FinanceEntityType | null;
+  actualEntityId: number | null;
+  currency: string | null;
+  expectedAmountCents: number | null;
+  actualAmountCents: number | null;
+  differenceAmountCents: number | null;
+  reasonCode: string;
+  summary: string;
+  status: ReconciliationExceptionStatus;
+  ownerAdminId: number | null;
+  resolvedAt: Date | string | null;
+  resolvedBy: number | null;
   createdAt: Date | string | null;
   updatedAt: Date | string | null;
 }
@@ -591,9 +893,13 @@ export interface TaxOverviewResponse {
   overdueFilingCount: number;
   filingStatusCounts: Record<string, number>;
   openAdjustmentOrDisputeCount: number;
+  openReconciliationIssueCount: number;
   recentRegistrations: TaxRegistrationResponse[];
   recentLiabilities: TaxLiabilityResponse[];
+  recentPayments: TaxAgencyPaymentResponse[];
+  recentPaymentAllocations: TaxPaymentAllocationResponse[];
   recentFilings: TaxFilingResponse[];
+  recentReconciliationExceptions: TaxReconciliationExceptionResponse[];
 }
 
 export interface TaxRepository {
@@ -602,7 +908,13 @@ export interface TaxRepository {
   lockTaxAgency(id: number): Promise<void>;
   lockTaxRegistration(id: number): Promise<void>;
   lockTaxLiability(id: number): Promise<void>;
+  lockTaxLiabilityAdjustments(taxLiabilityId: number): Promise<void>;
   lockTaxFiling(id: number): Promise<void>;
+  lockTaxAgencyPayment(id: number): Promise<void>;
+  lockTaxPaymentAllocation(id: number): Promise<void>;
+  lockTaxPaymentAllocationsForPayment(taxAgencyPaymentId: number): Promise<void>;
+  lockTaxPaymentAllocationsForLiability(taxLiabilityId: number): Promise<void>;
+  lockReconciliationException(id: number): Promise<void>;
 
   getLegalEntity(id: number): Promise<LegalEntity | undefined>;
   listLegalEntities(): Promise<TaxLegalEntitySummary[]>;
@@ -623,9 +935,18 @@ export interface TaxRepository {
   getTaxLiability(id: number): Promise<TaxLiability | undefined>;
   listTaxLiabilities(filters: TaxLiabilityListFilters): Promise<TaxLiability[]>;
   listTaxLiabilityAdjustments(taxLiabilityId: number): Promise<TaxLiability[]>;
-  lockTaxLiabilityAdjustments(taxLiabilityId: number): Promise<void>;
   createTaxLiability(values: InsertTaxLiability): Promise<TaxLiability>;
   updateTaxLiability(id: number, values: Partial<InsertTaxLiability>): Promise<TaxLiability | undefined>;
+
+  getTaxAgencyPayment(id: number): Promise<TaxAgencyPayment | undefined>;
+  listTaxAgencyPayments(filters: TaxAgencyPaymentListFilters): Promise<TaxAgencyPayment[]>;
+  createTaxAgencyPayment(values: InsertTaxAgencyPayment): Promise<TaxAgencyPayment>;
+  updateTaxAgencyPayment(id: number, values: Partial<InsertTaxAgencyPayment>): Promise<TaxAgencyPayment | undefined>;
+
+  getTaxPaymentAllocation(id: number): Promise<TaxPaymentAllocation | undefined>;
+  listTaxPaymentAllocations(filters: TaxPaymentAllocationListFilters): Promise<TaxPaymentAllocation[]>;
+  createTaxPaymentAllocation(values: InsertTaxPaymentAllocation): Promise<TaxPaymentAllocation>;
+  updateTaxPaymentAllocation(id: number, values: Partial<InsertTaxPaymentAllocation>): Promise<TaxPaymentAllocation | undefined>;
 
   getTaxFiling(id: number): Promise<TaxFiling | undefined>;
   listTaxFilings(filters: TaxFilingListFilters): Promise<TaxFiling[]>;
@@ -638,6 +959,12 @@ export interface TaxRepository {
   listExternalRecordRefsForEntity(entityType: TaxExternalRefEntityType, entityId: number): Promise<ExternalRecordRef[]>;
   createExternalRecordRef(values: InsertExternalRecordRef): Promise<ExternalRecordRef>;
 
+  getReconciliationException(id: number): Promise<ReconciliationException | undefined>;
+  listReconciliationExceptions(filters: TaxReconciliationListFilters): Promise<ReconciliationException[]>;
+  createReconciliationException(values: InsertReconciliationException): Promise<ReconciliationException>;
+  updateReconciliationException(id: number, values: Partial<InsertReconciliationException>): Promise<ReconciliationException | undefined>;
+
+  entityExists(entityType: FinanceEntityType, entityId: number): Promise<boolean>;
   createTaxAuditEvent(values: InsertTaxAuditEvent): Promise<TaxAuditEvent>;
 }
 
@@ -827,6 +1154,107 @@ function taxLiabilityEffectiveAmount(base: TaxLiabilityEffectiveLine, adjustment
   })));
 }
 
+function isTaxAgencyPaymentSettled(status: string) {
+  return status === "cleared";
+}
+
+function isTaxAgencyPaymentInFlight(status: string) {
+  return status === "submitted";
+}
+
+function isActiveTaxPaymentAllocation(allocation: Pick<TaxPaymentAllocation, "status">) {
+  return allocation.status === "active";
+}
+
+function taxAgencyPaymentSettlementImpact(status: string): TaxAgencyPaymentResponse["settlementImpact"] {
+  if (isTaxAgencyPaymentSettled(status)) return "settled";
+  if (isTaxAgencyPaymentInFlight(status)) return "in_flight";
+  return "none";
+}
+
+function taxLiabilitySettlementState(input: {
+  status: string;
+  effectiveAmountCents: number;
+  clearedAllocatedAmountCents: number;
+}): TaxLiabilitySettlementState {
+  if (input.status === "voided") return "voided";
+  if (input.effectiveAmountCents <= 0) {
+    return input.clearedAllocatedAmountCents > 0 ? "overpaid" : "paid";
+  }
+  if (input.clearedAllocatedAmountCents === 0) return "unpaid";
+  if (input.clearedAllocatedAmountCents < input.effectiveAmountCents) return "partial";
+  if (input.clearedAllocatedAmountCents === input.effectiveAmountCents) return "paid";
+  return "overpaid";
+}
+
+async function taxPaymentMapForAllocations(
+  repo: TaxRepository,
+  allocations: readonly TaxPaymentAllocation[],
+) {
+  const payments = new Map<number, TaxAgencyPayment>();
+  for (const allocation of allocations) {
+    if (payments.has(allocation.taxAgencyPaymentId)) continue;
+    const payment = await repo.getTaxAgencyPayment(allocation.taxAgencyPaymentId);
+    if (payment) {
+      payments.set(payment.id, payment);
+    }
+  }
+  return payments;
+}
+
+function deriveTaxLiabilitySettlement(input: {
+  base: TaxLiability;
+  adjustments: readonly TaxLiability[];
+  allocations: readonly TaxPaymentAllocation[];
+  paymentsById: ReadonlyMap<number, TaxAgencyPayment>;
+}) {
+  const effectiveAmountCents = taxLiabilityEffectiveAmount(input.base, [...input.adjustments]);
+  let clearedAllocatedAmountCents = 0;
+  let inFlightAllocatedAmountCents = 0;
+  for (const allocation of input.allocations) {
+    if (!isActiveTaxPaymentAllocation(allocation)) continue;
+    const payment = input.paymentsById.get(allocation.taxAgencyPaymentId);
+    if (!payment) continue;
+    if (isTaxAgencyPaymentSettled(payment.status)) {
+      clearedAllocatedAmountCents += allocation.amountCents;
+    } else if (isTaxAgencyPaymentInFlight(payment.status)) {
+      inFlightAllocatedAmountCents += allocation.amountCents;
+    }
+  }
+  const outstandingAmountCents = Math.max(0, effectiveAmountCents - clearedAllocatedAmountCents);
+  const overappliedAmountCents = Math.max(0, clearedAllocatedAmountCents - effectiveAmountCents);
+  return {
+    effectiveAmountCents,
+    clearedAllocatedAmountCents,
+    inFlightAllocatedAmountCents,
+    activeAllocatedAmountCents: clearedAllocatedAmountCents + inFlightAllocatedAmountCents,
+    outstandingAmountCents,
+    overappliedAmountCents,
+    settlementState: taxLiabilitySettlementState({
+      status: input.base.status,
+      effectiveAmountCents,
+      clearedAllocatedAmountCents,
+    }),
+  };
+}
+
+function deriveTaxAgencyPaymentAllocationSummary(
+  payment: TaxAgencyPayment,
+  allocations: readonly TaxPaymentAllocation[],
+) {
+  const activeAllocatedAmountCents = allocations
+    .filter(isActiveTaxPaymentAllocation)
+    .reduce((total, allocation) => total + allocation.amountCents, 0);
+  const settlementImpact = taxAgencyPaymentSettlementImpact(payment.status);
+  return {
+    activeAllocatedAmountCents,
+    clearedAllocatedAmountCents: settlementImpact === "settled" ? activeAllocatedAmountCents : 0,
+    inFlightAllocatedAmountCents: settlementImpact === "in_flight" ? activeAllocatedAmountCents : 0,
+    unappliedAmountCents: Math.max(0, payment.amountCents - activeAllocatedAmountCents),
+    settlementImpact,
+  };
+}
+
 function assertEffectiveTaxLiabilityAmountIsNonNegative(
   base: TaxLiabilityEffectiveLine,
   adjustments: TaxLiabilityEffectiveLine[],
@@ -846,11 +1274,29 @@ async function taxLiabilityResponse(
   today: string,
   includeDetail = false,
 ): Promise<TaxLiabilityResponse> {
-  const [registration, adjustments, externalRefs] = await Promise.all([
+  const [registration, adjustments, allocationRows, externalRefs] = await Promise.all([
     repo.getTaxRegistration(liability.taxRegistrationId),
     liability.adjustsTaxLiabilityId ? Promise.resolve([]) : repo.listTaxLiabilityAdjustments(liability.id),
+    liability.adjustsTaxLiabilityId ? Promise.resolve([]) : repo.listTaxPaymentAllocations({ taxLiabilityId: liability.id }),
     includeDetail ? repo.listExternalRecordRefsForEntity("tax_liabilities", liability.id) : Promise.resolve([]),
   ]);
+  const paymentsById = await taxPaymentMapForAllocations(repo, allocationRows);
+  const settlement = liability.adjustsTaxLiabilityId
+    ? {
+        effectiveAmountCents: taxLiabilitySignedAmount(liability),
+        clearedAllocatedAmountCents: 0,
+        inFlightAllocatedAmountCents: 0,
+        activeAllocatedAmountCents: 0,
+        outstandingAmountCents: 0,
+        overappliedAmountCents: 0,
+        settlementState: "not_applicable" as const,
+      }
+    : deriveTaxLiabilitySettlement({
+        base: liability,
+        adjustments,
+        allocations: allocationRows,
+        paymentsById,
+      });
   const childResponses = includeDetail
     ? await Promise.all(adjustments.map((adjustment) => taxLiabilityResponse(repo, adjustment, today, false)))
     : undefined;
@@ -866,14 +1312,18 @@ async function taxLiabilityResponse(
     amountEffect: liability.amountEffect as AmountEffect,
     amountCents: liability.amountCents,
     signedAmountCents: taxLiabilitySignedAmount(liability),
-    effectiveAmountCents: liability.adjustsTaxLiabilityId
-      ? taxLiabilitySignedAmount(liability)
-      : taxLiabilityEffectiveAmount(liability, adjustments),
+    effectiveAmountCents: settlement.effectiveAmountCents,
+    clearedAllocatedAmountCents: settlement.clearedAllocatedAmountCents,
+    inFlightAllocatedAmountCents: settlement.inFlightAllocatedAmountCents,
+    activeAllocatedAmountCents: settlement.activeAllocatedAmountCents,
+    outstandingAmountCents: settlement.outstandingAmountCents,
+    overappliedAmountCents: settlement.overappliedAmountCents,
+    settlementState: settlement.settlementState,
     currency: liability.currency,
     sourceType: liability.sourceType as FinanceSourceType,
     adjustsTaxLiabilityId: liability.adjustsTaxLiabilityId,
     adjustmentCount: adjustments.filter((item) => item.status !== "voided").length,
-    paymentTrackingStatus: "not_yet_tracked",
+    paymentTrackingStatus: settlement.settlementState,
     status: liability.status,
     recognizedAt: liability.recognizedAt,
     notes: liability.notes,
@@ -912,6 +1362,83 @@ async function taxFilingResponse(
     externalRefs: includeDetail ? externalRefs.map(externalRefResponse) : undefined,
     createdAt: filing.createdAt,
     updatedAt: filing.updatedAt,
+  };
+}
+
+async function taxAgencyPaymentResponse(
+  repo: TaxRepository,
+  payment: TaxAgencyPayment,
+  today: string,
+  includeDetail = false,
+): Promise<TaxAgencyPaymentResponse> {
+  const [registration, allocations, externalRefs] = await Promise.all([
+    repo.getTaxRegistration(payment.taxRegistrationId),
+    repo.listTaxPaymentAllocations({ taxAgencyPaymentId: payment.id }),
+    includeDetail ? repo.listExternalRecordRefsForEntity("tax_agency_payments", payment.id) : Promise.resolve([]),
+  ]);
+  const allocationSummary = deriveTaxAgencyPaymentAllocationSummary(payment, allocations);
+  return {
+    id: payment.id,
+    taxRegistrationId: payment.taxRegistrationId,
+    registration: await taxRegistrationResponse(repo, registration, today),
+    amountCents: payment.amountCents,
+    currency: payment.currency,
+    paymentDate: payment.paymentDate,
+    methodType: payment.methodType,
+    methodLabel: payment.methodLabel,
+    institutionName: payment.institutionName,
+    maskedLast4: payment.maskedLast4,
+    confirmationRef: payment.confirmationRef,
+    status: payment.status as TaxAgencyPaymentStatus,
+    submittedAt: payment.submittedAt,
+    clearedAt: payment.clearedAt,
+    activeAllocatedAmountCents: allocationSummary.activeAllocatedAmountCents,
+    clearedAllocatedAmountCents: allocationSummary.clearedAllocatedAmountCents,
+    inFlightAllocatedAmountCents: allocationSummary.inFlightAllocatedAmountCents,
+    unappliedAmountCents: allocationSummary.unappliedAmountCents,
+    settlementImpact: allocationSummary.settlementImpact,
+    externalRefs: includeDetail ? externalRefs.map(externalRefResponse) : undefined,
+    createdAt: payment.createdAt,
+    updatedAt: payment.updatedAt,
+  };
+}
+
+function taxPaymentAllocationResponse(allocation: TaxPaymentAllocation): TaxPaymentAllocationResponse {
+  return {
+    id: allocation.id,
+    taxLiabilityId: allocation.taxLiabilityId,
+    taxAgencyPaymentId: allocation.taxAgencyPaymentId,
+    amountCents: allocation.amountCents,
+    currency: allocation.currency,
+    status: allocation.status as AllocationStatus,
+    reversedAt: allocation.reversedAt,
+    reversedBy: allocation.reversedBy,
+    createdBy: allocation.createdBy,
+    createdAt: allocation.createdAt,
+    updatedAt: allocation.updatedAt,
+  };
+}
+
+function taxReconciliationExceptionResponse(exception: ReconciliationException): TaxReconciliationExceptionResponse {
+  return {
+    id: exception.id,
+    domain: "tax",
+    expectedEntityType: exception.expectedEntityType as FinanceEntityType | null,
+    expectedEntityId: exception.expectedEntityId,
+    actualEntityType: exception.actualEntityType as FinanceEntityType | null,
+    actualEntityId: exception.actualEntityId,
+    currency: exception.currency,
+    expectedAmountCents: exception.expectedAmountCents,
+    actualAmountCents: exception.actualAmountCents,
+    differenceAmountCents: exception.differenceAmountCents,
+    reasonCode: exception.reasonCode,
+    summary: exception.summary,
+    status: exception.status as ReconciliationExceptionStatus,
+    ownerAdminId: exception.ownerAdminId,
+    resolvedAt: exception.resolvedAt,
+    resolvedBy: exception.resolvedBy,
+    createdAt: exception.createdAt,
+    updatedAt: exception.updatedAt,
   };
 }
 
@@ -1096,7 +1623,7 @@ function assertNoRegistrationScopeChangeAfterFacts(
   ];
   for (const field of forbidden) {
     if (input[field] !== undefined && input[field] !== (existing as any)[field]) {
-      fail(400, "TAX_REGISTRATION_SCOPE_IMMUTABLE", "Tax registration scope cannot change after liabilities or filings exist.");
+      fail(400, "TAX_REGISTRATION_SCOPE_IMMUTABLE", "Tax registration scope cannot change after tax facts exist.");
     }
   }
 }
@@ -1234,6 +1761,237 @@ async function assertTaxFilingAmendmentTarget(repo: TaxRepository, targetFilingI
   return target;
 }
 
+function assertTaxAgencyPaymentExists(payment: TaxAgencyPayment | undefined, id: number): TaxAgencyPayment {
+  if (!payment) {
+    fail(404, "TAX_AGENCY_PAYMENT_NOT_FOUND", `Tax agency payment ${id} was not found.`);
+  }
+  return payment;
+}
+
+function assertTaxPaymentAllocationExists(
+  allocation: TaxPaymentAllocation | undefined,
+  id: number,
+): TaxPaymentAllocation {
+  if (!allocation) {
+    fail(404, "TAX_PAYMENT_ALLOCATION_NOT_FOUND", `Tax payment allocation ${id} was not found.`);
+  }
+  return allocation;
+}
+
+function assertTaxReconciliationExceptionExists(
+  exception: ReconciliationException | undefined,
+  id: number,
+): ReconciliationException {
+  if (!exception || exception.domain !== "tax") {
+    fail(404, "TAX_RECONCILIATION_EXCEPTION_NOT_FOUND", `Tax reconciliation exception ${id} was not found.`);
+  }
+  return exception;
+}
+
+function normalizeTaxAgencyPaymentCreateFields(
+  input: CreateTaxAgencyPaymentPayload,
+  now: Date,
+): Pick<InsertTaxAgencyPayment, "status" | "submittedAt" | "clearedAt"> {
+  const status = input.status ?? "pending";
+  if (status === "pending") {
+    return { status: "pending", submittedAt: null, clearedAt: null };
+  }
+  if (status === "submitted") {
+    return {
+      status: "submitted",
+      submittedAt: input.submittedAt ?? now,
+      clearedAt: null,
+    };
+  }
+  if (status === "cleared") {
+    return {
+      status: "cleared",
+      submittedAt: input.submittedAt ?? now,
+      clearedAt: input.clearedAt ?? now,
+    };
+  }
+  fail(400, "TAX_AGENCY_PAYMENT_INITIAL_STATUS_INVALID", "New tax agency payments must start pending, submitted, or cleared.");
+}
+
+function assertTaxAgencyPaymentEditable(payment: Pick<TaxAgencyPayment, "status">) {
+  if (!TAX_AGENCY_PAYMENT_MUTABLE_STATUSES.includes(payment.status as typeof TAX_AGENCY_PAYMENT_MUTABLE_STATUSES[number])) {
+    fail(409, "TAX_AGENCY_PAYMENT_NOT_PENDING", "Only pending tax agency payments can be edited.");
+  }
+}
+
+function nextTaxAgencyPaymentStatus(existing: string, target: string) {
+  if (existing === target) return target;
+  const allowed: Record<string, readonly string[]> = {
+    pending: ["submitted", "failed", "voided"],
+    submitted: ["cleared", "failed"],
+    cleared: [],
+    failed: [],
+    reversed: [],
+    voided: [],
+  };
+  if (allowed[existing]?.includes(target)) return target;
+  if (existing === "cleared") {
+    fail(409, "TAX_AGENCY_PAYMENT_REVERSE_REQUIRED", "Cleared tax agency payments can only change through explicit reversal.");
+  }
+  fail(409, "TAX_AGENCY_PAYMENT_TRANSITION_INVALID", `Cannot transition tax agency payment from ${existing} to ${target}.`);
+}
+
+function taxAgencyPaymentStatusAuditAction(status: string): TaxAuditAction {
+  switch (status) {
+    case "submitted":
+    case "cleared":
+    case "failed":
+    case "voided":
+    case "reversed":
+      return status;
+    case "pending":
+      fail(500, "TAX_AGENCY_PAYMENT_AUDIT_STATUS_INVALID", "Pending is not a tax agency payment transition audit action.");
+  }
+  fail(500, "TAX_AGENCY_PAYMENT_AUDIT_STATUS_INVALID", "Invalid tax agency payment audit action.");
+}
+
+function assertNoActiveTaxPaymentAllocations(
+  allocations: readonly TaxPaymentAllocation[],
+  code: string,
+  message: string,
+) {
+  if (allocations.some(isActiveTaxPaymentAllocation)) {
+    fail(409, code, message);
+  }
+}
+
+function assertTaxPaymentAllocationTarget(input: {
+  liability: TaxLiability;
+  payment: TaxAgencyPayment;
+  adjustments: readonly TaxLiability[];
+  paymentAllocations: readonly TaxPaymentAllocation[];
+  liabilityAllocations: readonly TaxPaymentAllocation[];
+  liabilityAllocationPaymentsById: ReadonlyMap<number, TaxAgencyPayment>;
+  amountCents: number;
+  currency: string;
+}) {
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+    fail(400, "TAX_ALLOCATION_AMOUNT_INVALID", "Tax allocation amount must be a positive integer minor-unit value.");
+  }
+  if (input.payment.status !== "submitted" && input.payment.status !== "cleared") {
+    fail(400, "TAX_AGENCY_PAYMENT_STATUS_INVALID", "Only submitted or cleared tax agency payments can be allocated.");
+  }
+  if (input.liability.adjustsTaxLiabilityId) {
+    fail(400, "TAX_ALLOCATION_TARGET_ADJUSTMENT", "Tax payment allocations must target the base liability, not an adjustment row.");
+  }
+  if (!isEffectiveTaxLiabilityStatus(input.liability.status)) {
+    fail(400, "TAX_ALLOCATION_LIABILITY_STATUS_INVALID", "Tax payment allocations require a recognized or disputed base liability.");
+  }
+  if (input.liability.taxRegistrationId !== input.payment.taxRegistrationId) {
+    fail(400, "TAX_ALLOCATION_REGISTRATION_MISMATCH", "Tax liability and payment must share a tax registration.");
+  }
+  if (input.currency !== input.liability.currency || input.currency !== input.payment.currency) {
+    fail(400, "TAX_ALLOCATION_CURRENCY_MISMATCH", "Tax allocation currency must match liability and payment.");
+  }
+  if (input.paymentAllocations.some((allocation) => (
+    isActiveTaxPaymentAllocation(allocation) && allocation.taxLiabilityId === input.liability.id
+  ))) {
+    fail(409, "TAX_ALLOCATION_ACTIVE_PAIR_EXISTS", "This tax agency payment is already actively allocated to the base liability.");
+  }
+  const activePaymentAllocatedAmountCents = input.paymentAllocations
+    .filter(isActiveTaxPaymentAllocation)
+    .reduce((total, allocation) => total + allocation.amountCents, 0);
+  const remainingPaymentAmountCents = input.payment.amountCents - activePaymentAllocatedAmountCents;
+  if (input.amountCents > remainingPaymentAmountCents) {
+    fail(409, "TAX_PAYMENT_OVER_ALLOCATED", "Active allocations cannot exceed the tax agency payment amount.");
+  }
+  const settlement = deriveTaxLiabilitySettlement({
+    base: input.liability,
+    adjustments: input.adjustments,
+    allocations: input.liabilityAllocations,
+    paymentsById: input.liabilityAllocationPaymentsById,
+  });
+  const remainingLiabilityAmountCents = Math.max(
+    0,
+    settlement.effectiveAmountCents - settlement.activeAllocatedAmountCents,
+  );
+  if (input.amountCents > remainingLiabilityAmountCents) {
+    fail(409, "TAX_LIABILITY_OVER_ALLOCATED", "Active submitted or cleared allocations cannot exceed the current effective tax liability.");
+  }
+}
+
+function taxPaymentAuditChanges(before: TaxAgencyPayment | null, after: TaxAgencyPayment) {
+  return auditChanges(before, after, TAX_AGENCY_PAYMENT_AUDIT_FIELDS);
+}
+
+function taxPaymentAllocationAuditChanges(before: TaxPaymentAllocation | null, after: TaxPaymentAllocation) {
+  return auditChanges(before, after, TAX_PAYMENT_ALLOCATION_AUDIT_FIELDS);
+}
+
+function taxReconciliationAuditChanges(before: ReconciliationException | null, after: ReconciliationException) {
+  return auditChanges(before, after, TAX_RECONCILIATION_EXCEPTION_AUDIT_FIELDS);
+}
+
+function taxReconciliationStatusAuditAction(status: ReconciliationExceptionStatus): TaxAuditAction {
+  switch (status) {
+    case "investigating":
+    case "resolved":
+    case "waived":
+      return status;
+    case "open":
+      return "reopened";
+    case "voided":
+      return "voided";
+  }
+  fail(500, "TAX_RECONCILIATION_AUDIT_STATUS_INVALID", "Invalid tax reconciliation audit action.");
+}
+
+function nextTaxReconciliationExceptionStatus(
+  exception: Pick<ReconciliationException, "status">,
+  action: "investigate" | "resolve" | "waive" | "reopen",
+): ReconciliationExceptionStatus {
+  switch (action) {
+    case "investigate":
+      if (exception.status !== "open") {
+        fail(409, "TAX_RECONCILIATION_INVESTIGATE_REQUIRES_OPEN", "Only open tax reconciliation exceptions can move to investigating.");
+      }
+      return "investigating";
+    case "resolve":
+      if (!["open", "investigating"].includes(exception.status)) {
+        fail(409, "TAX_RECONCILIATION_RESOLVE_REQUIRES_OPEN", "Only open or investigating tax reconciliation exceptions can be resolved.");
+      }
+      return "resolved";
+    case "waive":
+      if (!["open", "investigating"].includes(exception.status)) {
+        fail(409, "TAX_RECONCILIATION_WAIVE_REQUIRES_OPEN", "Only open or investigating tax reconciliation exceptions can be waived.");
+      }
+      return "waived";
+    case "reopen":
+      if (!["resolved", "waived"].includes(exception.status)) {
+        fail(409, "TAX_RECONCILIATION_REOPEN_REQUIRES_CLOSED", "Only resolved or waived tax reconciliation exceptions can be reopened.");
+      }
+      return "open";
+  }
+  fail(500, "TAX_RECONCILIATION_ACTION_INVALID", "Invalid tax reconciliation action.");
+}
+
+function differenceAmountCents(expected?: number | null, actual?: number | null) {
+  if (expected == null || actual == null) return null;
+  return Math.abs(actual - expected);
+}
+
+async function validateTaxReconciliationEntityTargets(
+  repo: TaxRepository,
+  payload: Pick<
+    CreateTaxReconciliationExceptionPayload,
+    "expectedEntityType" | "expectedEntityId" | "actualEntityType" | "actualEntityId"
+  >,
+) {
+  for (const side of ["expected", "actual"] as const) {
+    const entityType = payload[`${side}EntityType`];
+    const entityId = payload[`${side}EntityId`];
+    if (!entityType || !entityId) continue;
+    if (!(await repo.entityExists(entityType, entityId))) {
+      fail(404, "TAX_RECONCILIATION_ENTITY_NOT_FOUND", "Tax reconciliation exception entity target not found.");
+    }
+  }
+}
+
 async function assertExternalRefTarget(repo: TaxRepository, entityType: TaxExternalRefEntityType, entityId: number) {
   switch (entityType) {
     case "tax_agencies":
@@ -1245,8 +2003,17 @@ async function assertExternalRefTarget(repo: TaxRepository, entityType: TaxExter
     case "tax_liabilities":
       assertTaxLiabilityExists(await repo.getTaxLiability(entityId), entityId);
       return;
+    case "tax_agency_payments":
+      assertTaxAgencyPaymentExists(await repo.getTaxAgencyPayment(entityId), entityId);
+      return;
+    case "tax_payment_allocations":
+      assertTaxPaymentAllocationExists(await repo.getTaxPaymentAllocation(entityId), entityId);
+      return;
     case "tax_filings":
       assertTaxFilingExists(await repo.getTaxFiling(entityId), entityId);
+      return;
+    case "reconciliation_exceptions":
+      assertTaxReconciliationExceptionExists(await repo.getReconciliationException(entityId), entityId);
       return;
   }
 }
@@ -1698,6 +2465,266 @@ export async function createTaxLiabilityAdjustment(
   });
 }
 
+export async function listTaxAgencyPayments(
+  repo: TaxRepository,
+  filters: TaxAgencyPaymentListFilters,
+  today = businessDate(),
+) {
+  return await Promise.all((await repo.listTaxAgencyPayments(filters)).map((item) => taxAgencyPaymentResponse(repo, item, today)));
+}
+
+export async function getTaxAgencyPayment(
+  repo: TaxRepository,
+  paymentId: number,
+  today = businessDate(),
+) {
+  return taxAgencyPaymentResponse(
+    repo,
+    assertTaxAgencyPaymentExists(await repo.getTaxAgencyPayment(paymentId), paymentId),
+    today,
+    true,
+  );
+}
+
+export async function recordTaxAgencyPayment(
+  repo: TaxRepository,
+  input: CreateTaxAgencyPaymentPayload & { actorAdminId: number },
+  now = new Date(),
+) {
+  return runTaxTransaction(repo, async (tx) => {
+    await tx.lockTaxRegistration(input.taxRegistrationId);
+    assertTaxRegistrationExists(await tx.getTaxRegistration(input.taxRegistrationId), input.taxRegistrationId);
+    const lifecycle = normalizeTaxAgencyPaymentCreateFields(input, now);
+    const payment = await tx.createTaxAgencyPayment({
+      taxRegistrationId: input.taxRegistrationId,
+      amountCents: input.amountCents,
+      currency: input.currency,
+      paymentDate: input.paymentDate ?? null,
+      methodType: input.methodType,
+      methodLabel: input.methodLabel ?? null,
+      institutionName: input.institutionName ?? null,
+      maskedLast4: input.maskedLast4 ?? null,
+      confirmationRef: input.confirmationRef ?? null,
+      ...lifecycle,
+      createdBy: input.actorAdminId,
+    });
+    await writeTaxAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "tax_agency_payment",
+      entityId: payment.id,
+      action: "created",
+      changes: taxPaymentAuditChanges(null, payment),
+    });
+    return taxAgencyPaymentResponse(tx, payment, businessDate(), true);
+  });
+}
+
+export async function updateTaxAgencyPayment(
+  repo: TaxRepository,
+  paymentId: number,
+  input: UpdateTaxAgencyPaymentPayload & { actorAdminId: number },
+) {
+  return runTaxTransaction(repo, async (tx) => {
+    await tx.lockTaxAgencyPayment(paymentId);
+    const existing = assertTaxAgencyPaymentExists(await tx.getTaxAgencyPayment(paymentId), paymentId);
+    assertTaxAgencyPaymentEditable(existing);
+    if (input.taxRegistrationId && input.taxRegistrationId !== existing.taxRegistrationId) {
+      await tx.lockTaxRegistration(input.taxRegistrationId);
+      assertTaxRegistrationExists(await tx.getTaxRegistration(input.taxRegistrationId), input.taxRegistrationId);
+    }
+    const updated = assertTaxAgencyPaymentExists(await tx.updateTaxAgencyPayment(existing.id, {
+      taxRegistrationId: input.taxRegistrationId,
+      amountCents: input.amountCents,
+      currency: input.currency,
+      paymentDate: input.paymentDate,
+      methodType: input.methodType,
+      methodLabel: input.methodLabel,
+      institutionName: input.institutionName,
+      maskedLast4: input.maskedLast4,
+      confirmationRef: input.confirmationRef,
+    }), existing.id);
+    await writeTaxAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "tax_agency_payment",
+      entityId: updated.id,
+      action: "updated",
+      changes: taxPaymentAuditChanges(existing, updated),
+    });
+    return taxAgencyPaymentResponse(tx, updated, businessDate(), true);
+  });
+}
+
+export async function transitionTaxAgencyPayment(
+  repo: TaxRepository,
+  paymentId: number,
+  input: TaxAgencyPaymentTransitionPayload & { actorAdminId: number },
+  now = new Date(),
+) {
+  return runTaxTransaction(repo, async (tx) => {
+    await tx.lockTaxAgencyPayment(paymentId);
+    const existing = assertTaxAgencyPaymentExists(await tx.getTaxAgencyPayment(paymentId), paymentId);
+    const status = nextTaxAgencyPaymentStatus(existing.status, input.status);
+    if (status === existing.status) {
+      return taxAgencyPaymentResponse(tx, existing, businessDate(), true);
+    }
+
+    const update: Partial<InsertTaxAgencyPayment> = {
+      status,
+      paymentDate: input.paymentDate,
+      confirmationRef: input.confirmationRef,
+    };
+    if (status === "submitted") {
+      update.submittedAt = input.submittedAt ?? now;
+      update.clearedAt = null;
+    }
+    if (status === "cleared") {
+      update.submittedAt = existing.submittedAt ?? input.submittedAt ?? now;
+      update.clearedAt = input.clearedAt ?? now;
+    }
+    if (status === "failed") {
+      update.clearedAt = null;
+    }
+    if (status === "voided") {
+      update.submittedAt = null;
+      update.clearedAt = null;
+    }
+
+    const updated = assertTaxAgencyPaymentExists(await tx.updateTaxAgencyPayment(existing.id, update), existing.id);
+    await writeTaxAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "tax_agency_payment",
+      entityId: updated.id,
+      action: taxAgencyPaymentStatusAuditAction(status),
+      changes: taxPaymentAuditChanges(existing, updated),
+    });
+    return taxAgencyPaymentResponse(tx, updated, businessDate(), true);
+  });
+}
+
+export async function reverseTaxAgencyPayment(
+  repo: TaxRepository,
+  paymentId: number,
+  actorAdminId: number,
+) {
+  return runTaxTransaction(repo, async (tx) => {
+    await tx.lockTaxAgencyPayment(paymentId);
+    const existing = assertTaxAgencyPaymentExists(await tx.getTaxAgencyPayment(paymentId), paymentId);
+    if (existing.status === "reversed") {
+      return taxAgencyPaymentResponse(tx, existing, businessDate(), true);
+    }
+    if (!["submitted", "cleared"].includes(existing.status)) {
+      fail(409, "TAX_AGENCY_PAYMENT_REVERSE_INVALID", "Only submitted or cleared tax agency payments can be reversed.");
+    }
+    await tx.lockTaxPaymentAllocationsForPayment(existing.id);
+    const allocations = await tx.listTaxPaymentAllocations({ taxAgencyPaymentId: existing.id, status: "active" });
+    assertNoActiveTaxPaymentAllocations(
+      allocations,
+      "TAX_AGENCY_PAYMENT_HAS_ACTIVE_ALLOCATIONS",
+      "Reverse active tax payment allocations before reversing the tax agency payment.",
+    );
+    const updated = assertTaxAgencyPaymentExists(await tx.updateTaxAgencyPayment(existing.id, { status: "reversed" }), existing.id);
+    await writeTaxAuditEvent(tx, {
+      actorAdminId,
+      entityType: "tax_agency_payment",
+      entityId: updated.id,
+      action: "reversed",
+      changes: taxPaymentAuditChanges(existing, updated),
+    });
+    return taxAgencyPaymentResponse(tx, updated, businessDate(), true);
+  });
+}
+
+export async function listTaxPaymentAllocations(
+  repo: TaxRepository,
+  filters: TaxPaymentAllocationListFilters,
+) {
+  return (await repo.listTaxPaymentAllocations(filters)).map(taxPaymentAllocationResponse);
+}
+
+export async function applyTaxPaymentAllocation(
+  repo: TaxRepository,
+  input: ApplyTaxPaymentAllocationPayload & { actorAdminId: number },
+) {
+  return runTaxTransaction(repo, async (tx) => {
+    await tx.lockTaxAgencyPayment(input.taxAgencyPaymentId);
+    await tx.lockTaxLiability(input.taxLiabilityId);
+    await tx.lockTaxLiabilityAdjustments(input.taxLiabilityId);
+    await tx.lockTaxPaymentAllocationsForPayment(input.taxAgencyPaymentId);
+    await tx.lockTaxPaymentAllocationsForLiability(input.taxLiabilityId);
+
+    const payment = assertTaxAgencyPaymentExists(await tx.getTaxAgencyPayment(input.taxAgencyPaymentId), input.taxAgencyPaymentId);
+    const liability = assertTaxLiabilityExists(await tx.getTaxLiability(input.taxLiabilityId), input.taxLiabilityId);
+    const [adjustments, paymentAllocations, liabilityAllocations] = await Promise.all([
+      liability.adjustsTaxLiabilityId ? Promise.resolve([]) : tx.listTaxLiabilityAdjustments(liability.id),
+      tx.listTaxPaymentAllocations({ taxAgencyPaymentId: payment.id, status: "active" }),
+      tx.listTaxPaymentAllocations({ taxLiabilityId: liability.id, status: "active" }),
+    ]);
+    const liabilityAllocationPaymentsById = await taxPaymentMapForAllocations(tx, liabilityAllocations);
+    assertTaxPaymentAllocationTarget({
+      liability,
+      payment,
+      adjustments,
+      paymentAllocations,
+      liabilityAllocations,
+      liabilityAllocationPaymentsById,
+      amountCents: input.amountCents,
+      currency: input.currency,
+    });
+
+    const allocation = await tx.createTaxPaymentAllocation({
+      taxLiabilityId: liability.id,
+      taxAgencyPaymentId: payment.id,
+      amountCents: input.amountCents,
+      currency: input.currency,
+      status: "active",
+      createdBy: input.actorAdminId,
+    });
+    await writeTaxAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "tax_payment_allocation",
+      entityId: allocation.id,
+      action: "allocation_created",
+      changes: taxPaymentAllocationAuditChanges(null, allocation),
+    });
+    return taxPaymentAllocationResponse(allocation);
+  });
+}
+
+export async function reverseTaxPaymentAllocation(
+  repo: TaxRepository,
+  allocationId: number,
+  actorAdminId: number,
+  now = new Date(),
+) {
+  return runTaxTransaction(repo, async (tx) => {
+    await tx.lockTaxPaymentAllocation(allocationId);
+    const existing = assertTaxPaymentAllocationExists(await tx.getTaxPaymentAllocation(allocationId), allocationId);
+    if (existing.status === "reversed") {
+      return taxPaymentAllocationResponse(existing);
+    }
+    if (existing.status !== "active") {
+      fail(409, "TAX_PAYMENT_ALLOCATION_REVERSE_INVALID", "Only active tax payment allocations can be reversed.");
+    }
+    await tx.lockTaxAgencyPayment(existing.taxAgencyPaymentId);
+    await tx.lockTaxLiability(existing.taxLiabilityId);
+    await tx.lockTaxPaymentAllocationsForPayment(existing.taxAgencyPaymentId);
+    await tx.lockTaxPaymentAllocationsForLiability(existing.taxLiabilityId);
+    const updated = assertTaxPaymentAllocationExists(await tx.updateTaxPaymentAllocation(existing.id, {
+      status: "reversed",
+      reversedAt: now,
+      reversedBy: actorAdminId,
+    }), existing.id);
+    await writeTaxAuditEvent(tx, {
+      actorAdminId,
+      entityType: "tax_payment_allocation",
+      entityId: updated.id,
+      action: "reversed",
+      changes: taxPaymentAllocationAuditChanges(existing, updated),
+    });
+    return taxPaymentAllocationResponse(updated);
+  });
+}
+
 export async function listTaxFilings(repo: TaxRepository, filters: TaxFilingListFilters, today = businessDate()) {
   return await Promise.all((await repo.listTaxFilings(filters)).map((item) => taxFilingResponse(repo, item, today)));
 }
@@ -1895,6 +2922,92 @@ export async function createTaxFilingAmendment(
   });
 }
 
+export function listTaxReconciliationExceptions(
+  repo: TaxRepository,
+  filters: TaxReconciliationListFilters,
+) {
+  return repo.listReconciliationExceptions(filters).then((rows) => rows
+    .filter((row) => row.domain === "tax")
+    .map(taxReconciliationExceptionResponse));
+}
+
+export async function createTaxReconciliationException(
+  repo: TaxRepository,
+  input: CreateTaxReconciliationExceptionPayload & { actorAdminId: number },
+) {
+  const { actorAdminId, ...payload } = input;
+  return runTaxTransaction(repo, async (tx) => {
+    await validateTaxReconciliationEntityTargets(tx, payload);
+    const exception = await tx.createReconciliationException({
+      domain: "tax",
+      expectedEntityType: payload.expectedEntityType ?? null,
+      expectedEntityId: payload.expectedEntityId ?? null,
+      actualEntityType: payload.actualEntityType ?? null,
+      actualEntityId: payload.actualEntityId ?? null,
+      currency: payload.currency ?? null,
+      expectedAmountCents: payload.expectedAmountCents ?? null,
+      actualAmountCents: payload.actualAmountCents ?? null,
+      differenceAmountCents: differenceAmountCents(payload.expectedAmountCents, payload.actualAmountCents),
+      reasonCode: payload.reasonCode,
+      summary: payload.summary,
+      status: "open",
+      ownerAdminId: payload.ownerAdminId ?? null,
+      createdBy: actorAdminId,
+    });
+    await writeTaxAuditEvent(tx, {
+      actorAdminId,
+      entityType: "reconciliation_exception",
+      entityId: exception.id,
+      action: "created",
+      changes: taxReconciliationAuditChanges(null, exception),
+    });
+    return taxReconciliationExceptionResponse(exception);
+  });
+}
+
+export async function transitionTaxReconciliationException(
+  repo: TaxRepository,
+  exceptionId: number,
+  action: "investigate" | "resolve" | "waive" | "reopen",
+  input: TaxReconciliationExceptionTransitionPayload & { actorAdminId: number },
+  now = new Date(),
+) {
+  return runTaxTransaction(repo, async (tx) => {
+    await tx.lockReconciliationException(exceptionId);
+    const existing = assertTaxReconciliationExceptionExists(await tx.getReconciliationException(exceptionId), exceptionId);
+    const status = nextTaxReconciliationExceptionStatus(existing, action);
+    const updateValues = {
+      status,
+    } as Partial<InsertReconciliationException> & {
+      status: ReconciliationExceptionStatus;
+      resolvedAt?: Date | null;
+      resolvedBy?: number | null;
+      resolutionNotes?: string | null;
+    };
+    if (status === "resolved" || status === "waived") {
+      updateValues.resolvedAt = now;
+      updateValues.resolvedBy = input.actorAdminId;
+      updateValues.resolutionNotes = input.resolutionNotes ?? existing.resolutionNotes;
+    } else if (status === "open") {
+      updateValues.resolvedAt = null;
+      updateValues.resolvedBy = null;
+      updateValues.resolutionNotes = null;
+    }
+    const updated = assertTaxReconciliationExceptionExists(
+      await tx.updateReconciliationException(existing.id, updateValues),
+      existing.id,
+    );
+    await writeTaxAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "reconciliation_exception",
+      entityId: updated.id,
+      action: taxReconciliationStatusAuditAction(status),
+      changes: taxReconciliationAuditChanges(existing, updated),
+    });
+    return taxReconciliationExceptionResponse(updated);
+  });
+}
+
 export async function createTaxExternalRecordRef(
   repo: TaxRepository,
   input: CreateTaxExternalRefPayload & { actorAdminId: number },
@@ -1921,12 +3034,16 @@ export async function createTaxExternalRecordRef(
 }
 
 export async function getTaxOverview(repo: TaxRepository, today = businessDate()): Promise<TaxOverviewResponse> {
-  const [registrations, liabilities, filings] = await Promise.all([
+  const [registrations, liabilities, payments, allocations, filings, reconciliationExceptions] = await Promise.all([
     repo.listTaxRegistrations({ pageSize: 250 }),
     repo.listTaxLiabilities({ pageSize: 250 }),
+    repo.listTaxAgencyPayments({ pageSize: 250 }),
+    repo.listTaxPaymentAllocations({ pageSize: 250 }),
     repo.listTaxFilings({ pageSize: 250 }),
+    repo.listReconciliationExceptions({ status: "all", pageSize: 250 }),
   ]);
   const liabilityResponses = await Promise.all(liabilities.slice(0, 25).map((item) => taxLiabilityResponse(repo, item, today)));
+  const paymentResponses = await Promise.all(payments.slice(0, 25).map((item) => taxAgencyPaymentResponse(repo, item, today)));
   const filingResponses = await Promise.all(filings.slice(0, 25).map((item) => taxFilingResponse(repo, item, today)));
   return {
     businessDate: today,
@@ -1938,8 +3055,12 @@ export async function getTaxOverview(repo: TaxRepository, today = businessDate()
     overdueFilingCount: filings.filter((item) => dueState(item.dueDate, item.status, ["filed", "accepted", "voided"], today) === "overdue").length,
     filingStatusCounts: filingStatusCounts(filings),
     openAdjustmentOrDisputeCount: liabilities.filter((item) => item.status === "disputed" || (item.adjustsTaxLiabilityId && item.status !== "voided")).length,
+    openReconciliationIssueCount: reconciliationExceptions.filter((item) => ["open", "investigating"].includes(item.status)).length,
     recentRegistrations: (await Promise.all(registrations.slice(0, 10).map((item) => taxRegistrationResponse(repo, item, today)))).filter(Boolean) as TaxRegistrationResponse[],
     recentLiabilities: liabilityResponses,
+    recentPayments: paymentResponses,
+    recentPaymentAllocations: allocations.slice(0, 25).map(taxPaymentAllocationResponse),
     recentFilings: filingResponses,
+    recentReconciliationExceptions: reconciliationExceptions.slice(0, 25).map(taxReconciliationExceptionResponse),
   };
 }
