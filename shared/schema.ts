@@ -837,6 +837,23 @@ export const personnelAuditEvents = pgTable(
   ],
 );
 
+export const payrollAuditEvents = pgTable(
+  "payroll_audit_events",
+  {
+    id: serial("id").primaryKey(),
+    actorAdminUserId: integer("actor_admin_user_id").notNull().references(() => adminUsers.id),
+    entityType: text("entity_type").notNull(),
+    entityId: integer("entity_id").notNull(),
+    action: text("action").notNull(),
+    changesJson: jsonb("changes_json").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    index("idx_payroll_audit_events_entity").on(table.entityType, table.entityId, table.createdAt),
+    index("idx_payroll_audit_events_actor").on(table.actorAdminUserId, table.createdAt),
+  ],
+);
+
 export const documents = pgTable(
   "documents",
   {
@@ -1362,6 +1379,11 @@ export const insertPersonnelAuditEventSchema = createInsertSchema(personnelAudit
   createdAt: true,
 });
 
+export const insertPayrollAuditEventSchema = createInsertSchema(payrollAuditEvents).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertDocumentSchema = createInsertSchema(documents).omit({
   id: true,
   createdAt: true,
@@ -1453,6 +1475,8 @@ export type FinanceAuditEvent = typeof financeAuditEvents.$inferSelect;
 export type InsertFinanceAuditEvent = z.infer<typeof insertFinanceAuditEventSchema>;
 export type PersonnelAuditEvent = typeof personnelAuditEvents.$inferSelect;
 export type InsertPersonnelAuditEvent = z.infer<typeof insertPersonnelAuditEventSchema>;
+export type PayrollAuditEvent = typeof payrollAuditEvents.$inferSelect;
+export type InsertPayrollAuditEvent = z.infer<typeof insertPayrollAuditEventSchema>;
 export type Document = typeof documents.$inferSelect;
 export type InsertDocument = z.infer<typeof insertDocumentSchema>;
 export type DocumentLink = typeof documentLinks.$inferSelect;

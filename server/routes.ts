@@ -121,6 +121,45 @@ import {
   updateRecurringExpensePayloadSchema,
   updateVendorPayloadSchema,
 } from './financeExpenseService';
+import { payrollRepository } from './payrollRepository';
+import {
+  PayrollServiceError,
+  addPayrollResultLine,
+  addPayrollRunWorker,
+  createPayrollCorrectionRun,
+  createPayrollCorrectionRunPayloadSchema,
+  createPayrollExternalRecordRef,
+  createPayrollExternalRefPayloadSchema,
+  createPayrollPaymentPayloadSchema,
+  createPayrollResultLinePayloadSchema,
+  createPayrollRun,
+  createPayrollRunPayloadSchema,
+  createPayrollRunWorkerPayloadSchema,
+  finalizePayrollRun,
+  getPayrollOverview,
+  getPayrollRun,
+  listPayrollEmploymentOptions,
+  listPayrollLegalEntities,
+  listPayrollRuns,
+  listPayrollVendors,
+  markPayrollRunReviewed,
+  payrollEmploymentOptionQuerySchema,
+  payrollPaymentTransitionPayloadSchema,
+  payrollRunListQuerySchema,
+  recordPayrollPayment,
+  removePayrollResultLine,
+  removePayrollRunWorker,
+  reversePayrollPayment,
+  transitionPayrollPayment,
+  updatePayrollPayment,
+  updatePayrollPaymentPayloadSchema,
+  updatePayrollResultLine,
+  updatePayrollResultLinePayloadSchema,
+  updatePayrollRun,
+  updatePayrollRunPayloadSchema,
+  updatePayrollRunWorker,
+  updatePayrollRunWorkerPayloadSchema,
+} from './payrollService';
 import { personnelRepository } from './personnelRepository';
 import {
   PersonnelServiceError,
@@ -776,6 +815,8 @@ async function hasAcceptedOfferForCurrentTrainee(adminUserId: number) {
 
 type FinanceRouteHandler = (req: any, res: any) => Promise<unknown>;
 const financeIdParamSchema = z.coerce.number().int().positive();
+type PayrollRouteHandler = (req: any, res: any) => Promise<unknown>;
+const payrollIdParamSchema = z.coerce.number().int().positive();
 type PersonnelRouteHandler = (req: any, res: any) => Promise<unknown>;
 const personnelIdParamSchema = z.coerce.number().int().positive();
 
@@ -805,6 +846,34 @@ function handleFinanceRouteError(res: any, error: unknown) {
 
   console.error("[finance]", error);
   return res.status(500).json({ message: "Finance request failed" });
+}
+
+function payrollRoute(handler: PayrollRouteHandler) {
+  return async (req: any, res: any) => {
+    try {
+      const result = await handler(req, res);
+      if (!res.headersSent) {
+        res.json(result);
+      }
+    } catch (error) {
+      handlePayrollRouteError(res, error);
+    }
+  };
+}
+
+function handlePayrollRouteError(res: any, error: unknown) {
+  if (error instanceof PayrollServiceError) {
+    return res.status(error.statusCode).json({
+      message: error.message,
+      code: error.code,
+    });
+  }
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({ message: "Invalid payroll request" });
+  }
+
+  console.error("[payroll]", error);
+  return res.status(500).json({ message: "Payroll request failed" });
 }
 
 function personnelRoute(handler: PersonnelRouteHandler) {
@@ -2715,6 +2784,322 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(500).json({ message: "Failed to fetch waitlist" });
       }
     }
+  );
+
+  // Finance / Payroll routes (compensation-sensitive, super-admin only)
+  app.get(
+    "/api/admin/finance/payroll",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async () => getPayrollOverview(payrollRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/payroll/overview",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async () => getPayrollOverview(payrollRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/payroll/legal-entities",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async () => listPayrollLegalEntities(payrollRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/payroll/vendors",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async () => listPayrollVendors(payrollRepository)),
+  );
+
+  app.get(
+    "/api/admin/finance/payroll/employment-options",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => listPayrollEmploymentOptions(
+      payrollRepository,
+      payrollEmploymentOptionQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.get(
+    "/api/admin/finance/payroll/runs",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => listPayrollRuns(
+      payrollRepository,
+      payrollRunListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/runs",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req, res) => {
+      const run = await createPayrollRun(payrollRepository, {
+        ...createPayrollRunPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(run);
+    }),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/runs/corrections",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req, res) => {
+      const run = await createPayrollCorrectionRun(payrollRepository, {
+        ...createPayrollCorrectionRunPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(run);
+    }),
+  );
+
+  app.get(
+    "/api/admin/finance/payroll/runs/:runId",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => getPayrollRun(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.runId),
+    )),
+  );
+
+  app.patch(
+    "/api/admin/finance/payroll/runs/:runId",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => updatePayrollRun(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.runId),
+      {
+        ...updatePayrollRunPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/runs/:runId/review",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => markPayrollRunReviewed(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.runId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/runs/:runId/finalize",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => finalizePayrollRun(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.runId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/runs/:runId/workers",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req, res) => {
+      const workerResult = await addPayrollRunWorker(
+        payrollRepository,
+        payrollIdParamSchema.parse(req.params.runId),
+        {
+          ...createPayrollRunWorkerPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      res.status(201).json(workerResult);
+    }),
+  );
+
+  app.patch(
+    "/api/admin/finance/payroll/run-workers/:runWorkerId",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => updatePayrollRunWorker(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.runWorkerId),
+      {
+        ...updatePayrollRunWorkerPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.delete(
+    "/api/admin/finance/payroll/run-workers/:runWorkerId",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => removePayrollRunWorker(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.runWorkerId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/run-workers/:runWorkerId/result-lines",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req, res) => {
+      const line = await addPayrollResultLine(
+        payrollRepository,
+        payrollIdParamSchema.parse(req.params.runWorkerId),
+        {
+          ...createPayrollResultLinePayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      res.status(201).json(line);
+    }),
+  );
+
+  app.patch(
+    "/api/admin/finance/payroll/result-lines/:lineId",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => updatePayrollResultLine(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.lineId),
+      {
+        ...updatePayrollResultLinePayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.delete(
+    "/api/admin/finance/payroll/result-lines/:lineId",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => removePayrollResultLine(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.lineId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/run-workers/:runWorkerId/payments",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req, res) => {
+      const payment = await recordPayrollPayment(
+        payrollRepository,
+        payrollIdParamSchema.parse(req.params.runWorkerId),
+        {
+          ...createPayrollPaymentPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      res.status(201).json(payment);
+    }),
+  );
+
+  app.patch(
+    "/api/admin/finance/payroll/payments/:paymentId",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => updatePayrollPayment(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.paymentId),
+      {
+        ...updatePayrollPaymentPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/payments/:paymentId/send",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => transitionPayrollPayment(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.paymentId),
+      {
+        ...payrollPaymentTransitionPayloadSchema.parse({ ...req.body, status: "sent" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/payments/:paymentId/clear",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => transitionPayrollPayment(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.paymentId),
+      {
+        ...payrollPaymentTransitionPayloadSchema.parse({ ...req.body, status: "cleared" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/payments/:paymentId/fail",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => transitionPayrollPayment(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.paymentId),
+      {
+        ...payrollPaymentTransitionPayloadSchema.parse({ ...req.body, status: "failed" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/payments/:paymentId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => transitionPayrollPayment(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.paymentId),
+      {
+        ...payrollPaymentTransitionPayloadSchema.parse({ ...req.body, status: "voided" }),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/payments/:paymentId/reverse",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req) => reversePayrollPayment(
+      payrollRepository,
+      payrollIdParamSchema.parse(req.params.paymentId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/finance/payroll/external-record-refs",
+    requireAuth,
+    requireRole(['super_admin']),
+    payrollRoute(async (req, res) => {
+      const ref = await createPayrollExternalRecordRef(payrollRepository, {
+        ...createPayrollExternalRefPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(ref);
+    }),
   );
 
   // Finance / AP and subscription routes

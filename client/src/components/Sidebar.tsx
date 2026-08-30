@@ -154,6 +154,12 @@ const menuItems: MenuItem[] = [
         icon: Building2,
         roles: ['super_admin', 'admin_finance'],
       },
+      {
+        title: "Payroll",
+        href: "/finance-management/payroll",
+        icon: Wallet,
+        roles: ['super_admin'],
+      },
     ],
   },
   {

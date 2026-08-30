@@ -15,6 +15,7 @@ import {
   ReceiptText,
   Repeat2,
   RotateCcw,
+  Send,
   Link2,
   WalletCards,
   XCircle,
@@ -52,9 +53,10 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 
-type FinanceSection = "overview" | "expenses" | "subscriptions" | "vendors";
+type FinanceSection = "overview" | "expenses" | "subscriptions" | "vendors" | "payroll";
 
 type CurrencyAmount = {
   currency: string;
@@ -202,6 +204,155 @@ type FinanceReconciliationException = {
   resolvedBy?: number | null;
 };
 
+type PayrollCurrencyTotals = {
+  currency: string;
+  workerCount: number;
+  grossPayCents: number;
+  netPayCents: number;
+  employeeTaxCents: number;
+  employerTaxCents: number;
+  deductionCents: number;
+  effectivePaidCents: number;
+  clearedPaymentCents: number;
+  inFlightPaymentCents: number;
+  pendingPaymentCents: number;
+  failedAttemptCents: number;
+  unpaidNetPayCents: number;
+  overpaidNetPayCents: number;
+};
+
+type PayrollOverview = {
+  recentRuns: PayrollRun[];
+  draftRuns: PayrollRun[];
+  effectiveRuns: PayrollRun[];
+  totalsByCurrency: PayrollCurrencyTotals[];
+  runPaymentStates: Record<string, number>;
+};
+
+type PayrollRun = {
+  id: number;
+  legalEntityId: number;
+  legalEntity?: FinanceLegalEntity | null;
+  periodStart: string;
+  periodEnd: string;
+  payDate: string;
+  runKind: string;
+  sourceType: string;
+  sourceVendorId?: number | null;
+  sourceVendor?: FinanceVendor | null;
+  correctionOfPayrollRunId?: number | null;
+  status: string;
+  finalizedAt?: string | null;
+  finalizedBy?: number | null;
+  notes?: string | null;
+  workerCount: number;
+  totalsByCurrency: PayrollCurrencyTotals[];
+  workers?: PayrollRunWorker[];
+};
+
+type PayrollRunWorker = {
+  id: number;
+  payrollRunId: number;
+  workerId: number;
+  employmentId: number;
+  worker?: {
+    id: number;
+    workerCode: string;
+    legalName: string;
+    preferredName?: string | null;
+    adminUserId?: number | null;
+    lifecycleState: string;
+  } | null;
+  employment?: {
+    id: number;
+    employeeClassification: string;
+    payrollParticipation: string;
+    status: string;
+    startDate: string;
+    endDate?: string | null;
+  } | null;
+  currency: string;
+  grossPayCents: number;
+  employeeTaxCents: number;
+  employerTaxCents: number;
+  deductionCents: number;
+  netPayCents: number;
+  lineTotalsByCurrency: Array<{
+    currency: string;
+    grossPayCents: number;
+    deductionCents: number;
+    employeeTaxCents: number;
+    employerTaxCents: number;
+    reimbursementCents: number;
+    otherCents: number;
+    netPayImpactCents: number;
+  }>;
+  paymentSummary: {
+    targetNetPayCents: number;
+    effectivePaidCents: number;
+    clearedPaymentCents: number;
+    inFlightPaymentCents: number;
+    pendingPaymentCents: number;
+    failedAttemptCents: number;
+    reversedPaymentCents: number;
+    voidedPaymentCents: number;
+    remainingNetPayCents: number;
+    overpaidNetPayCents: number;
+    state: string;
+  };
+  resultLines: PayrollResultLine[];
+  payments: PayrollPayment[];
+};
+
+type PayrollResultLine = {
+  id: number;
+  payrollRunWorkerId: number;
+  lineCategory: string;
+  lineCode: string;
+  description?: string | null;
+  amountEffect: string;
+  amountCents: number;
+  signedAmountCents: number;
+  currency: string;
+  quantityMicrounits?: number | null;
+  rateAmountCents?: number | null;
+  jurisdictionCode?: string | null;
+};
+
+type PayrollPayment = {
+  id: number;
+  payrollRunWorkerId: number;
+  amountCents: number;
+  currency: string;
+  paymentDate?: string | null;
+  methodType: string;
+  methodLabel?: string | null;
+  institutionName?: string | null;
+  maskedLast4?: string | null;
+  externalConfirmationRef?: string | null;
+  status: string;
+  processedAt?: string | null;
+};
+
+type PayrollEmploymentOption = {
+  employment: {
+    id: number;
+    legalEntityId: number;
+    employeeClassification: string;
+    payrollParticipation: string;
+    status: string;
+    startDate: string;
+    endDate?: string | null;
+  };
+  worker: {
+    id: number;
+    workerCode: string;
+    legalName: string;
+    preferredName?: string | null;
+    lifecycleState: string;
+  };
+};
+
 type VendorFormState = {
   name: string;
   vendorType: string;
@@ -314,6 +465,73 @@ type ReconciliationDialogState = {
   form: ReconciliationFormState;
 };
 
+type PayrollRunFormState = {
+  legalEntityId: string;
+  periodStart: string;
+  periodEnd: string;
+  payDate: string;
+  runKind: string;
+  sourceType: string;
+  sourceVendorId: string;
+  correctionOfPayrollRunId: string;
+  notes: string;
+};
+
+type PayrollWorkerFormState = {
+  workerId: string;
+  employmentId: string;
+  currency: string;
+  grossPay: string;
+  employeeTax: string;
+  employerTax: string;
+  deduction: string;
+  netPay: string;
+};
+
+type PayrollLineFormState = {
+  lineCategory: string;
+  lineCode: string;
+  description: string;
+  amountEffect: string;
+  amount: string;
+  currency: string;
+  quantity: string;
+  rateAmount: string;
+  jurisdictionCode: string;
+};
+
+type PayrollPaymentFormState = {
+  amount: string;
+  currency: string;
+  paymentDate: string;
+  methodType: string;
+  methodLabel: string;
+  institutionName: string;
+  maskedLast4: string;
+  externalConfirmationRef: string;
+  status: string;
+};
+
+type PayrollRunDialogState = {
+  mode: "create" | "correction";
+  form: PayrollRunFormState;
+};
+
+type PayrollWorkerDialogState = {
+  run: PayrollRun;
+  form: PayrollWorkerFormState;
+};
+
+type PayrollLineDialogState = {
+  runWorker: PayrollRunWorker;
+  form: PayrollLineFormState;
+};
+
+type PayrollPaymentDialogState = {
+  runWorker: PayrollRunWorker;
+  form: PayrollPaymentFormState;
+};
+
 type FinanceMutationRequest = {
   method: "POST" | "PATCH";
   url: string;
@@ -322,7 +540,7 @@ type FinanceMutationRequest = {
   onSuccess?: () => void;
 };
 
-const sections: FinanceSection[] = ["overview", "expenses", "subscriptions", "vendors"];
+const sections: FinanceSection[] = ["overview", "expenses", "subscriptions", "vendors", "payroll"];
 const financeRolesQueryPrefix = "/api/admin/finance";
 const noSelection = "__none__";
 
@@ -371,10 +589,19 @@ const expenseCategories = [
   "tax",
   "other",
 ] as const;
+const payrollRunKinds = ["regular", "off_cycle", "bonus", "adjustment"] as const;
+const payrollSourceTypes = ["manual", "provider", "csv_import", "internal"] as const;
+const payrollLineCategories = ["earning", "deduction", "employee_tax", "employer_tax", "reimbursement", "other"] as const;
+const payrollAmountEffects = ["increase", "decrease"] as const;
+const payrollPaymentMethods = ["payroll_provider", "ach", "check", "manual", "other"] as const;
+const payrollPaymentInitialStatuses = ["pending", "sent", "cleared", "failed"] as const;
 
 export default function FinanceManagement() {
   const [location, setLocation] = useLocation();
-  const selectedSection = sectionFromLocation(location);
+  const { user } = useAuth();
+  const isSuperAdmin = (user as { role?: string } | undefined)?.role === "super_admin";
+  const requestedSection = sectionFromLocation(location);
+  const selectedSection = requestedSection === "payroll" && !isSuperAdmin ? "overview" : requestedSection;
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [vendorDialog, setVendorDialog] = React.useState<VendorDialogState | null>(null);
@@ -383,6 +610,11 @@ export default function FinanceManagement() {
   const [paymentDialog, setPaymentDialog] = React.useState<PaymentDialogState | null>(null);
   const [applicationDialog, setApplicationDialog] = React.useState<ApplicationDialogState | null>(null);
   const [reconciliationDialog, setReconciliationDialog] = React.useState<ReconciliationDialogState | null>(null);
+  const [selectedPayrollRunId, setSelectedPayrollRunId] = React.useState<number | null>(null);
+  const [payrollRunDialog, setPayrollRunDialog] = React.useState<PayrollRunDialogState | null>(null);
+  const [payrollWorkerDialog, setPayrollWorkerDialog] = React.useState<PayrollWorkerDialogState | null>(null);
+  const [payrollLineDialog, setPayrollLineDialog] = React.useState<PayrollLineDialogState | null>(null);
+  const [payrollPaymentDialog, setPayrollPaymentDialog] = React.useState<PayrollPaymentDialogState | null>(null);
 
   const overviewQuery = useQuery<FinanceOverview>({
     queryKey: ["/api/admin/finance/overview"],
@@ -407,6 +639,30 @@ export default function FinanceManagement() {
   });
   const vendorsQuery = useQuery<FinanceVendor[]>({
     queryKey: ["/api/admin/finance/vendors?pageSize=100"],
+  });
+  const payrollOverviewQuery = useQuery<PayrollOverview>({
+    queryKey: ["/api/admin/finance/payroll/overview"],
+    enabled: isSuperAdmin,
+  });
+  const payrollRunsQuery = useQuery<PayrollRun[]>({
+    queryKey: ["/api/admin/finance/payroll/runs?pageSize=100"],
+    enabled: isSuperAdmin,
+  });
+  const payrollLegalEntitiesQuery = useQuery<FinanceLegalEntity[]>({
+    queryKey: ["/api/admin/finance/payroll/legal-entities"],
+    enabled: isSuperAdmin,
+  });
+  const payrollVendorsQuery = useQuery<FinanceVendor[]>({
+    queryKey: ["/api/admin/finance/payroll/vendors"],
+    enabled: isSuperAdmin,
+  });
+  const payrollEmploymentOptionsQuery = useQuery<PayrollEmploymentOption[]>({
+    queryKey: ["/api/admin/finance/payroll/employment-options?pageSize=250"],
+    enabled: isSuperAdmin,
+  });
+  const payrollRunDetailQuery = useQuery<PayrollRun>({
+    queryKey: [`/api/admin/finance/payroll/runs/${selectedPayrollRunId}`],
+    enabled: isSuperAdmin && Boolean(selectedPayrollRunId),
   });
 
   const financeMutation = useMutation({
@@ -439,6 +695,11 @@ export default function FinanceManagement() {
     () => vendors.filter((vendor) => vendor.status !== "archived"),
     [vendors],
   );
+  const payrollRuns = payrollRunsQuery.data ?? [];
+  const selectedPayrollRun = payrollRunDetailQuery.data ?? payrollRuns.find((run) => run.id === selectedPayrollRunId) ?? payrollRuns[0];
+  const payrollLegalEntities = payrollLegalEntitiesQuery.data ?? legalEntities;
+  const payrollVendors = payrollVendorsQuery.data ?? [];
+  const payrollEmploymentOptions = payrollEmploymentOptionsQuery.data ?? [];
   const linkableSubscriptions = React.useMemo(
     () => subscriptions.filter((subscription) => subscription.status !== "cancelled" && subscription.status !== "expired"),
     [subscriptions],
@@ -449,6 +710,12 @@ export default function FinanceManagement() {
   );
   const isMutating = financeMutation.isPending;
 
+  React.useEffect(() => {
+    if (!selectedPayrollRunId && payrollRuns.length > 0) {
+      setSelectedPayrollRunId(payrollRuns[0].id);
+    }
+  }, [payrollRuns, selectedPayrollRunId]);
+
   const error =
     overviewQuery.error ||
     legalEntitiesQuery.error ||
@@ -457,7 +724,15 @@ export default function FinanceManagement() {
     applicationsQuery.error ||
     reconciliationQuery.error ||
     subscriptionsQuery.error ||
-    vendorsQuery.error;
+    vendorsQuery.error ||
+    (isSuperAdmin
+      ? payrollOverviewQuery.error ||
+        payrollRunsQuery.error ||
+        payrollLegalEntitiesQuery.error ||
+        payrollVendorsQuery.error ||
+        payrollEmploymentOptionsQuery.error ||
+        payrollRunDetailQuery.error
+      : null);
 
   function openCreateVendor() {
     setVendorDialog({
@@ -741,6 +1016,194 @@ export default function FinanceManagement() {
     });
   }
 
+  function openCreatePayrollRun() {
+    setPayrollRunDialog({
+      mode: "create",
+      form: emptyPayrollRunForm(payrollLegalEntities[0], payrollVendors[0]),
+    });
+  }
+
+  function openCreatePayrollCorrection(run: PayrollRun) {
+    setPayrollRunDialog({
+      mode: "correction",
+      form: {
+        ...emptyPayrollRunForm(payrollLegalEntities.find((entity) => entity.id === run.legalEntityId), payrollVendors[0]),
+        legalEntityId: String(run.legalEntityId),
+        periodStart: run.periodStart?.slice(0, 10) ?? "",
+        periodEnd: run.periodEnd?.slice(0, 10) ?? "",
+        payDate: run.payDate?.slice(0, 10) ?? "",
+        runKind: "correction",
+        correctionOfPayrollRunId: String(run.id),
+      },
+    });
+  }
+
+  function submitPayrollRun(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!payrollRunDialog) return;
+    try {
+      const isCorrection = payrollRunDialog.mode === "correction";
+      const body = compactPayload({
+        legalEntityId: isCorrection ? undefined : Number(payrollRunDialog.form.legalEntityId),
+        correctionOfPayrollRunId: isCorrection ? Number(payrollRunDialog.form.correctionOfPayrollRunId) : undefined,
+        periodStart: payrollRunDialog.form.periodStart,
+        periodEnd: payrollRunDialog.form.periodEnd,
+        payDate: payrollRunDialog.form.payDate,
+        runKind: isCorrection ? undefined : payrollRunDialog.form.runKind,
+        sourceType: payrollRunDialog.form.sourceType,
+        sourceVendorId: payrollRunDialog.form.sourceVendorId ? Number(payrollRunDialog.form.sourceVendorId) : undefined,
+        notes: optionalString(payrollRunDialog.form.notes),
+      });
+      financeMutation.mutate({
+        method: "POST",
+        url: isCorrection ? "/api/admin/finance/payroll/runs/corrections" : "/api/admin/finance/payroll/runs",
+        body,
+        successTitle: isCorrection ? "Correction run created" : "Payroll run created",
+        onSuccess: () => setPayrollRunDialog(null),
+      });
+    } catch (error) {
+      toast({
+        title: "Payroll run form needs attention",
+        description: error instanceof Error ? error.message : "Check the payroll run fields.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function transitionPayrollRun(run: PayrollRun, action: "review" | "finalize") {
+    financeMutation.mutate({
+      method: "POST",
+      url: `/api/admin/finance/payroll/runs/${run.id}/${action}`,
+      body: {},
+      successTitle: action === "review" ? "Payroll run reviewed" : "Payroll run finalized",
+    });
+  }
+
+  function openAddPayrollWorker(run: PayrollRun) {
+    const option = payrollEmploymentOptions.find((item) => item.employment.legalEntityId === run.legalEntityId) ?? payrollEmploymentOptions[0];
+    setPayrollWorkerDialog({
+      run,
+      form: emptyPayrollWorkerForm(option),
+    });
+  }
+
+  function submitPayrollWorker(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!payrollWorkerDialog) return;
+    try {
+      const body = {
+        workerId: Number(payrollWorkerDialog.form.workerId),
+        employmentId: Number(payrollWorkerDialog.form.employmentId),
+        currency: payrollWorkerDialog.form.currency,
+        grossPayCents: parseMoneyToCents(payrollWorkerDialog.form.grossPay, true),
+        employeeTaxCents: parseMoneyToCents(payrollWorkerDialog.form.employeeTax, true),
+        employerTaxCents: parseMoneyToCents(payrollWorkerDialog.form.employerTax, true),
+        deductionCents: parseMoneyToCents(payrollWorkerDialog.form.deduction, true),
+        netPayCents: parseMoneyToCents(payrollWorkerDialog.form.netPay, true),
+        sourceMetadata: {},
+      };
+      financeMutation.mutate({
+        method: "POST",
+        url: `/api/admin/finance/payroll/runs/${payrollWorkerDialog.run.id}/workers`,
+        body,
+        successTitle: "Payroll worker result added",
+        onSuccess: () => setPayrollWorkerDialog(null),
+      });
+    } catch (error) {
+      toast({
+        title: "Payroll worker result needs attention",
+        description: error instanceof Error ? error.message : "Check the worker result fields.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function openAddPayrollLine(runWorker: PayrollRunWorker) {
+    setPayrollLineDialog({
+      runWorker,
+      form: emptyPayrollLineForm(runWorker.currency),
+    });
+  }
+
+  function submitPayrollLine(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!payrollLineDialog) return;
+    try {
+      const body = compactPayload({
+        lineCategory: payrollLineDialog.form.lineCategory,
+        lineCode: payrollLineDialog.form.lineCode.trim(),
+        description: optionalString(payrollLineDialog.form.description),
+        amountEffect: payrollLineDialog.form.amountEffect,
+        amountCents: parseMoneyToCents(payrollLineDialog.form.amount),
+        currency: payrollLineDialog.form.currency,
+        quantityMicrounits: payrollLineDialog.form.quantity ? Math.round(Number(payrollLineDialog.form.quantity) * 1_000_000) : undefined,
+        rateAmountCents: payrollLineDialog.form.rateAmount ? parseMoneyToCents(payrollLineDialog.form.rateAmount) : undefined,
+        jurisdictionCode: optionalString(payrollLineDialog.form.jurisdictionCode),
+        metadata: {},
+      });
+      financeMutation.mutate({
+        method: "POST",
+        url: `/api/admin/finance/payroll/run-workers/${payrollLineDialog.runWorker.id}/result-lines`,
+        body,
+        successTitle: "Payroll result line added",
+        onSuccess: () => setPayrollLineDialog(null),
+      });
+    } catch (error) {
+      toast({
+        title: "Payroll line needs attention",
+        description: error instanceof Error ? error.message : "Check the result line fields.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function openRecordPayrollPayment(runWorker: PayrollRunWorker) {
+    setPayrollPaymentDialog({
+      runWorker,
+      form: emptyPayrollPaymentForm(runWorker),
+    });
+  }
+
+  function submitPayrollPayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!payrollPaymentDialog) return;
+    try {
+      const body = compactPayload({
+        amountCents: parseMoneyToCents(payrollPaymentDialog.form.amount),
+        currency: payrollPaymentDialog.form.currency,
+        paymentDate: optionalString(payrollPaymentDialog.form.paymentDate),
+        methodType: payrollPaymentDialog.form.methodType,
+        methodLabel: optionalString(payrollPaymentDialog.form.methodLabel),
+        institutionName: optionalString(payrollPaymentDialog.form.institutionName),
+        maskedLast4: optionalString(payrollPaymentDialog.form.maskedLast4),
+        externalConfirmationRef: optionalString(payrollPaymentDialog.form.externalConfirmationRef),
+        status: payrollPaymentDialog.form.status,
+      });
+      financeMutation.mutate({
+        method: "POST",
+        url: `/api/admin/finance/payroll/run-workers/${payrollPaymentDialog.runWorker.id}/payments`,
+        body,
+        successTitle: "Payroll payment recorded",
+        onSuccess: () => setPayrollPaymentDialog(null),
+      });
+    } catch (error) {
+      toast({
+        title: "Payroll payment needs attention",
+        description: error instanceof Error ? error.message : "Check the payment fields.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function transitionPayrollPaymentRecord(payment: PayrollPayment, action: "send" | "clear" | "fail" | "void" | "reverse") {
+    financeMutation.mutate({
+      method: "POST",
+      url: `/api/admin/finance/payroll/payments/${payment.id}/${action}`,
+      body: {},
+      successTitle: `Payroll payment ${action === "send" ? "sent" : action === "clear" ? "cleared" : action === "fail" ? "failed" : action === "void" ? "voided" : "reversed"}`,
+    });
+  }
+
   return (
     <div className="space-y-8">
       <div>
@@ -767,11 +1230,12 @@ export default function FinanceManagement() {
         }}
         className="space-y-6"
       >
-        <TabsList className="grid w-full grid-cols-2 lg:grid-cols-4">
+        <TabsList className={`grid w-full grid-cols-2 ${isSuperAdmin ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="expenses">Expenses</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
           <TabsTrigger value="vendors">Vendors</TabsTrigger>
+          {isSuperAdmin && <TabsTrigger value="payroll">Payroll</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -823,6 +1287,27 @@ export default function FinanceManagement() {
             isMutating={isMutating}
           />
         </TabsContent>
+
+        {isSuperAdmin && (
+          <TabsContent value="payroll" className="space-y-6">
+            <PayrollPanel
+              overview={payrollOverviewQuery.data}
+              runs={payrollRuns}
+              selectedRun={selectedPayrollRun}
+              selectedRunId={selectedPayrollRunId}
+              isLoading={payrollRunsQuery.isLoading || payrollRunDetailQuery.isLoading || payrollOverviewQuery.isLoading}
+              isMutating={isMutating}
+              onSelectRun={setSelectedPayrollRunId}
+              onCreateRun={openCreatePayrollRun}
+              onCreateCorrection={openCreatePayrollCorrection}
+              onRunTransition={transitionPayrollRun}
+              onAddWorker={openAddPayrollWorker}
+              onAddLine={openAddPayrollLine}
+              onRecordPayment={openRecordPayrollPayment}
+              onPaymentTransition={transitionPayrollPaymentRecord}
+            />
+          </TabsContent>
+        )}
       </Tabs>
 
       <VendorDialog
@@ -876,6 +1361,37 @@ export default function FinanceManagement() {
         onClose={() => setReconciliationDialog(null)}
         onChange={(form) => setReconciliationDialog((current) => current ? { ...current, form } : current)}
         onSubmit={submitReconciliationException}
+      />
+      <PayrollRunDialog
+        state={payrollRunDialog}
+        legalEntities={payrollLegalEntities}
+        vendors={payrollVendors}
+        isPending={isMutating}
+        onClose={() => setPayrollRunDialog(null)}
+        onChange={(form) => setPayrollRunDialog((current) => current ? { ...current, form } : current)}
+        onSubmit={submitPayrollRun}
+      />
+      <PayrollWorkerDialog
+        state={payrollWorkerDialog}
+        employmentOptions={payrollEmploymentOptions}
+        isPending={isMutating}
+        onClose={() => setPayrollWorkerDialog(null)}
+        onChange={(form) => setPayrollWorkerDialog((current) => current ? { ...current, form } : current)}
+        onSubmit={submitPayrollWorker}
+      />
+      <PayrollLineDialog
+        state={payrollLineDialog}
+        isPending={isMutating}
+        onClose={() => setPayrollLineDialog(null)}
+        onChange={(form) => setPayrollLineDialog((current) => current ? { ...current, form } : current)}
+        onSubmit={submitPayrollLine}
+      />
+      <PayrollPaymentDialog
+        state={payrollPaymentDialog}
+        isPending={isMutating}
+        onClose={() => setPayrollPaymentDialog(null)}
+        onChange={(form) => setPayrollPaymentDialog((current) => current ? { ...current, form } : current)}
+        onSubmit={submitPayrollPayment}
       />
     </div>
   );
@@ -1222,6 +1738,419 @@ function VendorsPanel({
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+function PayrollPanel({
+  overview,
+  runs,
+  selectedRun,
+  selectedRunId,
+  isLoading,
+  isMutating,
+  onSelectRun,
+  onCreateRun,
+  onCreateCorrection,
+  onRunTransition,
+  onAddWorker,
+  onAddLine,
+  onRecordPayment,
+  onPaymentTransition,
+}: {
+  overview?: PayrollOverview;
+  runs: PayrollRun[];
+  selectedRun?: PayrollRun;
+  selectedRunId: number | null;
+  isLoading: boolean;
+  isMutating: boolean;
+  onSelectRun: (runId: number) => void;
+  onCreateRun: () => void;
+  onCreateCorrection: (run: PayrollRun) => void;
+  onRunTransition: (run: PayrollRun, action: "review" | "finalize") => void;
+  onAddWorker: (run: PayrollRun) => void;
+  onAddLine: (runWorker: PayrollRunWorker) => void;
+  onRecordPayment: (runWorker: PayrollRunWorker) => void;
+  onPaymentTransition: (payment: PayrollPayment, action: "send" | "clear" | "fail" | "void" | "reverse") => void;
+}) {
+  const selected = selectedRun ?? runs.find((run) => run.id === selectedRunId);
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 md:grid-cols-4">
+        <MetricCard
+          title="Open runs"
+          value={overview?.draftRuns.length ?? 0}
+          detail="Draft or reviewed"
+          icon={ReceiptText}
+        />
+        <MetricCard
+          title="Gross payroll"
+          value={formatPayrollTotals(overview?.totalsByCurrency, "grossPayCents")}
+          detail="Effective finalized snapshots"
+          icon={WalletCards}
+        />
+        <MetricCard
+          title="Net payroll"
+          value={formatPayrollTotals(overview?.totalsByCurrency, "netPayCents")}
+          detail="Corrections replace originals"
+          icon={CheckCircle2}
+        />
+        <MetricCard
+          title="Payment issues"
+          value={(overview?.runPaymentStates.failed ?? 0) + (overview?.runPaymentStates.mixed ?? 0) + (overview?.runPaymentStates.overpaid ?? 0)}
+          detail="Failed, mixed, or overpaid"
+          icon={AlertCircle}
+        />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-4">
+            <div>
+              <CardTitle>Payroll Runs</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Historical records by pay period.
+              </p>
+            </div>
+            <Button size="sm" onClick={onCreateRun} disabled={isMutating}>
+              <Plus className="h-4 w-4" />
+              Run
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Period</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Net</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <EmptyRow colSpan={3} label="Loading payroll runs..." />
+                ) : runs.length === 0 ? (
+                  <EmptyRow colSpan={3} label="No payroll runs." />
+                ) : (
+                  runs.map((run) => (
+                    <TableRow
+                      key={run.id}
+                      className={run.id === selected?.id ? "bg-muted/50" : undefined}
+                      onClick={() => onSelectRun(run.id)}
+                    >
+                      <TableCell>
+                        <button className="text-left font-medium" type="button" onClick={() => onSelectRun(run.id)}>
+                          {formatDate(run.periodStart)} - {formatDate(run.periodEnd)}
+                        </button>
+                        <div className="text-xs text-muted-foreground">
+                          Pay {formatDate(run.payDate)} - {humanize(run.runKind)} - {humanize(run.sourceType)}
+                        </div>
+                      </TableCell>
+                      <TableCell>{statusBadge(run.status)}</TableCell>
+                      <TableCell className="text-right">{formatPayrollTotals(run.totalsByCurrency, "netPayCents")}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <PayrollRunDetailPanel
+          run={selected}
+          isMutating={isMutating}
+          onCreateCorrection={onCreateCorrection}
+          onRunTransition={onRunTransition}
+          onAddWorker={onAddWorker}
+          onAddLine={onAddLine}
+          onRecordPayment={onRecordPayment}
+          onPaymentTransition={onPaymentTransition}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PayrollRunDetailPanel({
+  run,
+  isMutating,
+  onCreateCorrection,
+  onRunTransition,
+  onAddWorker,
+  onAddLine,
+  onRecordPayment,
+  onPaymentTransition,
+}: {
+  run?: PayrollRun;
+  isMutating: boolean;
+  onCreateCorrection: (run: PayrollRun) => void;
+  onRunTransition: (run: PayrollRun, action: "review" | "finalize") => void;
+  onAddWorker: (run: PayrollRun) => void;
+  onAddLine: (runWorker: PayrollRunWorker) => void;
+  onRecordPayment: (runWorker: PayrollRunWorker) => void;
+  onPaymentTransition: (payment: PayrollPayment, action: "send" | "clear" | "fail" | "void" | "reverse") => void;
+}) {
+  if (!run) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Run Detail</CardTitle>
+        </CardHeader>
+        <CardContent className="py-10 text-center text-muted-foreground">
+          Select or create a payroll run.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const canEditOutput = run.status === "draft";
+  const canRecordPayments = run.status === "finalized";
+  return (
+    <Card>
+      <CardHeader className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <CardTitle>
+              {formatDate(run.periodStart)} - {formatDate(run.periodEnd)}
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Pay {formatDate(run.payDate)} - {run.legalEntity?.legalName || `Entity #${run.legalEntityId}`}
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            {statusBadge(run.status)}
+            {statusBadge(run.runKind)}
+            {run.sourceVendor && statusBadge(run.sourceVendor.name)}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {run.status === "draft" && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => onAddWorker(run)} disabled={isMutating}>
+                <Plus className="h-4 w-4" />
+                Worker
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => onRunTransition(run, "review")} disabled={isMutating}>
+                <CheckCircle2 className="h-4 w-4" />
+                Review
+              </Button>
+            </>
+          )}
+          {run.status === "reviewed" && (
+            <Button size="sm" variant="outline" onClick={() => onRunTransition(run, "finalize")} disabled={isMutating}>
+              <CheckCircle2 className="h-4 w-4" />
+              Finalize
+            </Button>
+          )}
+          {run.status === "finalized" && (
+            <Button size="sm" variant="outline" onClick={() => onCreateCorrection(run)} disabled={isMutating}>
+              <RotateCcw className="h-4 w-4" />
+              Correction
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="grid gap-3 md:grid-cols-4">
+          <div>
+            <div className="text-xs text-muted-foreground">Gross</div>
+            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "grossPayCents")}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">Net</div>
+            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "netPayCents")}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">Cleared</div>
+            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "clearedPaymentCents")}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">In flight</div>
+            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "inFlightPaymentCents")}</div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {(run.workers ?? []).length === 0 ? (
+            <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+              No worker results recorded.
+            </div>
+          ) : (
+            (run.workers ?? []).map((worker) => (
+              <div key={worker.id} className="rounded-md border p-4">
+                <div className="flex flex-wrap justify-between gap-4">
+                  <div>
+                    <div className="font-medium">
+                      {worker.worker?.legalName || `Worker #${worker.workerId}`}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {worker.worker?.workerCode || `Employment #${worker.employmentId}`} - {humanize(worker.employment?.payrollParticipation)}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {statusBadge(worker.paymentSummary.state)}
+                    {canEditOutput && (
+                      <Button size="sm" variant="outline" onClick={() => onAddLine(worker)} disabled={isMutating}>
+                        <Plus className="h-4 w-4" />
+                        Line
+                      </Button>
+                    )}
+                    {canRecordPayments && (
+                      <Button size="sm" variant="outline" onClick={() => onRecordPayment(worker)} disabled={isMutating}>
+                        <WalletCards className="h-4 w-4" />
+                        Payment
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-5">
+                  <PayrollAmount label="Gross" value={worker.grossPayCents} currency={worker.currency} />
+                  <PayrollAmount label="Employee tax" value={worker.employeeTaxCents} currency={worker.currency} />
+                  <PayrollAmount label="Employer tax" value={worker.employerTaxCents} currency={worker.currency} />
+                  <PayrollAmount label="Deductions" value={worker.deductionCents} currency={worker.currency} />
+                  <PayrollAmount label="Net" value={worker.netPayCents} currency={worker.currency} />
+                  <PayrollAmount label="Cleared" value={worker.paymentSummary.clearedPaymentCents} currency={worker.currency} />
+                  <PayrollAmount label="In flight" value={worker.paymentSummary.inFlightPaymentCents} currency={worker.currency} />
+                  <PayrollAmount label="Pending" value={worker.paymentSummary.pendingPaymentCents} currency={worker.currency} />
+                  <PayrollAmount label="Unpaid" value={worker.paymentSummary.remainingNetPayCents} currency={worker.currency} />
+                  <PayrollAmount label="Overpaid" value={worker.paymentSummary.overpaidNetPayCents} currency={worker.currency} />
+                </div>
+
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <PayrollLinesTable lines={worker.resultLines ?? []} />
+                  <PayrollPaymentsTable
+                    payments={worker.payments ?? []}
+                    onPaymentTransition={onPaymentTransition}
+                    isMutating={isMutating}
+                  />
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PayrollAmount({ label, value, currency }: { label: string; value: number; currency: string }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="font-medium">{formatMoney(value, currency)}</div>
+    </div>
+  );
+}
+
+function PayrollLinesTable({ lines }: { lines: PayrollResultLine[] }) {
+  return (
+    <div>
+      <div className="mb-2 text-sm font-medium">Result Lines</div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Code</TableHead>
+            <TableHead>Category</TableHead>
+            <TableHead className="text-right">Amount</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {lines.length === 0 ? (
+            <EmptyRow colSpan={3} label="No lines." />
+          ) : (
+            lines.map((line) => (
+              <TableRow key={line.id}>
+                <TableCell>
+                  <div className="font-medium">{line.lineCode}</div>
+                  <div className="text-xs text-muted-foreground">{line.description || "-"}</div>
+                </TableCell>
+                <TableCell>{humanize(line.lineCategory)}</TableCell>
+                <TableCell className="text-right">
+                  {line.amountEffect === "decrease" ? "-" : ""}
+                  {formatMoney(line.amountCents, line.currency)}
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+function PayrollPaymentsTable({
+  payments,
+  isMutating,
+  onPaymentTransition,
+}: {
+  payments: PayrollPayment[];
+  isMutating: boolean;
+  onPaymentTransition: (payment: PayrollPayment, action: "send" | "clear" | "fail" | "void" | "reverse") => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 text-sm font-medium">Payments</div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Date</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead className="text-right">Amount</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {payments.length === 0 ? (
+            <EmptyRow colSpan={4} label="No payments." />
+          ) : (
+            payments.map((payment) => (
+              <TableRow key={payment.id}>
+                <TableCell>
+                  <div>{formatDate(payment.paymentDate)}</div>
+                  <div className="text-xs text-muted-foreground">{payment.methodLabel || humanize(payment.methodType)}</div>
+                </TableCell>
+                <TableCell>{statusBadge(payment.status)}</TableCell>
+                <TableCell className="text-right">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {payment.status === "pending" && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => onPaymentTransition(payment, "send")} disabled={isMutating}>
+                          <Send className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => onPaymentTransition(payment, "fail")} disabled={isMutating}>
+                          <XCircle className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
+                    {payment.status === "sent" && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => onPaymentTransition(payment, "clear")} disabled={isMutating}>
+                          <CheckCircle2 className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => onPaymentTransition(payment, "fail")} disabled={isMutating}>
+                          <XCircle className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
+                    {["sent", "cleared"].includes(payment.status) && (
+                      <Button size="sm" variant="outline" onClick={() => onPaymentTransition(payment, "reverse")} disabled={isMutating}>
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {payment.status === "pending" && (
+                      <Button size="sm" variant="outline" onClick={() => onPaymentTransition(payment, "void")} disabled={isMutating}>
+                        <Archive className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
 
@@ -2552,6 +3481,386 @@ function ReconciliationDialog({
   );
 }
 
+function PayrollRunDialog({
+  state,
+  legalEntities,
+  vendors,
+  isPending,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  state: PayrollRunDialogState | null;
+  legalEntities: FinanceLegalEntity[];
+  vendors: FinanceVendor[];
+  isPending: boolean;
+  onClose: () => void;
+  onChange: (form: PayrollRunFormState) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!state) return null;
+  const form = state.form;
+  const update = <K extends keyof PayrollRunFormState>(key: K, value: PayrollRunFormState[K]) => {
+    onChange({ ...form, [key]: value });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <form onSubmit={onSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>{state.mode === "correction" ? "Create Correction Run" : "Create Payroll Run"}</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Legal entity">
+              <Select
+                value={form.legalEntityId}
+                onValueChange={(value) => update("legalEntityId", value)}
+                disabled={state.mode === "correction"}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select entity" />
+                </SelectTrigger>
+                <SelectContent>
+                  {legalEntities.map((entity) => (
+                    <SelectItem key={entity.id} value={String(entity.id)}>{entity.legalName}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Run kind">
+              <Select value={form.runKind} onValueChange={(value) => update("runKind", value)} disabled={state.mode === "correction"}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {state.mode === "correction" ? (
+                    <SelectItem value="correction">Correction</SelectItem>
+                  ) : payrollRunKinds.map((kind) => (
+                    <SelectItem key={kind} value={kind}>{humanize(kind)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Period start">
+              <Input type="date" value={form.periodStart} onChange={(event) => update("periodStart", event.target.value)} required />
+            </FormField>
+            <FormField label="Period end">
+              <Input type="date" value={form.periodEnd} onChange={(event) => update("periodEnd", event.target.value)} required />
+            </FormField>
+            <FormField label="Pay date">
+              <Input type="date" value={form.payDate} onChange={(event) => update("payDate", event.target.value)} required />
+            </FormField>
+            <FormField label="Source">
+              <Select value={form.sourceType} onValueChange={(value) => update("sourceType", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {payrollSourceTypes.map((source) => (
+                    <SelectItem key={source} value={source}>{humanize(source)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Source vendor">
+              <Select value={form.sourceVendorId || noSelection} onValueChange={(value) => update("sourceVendorId", value === noSelection ? "" : value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={noSelection}>None</SelectItem>
+                  {vendors.map((vendor) => (
+                    <SelectItem key={vendor.id} value={String(vendor.id)}>{vendor.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          </div>
+
+          <FormField label="Notes">
+            <Textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} rows={3} maxLength={4000} />
+          </FormField>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              <Plus className="h-4 w-4" />
+              Create
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PayrollWorkerDialog({
+  state,
+  employmentOptions,
+  isPending,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  state: PayrollWorkerDialogState | null;
+  employmentOptions: PayrollEmploymentOption[];
+  isPending: boolean;
+  onClose: () => void;
+  onChange: (form: PayrollWorkerFormState) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!state) return null;
+  const form = state.form;
+  const options = employmentOptions.filter((option) => option.employment.legalEntityId === state.run.legalEntityId);
+  const update = <K extends keyof PayrollWorkerFormState>(key: K, value: PayrollWorkerFormState[K]) => {
+    onChange({ ...form, [key]: value });
+  };
+  const updateEmployment = (employmentId: string) => {
+    const option = options.find((item) => item.employment.id === Number(employmentId));
+    onChange({
+      ...form,
+      employmentId,
+      workerId: option ? String(option.worker.id) : "",
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <form onSubmit={onSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>Add Worker Result</DialogTitle>
+          </DialogHeader>
+
+          <FormField label="Worker / employment">
+            <Select value={form.employmentId} onValueChange={updateEmployment}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select worker" />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map((option) => (
+                  <SelectItem key={option.employment.id} value={String(option.employment.id)}>
+                      {option.worker.legalName} - {option.worker.workerCode} - {humanize(option.employment.payrollParticipation)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <FormField label="Currency">
+              <Input value={form.currency} onChange={(event) => update("currency", event.target.value.toUpperCase())} maxLength={3} required />
+            </FormField>
+            <FormField label="Gross pay">
+              <Input inputMode="decimal" value={form.grossPay} onChange={(event) => update("grossPay", event.target.value)} required />
+            </FormField>
+            <FormField label="Net pay">
+              <Input inputMode="decimal" value={form.netPay} onChange={(event) => update("netPay", event.target.value)} required />
+            </FormField>
+            <FormField label="Employee tax">
+              <Input inputMode="decimal" value={form.employeeTax} onChange={(event) => update("employeeTax", event.target.value)} />
+            </FormField>
+            <FormField label="Employer tax">
+              <Input inputMode="decimal" value={form.employerTax} onChange={(event) => update("employerTax", event.target.value)} />
+            </FormField>
+            <FormField label="Deductions">
+              <Input inputMode="decimal" value={form.deduction} onChange={(event) => update("deduction", event.target.value)} />
+            </FormField>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending || !form.employmentId}>
+              <Plus className="h-4 w-4" />
+              Add
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PayrollLineDialog({
+  state,
+  isPending,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  state: PayrollLineDialogState | null;
+  isPending: boolean;
+  onClose: () => void;
+  onChange: (form: PayrollLineFormState) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!state) return null;
+  const form = state.form;
+  const update = <K extends keyof PayrollLineFormState>(key: K, value: PayrollLineFormState[K]) => {
+    onChange({ ...form, [key]: value });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <form onSubmit={onSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>Add Result Line</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Category">
+              <Select value={form.lineCategory} onValueChange={(value) => update("lineCategory", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {payrollLineCategories.map((category) => (
+                    <SelectItem key={category} value={category}>{humanize(category)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Code">
+              <Input value={form.lineCode} onChange={(event) => update("lineCode", event.target.value)} required maxLength={120} />
+            </FormField>
+            <FormField label="Effect">
+              <Select value={form.amountEffect} onValueChange={(value) => update("amountEffect", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {payrollAmountEffects.map((effect) => (
+                    <SelectItem key={effect} value={effect}>{humanize(effect)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Amount">
+              <Input inputMode="decimal" value={form.amount} onChange={(event) => update("amount", event.target.value)} required />
+            </FormField>
+            <FormField label="Currency">
+              <Input value={form.currency} onChange={(event) => update("currency", event.target.value.toUpperCase())} maxLength={3} required />
+            </FormField>
+            <FormField label="Jurisdiction">
+              <Input value={form.jurisdictionCode} onChange={(event) => update("jurisdictionCode", event.target.value)} maxLength={80} />
+            </FormField>
+            <FormField label="Quantity">
+              <Input inputMode="decimal" value={form.quantity} onChange={(event) => update("quantity", event.target.value)} />
+            </FormField>
+            <FormField label="Rate">
+              <Input inputMode="decimal" value={form.rateAmount} onChange={(event) => update("rateAmount", event.target.value)} />
+            </FormField>
+          </div>
+
+          <FormField label="Description">
+            <Input value={form.description} onChange={(event) => update("description", event.target.value)} maxLength={400} />
+          </FormField>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              <Plus className="h-4 w-4" />
+              Add
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PayrollPaymentDialog({
+  state,
+  isPending,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  state: PayrollPaymentDialogState | null;
+  isPending: boolean;
+  onClose: () => void;
+  onChange: (form: PayrollPaymentFormState) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!state) return null;
+  const form = state.form;
+  const update = <K extends keyof PayrollPaymentFormState>(key: K, value: PayrollPaymentFormState[K]) => {
+    onChange({ ...form, [key]: value });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <form onSubmit={onSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>Record Payroll Payment</DialogTitle>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Amount">
+              <Input inputMode="decimal" value={form.amount} onChange={(event) => update("amount", event.target.value)} required />
+            </FormField>
+            <FormField label="Currency">
+              <Input value={form.currency} onChange={(event) => update("currency", event.target.value.toUpperCase())} maxLength={3} required />
+            </FormField>
+            <FormField label="Payment date">
+              <Input type="date" value={form.paymentDate} onChange={(event) => update("paymentDate", event.target.value)} />
+            </FormField>
+            <FormField label="Status">
+              <Select value={form.status} onValueChange={(value) => update("status", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {payrollPaymentInitialStatuses.map((status) => (
+                    <SelectItem key={status} value={status}>{humanize(status)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Method">
+              <Select value={form.methodType} onValueChange={(value) => update("methodType", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {payrollPaymentMethods.map((method) => (
+                    <SelectItem key={method} value={method}>{humanize(method)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Method label">
+              <Input value={form.methodLabel} onChange={(event) => update("methodLabel", event.target.value)} maxLength={120} />
+            </FormField>
+            <FormField label="Institution">
+              <Input value={form.institutionName} onChange={(event) => update("institutionName", event.target.value)} maxLength={160} />
+            </FormField>
+            <FormField label="Last 4">
+              <Input value={form.maskedLast4} onChange={(event) => update("maskedLast4", event.target.value)} maxLength={4} inputMode="numeric" />
+            </FormField>
+          </div>
+
+          <FormField label="Confirmation">
+            <Input value={form.externalConfirmationRef} onChange={(event) => update("externalConfirmationRef", event.target.value)} maxLength={200} />
+          </FormField>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              <WalletCards className="h-4 w-4" />
+              Record
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function EntityTypeSelect({ value, onValueChange }: { value: string; onValueChange: (value: string) => void }) {
   return (
     <Select value={value || noSelection} onValueChange={(next) => onValueChange(next === noSelection ? "" : next)}>
@@ -2651,6 +3960,61 @@ function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
 function sectionFromLocation(location: string): FinanceSection {
   const value = location.split("/")[2] as FinanceSection | undefined;
   return value && sections.includes(value) ? value : "overview";
+}
+
+function emptyPayrollRunForm(entity?: FinanceLegalEntity, vendor?: FinanceVendor): PayrollRunFormState {
+  return {
+    legalEntityId: entity ? String(entity.id) : "",
+    periodStart: "",
+    periodEnd: "",
+    payDate: "",
+    runKind: "regular",
+    sourceType: "manual",
+    sourceVendorId: vendor ? String(vendor.id) : "",
+    correctionOfPayrollRunId: "",
+    notes: "",
+  };
+}
+
+function emptyPayrollWorkerForm(option?: PayrollEmploymentOption): PayrollWorkerFormState {
+  return {
+    workerId: option ? String(option.worker.id) : "",
+    employmentId: option ? String(option.employment.id) : "",
+    currency: "USD",
+    grossPay: "0.00",
+    employeeTax: "0.00",
+    employerTax: "0.00",
+    deduction: "0.00",
+    netPay: "0.00",
+  };
+}
+
+function emptyPayrollLineForm(currency: string): PayrollLineFormState {
+  return {
+    lineCategory: "earning",
+    lineCode: "",
+    description: "",
+    amountEffect: "increase",
+    amount: "",
+    currency,
+    quantity: "",
+    rateAmount: "",
+    jurisdictionCode: "",
+  };
+}
+
+function emptyPayrollPaymentForm(runWorker: PayrollRunWorker): PayrollPaymentFormState {
+  return {
+    amount: formatCentsForInput(Math.max(0, runWorker.paymentSummary.remainingNetPayCents || runWorker.netPayCents)),
+    currency: runWorker.currency,
+    paymentDate: "",
+    methodType: "ach",
+    methodLabel: "",
+    institutionName: "",
+    maskedLast4: "",
+    externalConfirmationRef: "",
+    status: "pending",
+  };
 }
 
 function emptyVendorForm(): VendorFormState {
@@ -2956,14 +4320,15 @@ function parsePositiveId(value: string, label: string) {
   return parsed;
 }
 
-function parseMoneyToCents(value: string) {
+function parseMoneyToCents(value: string, allowZero = false) {
   const trimmed = value.trim();
+  if (!trimmed && allowZero) return 0;
   if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
     throw new Error("Enter a positive amount with up to two decimals.");
   }
   const cents = Math.round(Number(trimmed) * 100);
-  if (!Number.isFinite(cents) || cents <= 0) {
-    throw new Error("Amount must be positive.");
+  if (!Number.isFinite(cents) || cents < 0 || (!allowZero && cents <= 0)) {
+    throw new Error(allowZero ? "Amount cannot be negative." : "Amount must be positive.");
   }
   return cents;
 }
@@ -3003,6 +4368,18 @@ function formatMoneyBreakdown(values?: CurrencyAmount[]) {
   return values.map((value) => formatMoney(value.amountCents, value.currency)).join(" / ");
 }
 
+function formatPayrollTotals(values: PayrollCurrencyTotals[] | undefined, field: keyof PayrollCurrencyTotals) {
+  if (!values || values.length === 0) {
+    return formatMoney(0);
+  }
+  return values
+    .map((value) => {
+      const amount = value[field];
+      return formatMoney(typeof amount === "number" ? amount : 0, value.currency);
+    })
+    .join(" / ");
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "-";
   const date = new Date(`${String(value).slice(0, 10)}T00:00:00`);
@@ -3016,11 +4393,11 @@ function humanize(value?: string | null) {
 
 function statusBadge(status: string) {
   const className =
-    ["active", "paid", "cleared", "approved"].includes(status)
+    ["active", "paid", "cleared", "approved", "finalized", "sent", "not_payable"].includes(status)
       ? "border-green-500/20 bg-green-500/10 text-green-700"
-      : ["pending", "draft", "received", "partially_paid", "outflow"].includes(status)
+      : ["pending", "draft", "reviewed", "received", "partially_paid", "outflow"].includes(status)
         ? "border-blue-500/20 bg-blue-500/10 text-blue-700"
-        : ["disputed", "failed", "missing", "trial", "paused"].includes(status)
+        : ["disputed", "failed", "missing", "trial", "paused", "mixed", "overpaid"].includes(status)
           ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-700"
           : ["voided", "reversed", "cancelled", "archived", "unpaid"].includes(status)
             ? "border-red-500/20 bg-red-500/10 text-red-700"
