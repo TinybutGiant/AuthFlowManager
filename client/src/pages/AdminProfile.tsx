@@ -73,6 +73,33 @@ interface AdminPersonnelSummary {
   } | null;
 }
 
+interface AdminProfileWorkAuthorization {
+  id: number;
+  authorizationType: string;
+  status: string;
+  validFrom: string | null;
+  validThrough: string | null;
+  worksiteScope: string | null;
+  maskedExternalRef: string | null;
+  supersedes: {
+    id: number;
+    authorizationType: string;
+    status: string;
+    validFrom: string | null;
+    validThrough: string | null;
+  } | null;
+  derived: {
+    state: string;
+    currentlyValid: boolean;
+    expired: boolean;
+    notYetEffective: boolean;
+    daysUntilExpiration: number | null;
+    expiresWithin30Days: boolean;
+    expiresWithin60Days: boolean;
+    expiresWithin90Days: boolean;
+  };
+}
+
 const MEETING_STATUS_LABELS: Record<FeedbackMeetingStatus, string> = {
   scheduled: "Scheduled",
   absence_requested: "Absence Requested",
@@ -142,6 +169,17 @@ export default function AdminProfile() {
     queryKey: ["/api/admin/personnel/admin-users", adminId],
     enabled: !!adminId,
     retry: false,
+  });
+
+  const personnelWorkerId = personnelSummary?.worker?.id;
+  const { data: workAuthorizations = [] } = useQuery<AdminProfileWorkAuthorization[]>({
+    queryKey: ["/api/admin/personnel/work-authorizations", personnelWorkerId],
+    enabled: Boolean(personnelWorkerId),
+    retry: false,
+    queryFn: async () => {
+      const response = await apiRequest("GET", `/api/admin/personnel/work-authorizations?workerId=${personnelWorkerId}`);
+      return response.json() as Promise<AdminProfileWorkAuthorization[]>;
+    },
   });
 
   const engagementDocumentQueryKey = [
@@ -536,6 +574,21 @@ export default function AdminProfile() {
     }).format(compensation.amountCents / 100)} / ${formatPersonnelValue(compensation.payFrequency)}`;
   };
 
+  const formatAuthorizationType = (authorizationType: string | null | undefined) => {
+    switch (authorizationType) {
+      case "stem_opt":
+        return "STEM OPT";
+      case "h1b":
+        return "H-1B";
+      default:
+        return formatPersonnelValue(authorizationType);
+    }
+  };
+
+  const currentWorkAuthorization = workAuthorizations.find((authorization) => authorization.derived.currentlyValid)
+    ?? workAuthorizations.find((authorization) => authorization.status === "active")
+    ?? null;
+
   const getDocumentStatusBadge = (status: string) => {
     const variants = {
       draft: "secondary",
@@ -750,6 +803,28 @@ export default function AdminProfile() {
                       <span className="text-muted-foreground">Current Compensation: </span>
                       <span>{formatCompensation(personnelSummary.worker.currentEmployment?.currentCompensation)}</span>
                     </div>
+                    <div>
+                      <span className="text-muted-foreground">Work Authorization: </span>
+                      <span>
+                        {currentWorkAuthorization
+                          ? `${formatAuthorizationType(currentWorkAuthorization.authorizationType)} / ${formatPersonnelValue(currentWorkAuthorization.derived.state)}`
+                          : "Not recorded"}
+                      </span>
+                    </div>
+                    {currentWorkAuthorization && (
+                      <>
+                        <div>
+                          <span className="text-muted-foreground">Authorization Validity: </span>
+                          <span>
+                            {currentWorkAuthorization.validFrom ?? "Not set"} through {currentWorkAuthorization.validThrough ?? "Not set"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Worksite Scope: </span>
+                          <span>{currentWorkAuthorization.worksiteScope ?? "Not set"}</span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

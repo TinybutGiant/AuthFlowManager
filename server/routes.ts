@@ -125,33 +125,45 @@ import { personnelRepository } from './personnelRepository';
 import {
   PersonnelServiceError,
   activatePersonnelCompensationTerm,
+  activatePersonnelWorkAuthorization,
   archivePersonnelWorker,
   createCompensationTermPayloadSchema,
   createEmploymentPayloadSchema,
   createPersonnelCompensationTerm,
   createPersonnelEmployment,
+  createPersonnelWorkAuthorization,
   createPersonnelWorker,
   createPersonnelWorkerFromAdminUser,
+  createWorkAuthorizationPayloadSchema,
   createWorkerFromAdminUserPayloadSchema,
   createWorkerPayloadSchema,
   endEmploymentPayloadSchema,
   getPersonnelForAdminUser,
+  getPersonnelWorkAuthorization,
   getPersonnelWorker,
   listPersonnelAdminUsers,
   listPersonnelCompensationTerms,
   listPersonnelEmployments,
   listPersonnelLegalEntities,
+  listPersonnelWorkAuthorizations,
   listPersonnelWorkers,
+  listWorkAuthorizationEngagementOptions,
   personnelListQuerySchema,
+  supersedePersonnelWorkAuthorization,
+  supersedeWorkAuthorizationPayloadSchema,
   transitionPersonnelEmployment,
   updateCompensationTermPayloadSchema,
   updateDraftPersonnelCompensationTerm,
   updateEmploymentPayloadSchema,
   updatePersonnelEmployment,
+  updatePersonnelWorkAuthorization,
   updatePersonnelWorker,
+  updateWorkAuthorizationPayloadSchema,
   updateWorkerPayloadSchema,
   voidPersonnelCompensationTerm,
+  voidPersonnelWorkAuthorization,
   voidPersonnelWorker,
+  workAuthorizationListQuerySchema,
 } from './personnelService';
 import { publicCompanyBrandDefaults } from './companyBrandDefaults';
 import { deriveAccountTypeFromLegacyRole } from './adminAccessModel';
@@ -2538,6 +2550,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
     personnelRoute(async (req) => voidPersonnelCompensationTerm(
       personnelRepository,
       personnelIdParamSchema.parse(req.params.termId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/work-authorizations",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => listPersonnelWorkAuthorizations(
+      personnelRepository,
+      workAuthorizationListQuerySchema.parse(req.query),
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/work-authorizations/engagement-options",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => listWorkAuthorizationEngagementOptions(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.query.workerId),
+    )),
+  );
+
+  app.get(
+    "/api/admin/personnel/work-authorizations/:authorizationId",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => getPersonnelWorkAuthorization(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.authorizationId),
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/work-authorizations",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req, res) => {
+      const authorization = await createPersonnelWorkAuthorization(personnelRepository, {
+        ...createWorkAuthorizationPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      });
+      res.status(201).json(authorization);
+    }),
+  );
+
+  app.patch(
+    "/api/admin/personnel/work-authorizations/:authorizationId",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => updatePersonnelWorkAuthorization(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.authorizationId),
+      {
+        ...updateWorkAuthorizationPayloadSchema.parse(req.body),
+        actorAdminId: req.adminUser.id,
+      },
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/work-authorizations/:authorizationId/activate",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => activatePersonnelWorkAuthorization(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.authorizationId),
+      req.adminUser.id,
+    )),
+  );
+
+  app.post(
+    "/api/admin/personnel/work-authorizations/:authorizationId/supersede",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req, res) => {
+      const authorization = await supersedePersonnelWorkAuthorization(
+        personnelRepository,
+        personnelIdParamSchema.parse(req.params.authorizationId),
+        {
+          ...supersedeWorkAuthorizationPayloadSchema.parse(req.body),
+          actorAdminId: req.adminUser.id,
+        },
+      );
+      res.status(201).json(authorization);
+    }),
+  );
+
+  app.post(
+    "/api/admin/personnel/work-authorizations/:authorizationId/void",
+    requireAuth,
+    requireRole(['super_admin']),
+    personnelRoute(async (req) => voidPersonnelWorkAuthorization(
+      personnelRepository,
+      personnelIdParamSchema.parse(req.params.authorizationId),
       req.adminUser.id,
     )),
   );

@@ -1,18 +1,21 @@
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import {
+  adminEngagements,
   adminUsers,
   compensationTerms,
   employments,
   legalEntities,
   personnelAuditEvents,
+  workAuthorizations,
   workers,
+  type InsertWorkAuthorization,
   type InsertCompensationTerm,
   type InsertEmployment,
   type InsertPersonnelAuditEvent,
   type InsertWorker,
 } from "@shared/schema";
 import { db } from "./db";
-import type { PersonnelListFilters, PersonnelRepository } from "./personnelService";
+import type { PersonnelListFilters, PersonnelRepository, WorkAuthorizationListFilters } from "./personnelService";
 
 type DrizzleDb = any;
 
@@ -59,6 +62,14 @@ function createRepository(database: DrizzleDb): PersonnelRepository {
       await database.execute(sql`SELECT "id" FROM "compensation_terms" WHERE "id" = ${id} FOR UPDATE`);
     },
 
+    lockAdminEngagement: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "admin_engagements" WHERE "id" = ${id} FOR UPDATE`);
+    },
+
+    lockWorkAuthorization: async (id) => {
+      await database.execute(sql`SELECT "id" FROM "work_authorizations" WHERE "id" = ${id} FOR UPDATE`);
+    },
+
     getAdminUser: async (id) => {
       const [row] = await database.select().from(adminUsers).where(eq(adminUsers.id, id));
       return row;
@@ -80,6 +91,19 @@ function createRepository(database: DrizzleDb): PersonnelRepository {
       }
       return await query.orderBy(asc(adminUsers.name), asc(adminUsers.id)).limit(queryLimit(filters));
     },
+
+    getAdminEngagement: async (id) => {
+      const [row] = await database.select().from(adminEngagements).where(eq(adminEngagements.id, id));
+      return row;
+    },
+
+    listAdminEngagementsForAdminUser: async (adminUserId) => (
+      await database
+        .select()
+        .from(adminEngagements)
+        .where(eq(adminEngagements.adminUserId, adminUserId))
+        .orderBy(desc(adminEngagements.createdAt), desc(adminEngagements.id))
+    ),
 
     getLegalEntity: async (id) => {
       const [row] = await database.select().from(legalEntities).where(eq(legalEntities.id, id));
@@ -262,6 +286,46 @@ function createRepository(database: DrizzleDb): PersonnelRepository {
       return row;
     },
 
+    getWorkAuthorization: async (id) => {
+      const [row] = await database.select().from(workAuthorizations).where(eq(workAuthorizations.id, id));
+      return row;
+    },
+
+    listWorkAuthorizations: async (filters: WorkAuthorizationListFilters) => {
+      const conditions = [];
+      if (filters.workerId) {
+        conditions.push(eq(workAuthorizations.workerId, filters.workerId));
+      }
+      if (filters.status && filters.status !== "all") {
+        conditions.push(eq(workAuthorizations.status, filters.status));
+      }
+      if (filters.authorizationType && filters.authorizationType !== "all") {
+        conditions.push(eq(workAuthorizations.authorizationType, filters.authorizationType));
+      }
+
+      let query = database.select().from(workAuthorizations).$dynamic();
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions));
+      }
+      return await query
+        .orderBy(desc(workAuthorizations.validThrough), desc(workAuthorizations.id))
+        .limit(Math.min(250, Math.max(1, filters.pageSize ?? 100)));
+    },
+
+    createWorkAuthorization: async (values) => {
+      const [row] = await database.insert(workAuthorizations).values(compact(values)).returning();
+      return row;
+    },
+
+    updateWorkAuthorization: async (id, values) => {
+      const [row] = await database
+        .update(workAuthorizations)
+        .set(compact(values))
+        .where(eq(workAuthorizations.id, id))
+        .returning();
+      return row;
+    },
+
     createPersonnelAuditEvent: async (values) => {
       const [row] = await database.insert(personnelAuditEvents).values(compact(values)).returning();
       return row;
@@ -277,5 +341,6 @@ export type {
   InsertCompensationTerm,
   InsertEmployment,
   InsertPersonnelAuditEvent,
+  InsertWorkAuthorization,
   InsertWorker,
 };

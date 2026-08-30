@@ -14,9 +14,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { BriefcaseBusiness, CircleDollarSign, Plus, UserRound, Users } from "lucide-react";
+import { AlertTriangle, BriefcaseBusiness, CircleDollarSign, Plus, ShieldCheck, UserRound, Users } from "lucide-react";
 
 type WorkerLifecycleState = "normal" | "archived" | "merged" | "voided";
 type EmploymentStatus = "draft" | "active" | "on_leave" | "ended" | "voided";
@@ -24,6 +25,16 @@ type PayrollParticipation = "not_enrolled" | "eligible" | "active" | "inactive";
 type EmployeeClassification = "employee" | "paid_intern" | "other_employee";
 type CompensationStatus = "draft" | "active" | "superseded" | "voided";
 type CompensationPayBasis = "hourly" | "salary" | "stipend" | "other";
+type WorkAuthorizationType = "stem_opt" | "h1b" | "other";
+type WorkAuthorizationStatus = "draft" | "active" | "superseded" | "voided";
+type WorkAuthorizationDerivedState =
+  | "draft"
+  | "voided"
+  | "superseded"
+  | "not_yet_effective"
+  | "currently_valid"
+  | "expired"
+  | "active_dates_missing";
 
 interface AdminSummary {
   id: number;
@@ -84,6 +95,52 @@ interface Worker {
   employments?: Employment[];
 }
 
+interface AdminEngagementSummary {
+  id: number;
+  adminUserId: number;
+  engagementType: string;
+  status: string;
+  workAuthorizationType: string;
+  startDate: string | null;
+  endDate: string | null;
+  positionTitle: string | null;
+  workLocation: string | null;
+}
+
+interface WorkAuthorization {
+  id: number;
+  workerId: number;
+  employmentId: number | null;
+  adminEngagementId: number | null;
+  authorizationType: WorkAuthorizationType;
+  status: WorkAuthorizationStatus;
+  validFrom: string | null;
+  validThrough: string | null;
+  worksiteScope: string | null;
+  maskedExternalRef: string | null;
+  restrictedNotes?: string | null;
+  supersedesWorkAuthorizationId: number | null;
+  derived: {
+    state: WorkAuthorizationDerivedState;
+    currentlyValid: boolean;
+    expired: boolean;
+    notYetEffective: boolean;
+    daysUntilExpiration: number | null;
+    expiresWithin30Days: boolean;
+    expiresWithin60Days: boolean;
+    expiresWithin90Days: boolean;
+  };
+  employment: Pick<Employment, "id" | "status" | "payrollParticipation" | "startDate" | "endDate" | "employeeClassification" | "legalEntity"> | null;
+  adminEngagement: AdminEngagementSummary | null;
+  supersedes: {
+    id: number;
+    authorizationType: WorkAuthorizationType;
+    status: WorkAuthorizationStatus;
+    validFrom: string | null;
+    validThrough: string | null;
+  } | null;
+}
+
 interface WorkerFormState {
   adminUserId: string;
   workerCode: string;
@@ -117,6 +174,19 @@ interface CompensationFormState {
   supersedeCurrent: boolean;
   notes: string;
 }
+
+interface WorkAuthorizationFormState {
+  authorizationType: WorkAuthorizationType;
+  employmentId: string;
+  adminEngagementId: string;
+  validFrom: string;
+  validThrough: string;
+  worksiteScope: string;
+  maskedExternalRef: string;
+  restrictedNotes: string;
+}
+
+type WorkAuthorizationDialogMode = "create" | "edit" | "supersede";
 
 const initialWorkerForm: WorkerFormState = {
   adminUserId: "none",
@@ -152,6 +222,17 @@ const initialCompensationForm: CompensationFormState = {
   notes: "",
 };
 
+const initialWorkAuthorizationForm: WorkAuthorizationFormState = {
+  authorizationType: "stem_opt",
+  employmentId: "none",
+  adminEngagementId: "none",
+  validFrom: "",
+  validThrough: "",
+  worksiteScope: "",
+  maskedExternalRef: "",
+  restrictedNotes: "",
+};
+
 function cents(value: number, currency = "USD") {
   return new Intl.NumberFormat(undefined, {
     style: "currency",
@@ -163,6 +244,19 @@ function label(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ") : "Not set";
 }
 
+function authorizationTypeLabel(value: string | null | undefined) {
+  switch (value) {
+    case "stem_opt":
+      return "STEM OPT";
+    case "h1b":
+      return "H-1B";
+    case "other":
+      return "Other";
+    default:
+      return "Not set";
+  }
+}
+
 function statusBadge(status: string) {
   const variant = ["active", "normal"].includes(status)
     ? "default"
@@ -170,6 +264,19 @@ function statusBadge(status: string) {
       ? "destructive"
       : "secondary";
   return <Badge variant={variant as "default" | "secondary" | "destructive"}>{label(status)}</Badge>;
+}
+
+function authorizationDerivedBadge(authorization: WorkAuthorization) {
+  const state = authorization.derived.state;
+  const variant = state === "currently_valid"
+    ? "default"
+    : state === "expired" || state === "active_dates_missing"
+      ? "destructive"
+      : "secondary";
+  const text = state === "currently_valid" && authorization.derived.daysUntilExpiration !== null
+    ? `Valid: ${authorization.derived.daysUntilExpiration} days left`
+    : label(state);
+  return <Badge variant={variant as "default" | "secondary" | "destructive"}>{text}</Badge>;
 }
 
 function roleLabel(admin: AdminSummary | null) {
@@ -217,6 +324,52 @@ function compensationPayload(form: CompensationFormState) {
   };
 }
 
+function workAuthorizationCreatePayload(form: WorkAuthorizationFormState, workerId: number) {
+  return {
+    workerId,
+    authorizationType: form.authorizationType,
+    employmentId: form.employmentId === "none" ? null : Number(form.employmentId),
+    adminEngagementId: form.adminEngagementId === "none" ? null : Number(form.adminEngagementId),
+    validFrom: form.validFrom || null,
+    validThrough: form.validThrough || null,
+    worksiteScope: form.worksiteScope || null,
+    maskedExternalRef: form.maskedExternalRef || null,
+    restrictedNotes: form.restrictedNotes || null,
+  };
+}
+
+function workAuthorizationUpdatePayload(form: WorkAuthorizationFormState, activeOperationalOnly: boolean) {
+  if (activeOperationalOnly) {
+    return {
+      worksiteScope: form.worksiteScope || null,
+      restrictedNotes: form.restrictedNotes || null,
+    };
+  }
+  return {
+    authorizationType: form.authorizationType,
+    employmentId: form.employmentId === "none" ? null : Number(form.employmentId),
+    adminEngagementId: form.adminEngagementId === "none" ? null : Number(form.adminEngagementId),
+    validFrom: form.validFrom || null,
+    validThrough: form.validThrough || null,
+    worksiteScope: form.worksiteScope || null,
+    maskedExternalRef: form.maskedExternalRef || null,
+    restrictedNotes: form.restrictedNotes || null,
+  };
+}
+
+function workAuthorizationSuccessorPayload(form: WorkAuthorizationFormState) {
+  return {
+    authorizationType: form.authorizationType,
+    employmentId: form.employmentId === "none" ? null : Number(form.employmentId),
+    adminEngagementId: form.adminEngagementId === "none" ? null : Number(form.adminEngagementId),
+    validFrom: form.validFrom,
+    validThrough: form.validThrough,
+    worksiteScope: form.worksiteScope || null,
+    maskedExternalRef: form.maskedExternalRef || null,
+    restrictedNotes: form.restrictedNotes || null,
+  };
+}
+
 export default function PersonnelManagement() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -226,11 +379,15 @@ export default function PersonnelManagement() {
   const [workerDialogOpen, setWorkerDialogOpen] = useState(false);
   const [employmentDialogOpen, setEmploymentDialogOpen] = useState(false);
   const [compensationDialogOpen, setCompensationDialogOpen] = useState(false);
+  const [workAuthorizationDialogOpen, setWorkAuthorizationDialogOpen] = useState(false);
+  const [workAuthorizationDialogMode, setWorkAuthorizationDialogMode] = useState<WorkAuthorizationDialogMode>("create");
+  const [selectedWorkAuthorization, setSelectedWorkAuthorization] = useState<WorkAuthorization | null>(null);
   const [endingEmployment, setEndingEmployment] = useState<Employment | null>(null);
   const [endDate, setEndDate] = useState("");
   const [workerForm, setWorkerForm] = useState<WorkerFormState>(initialWorkerForm);
   const [employmentForm, setEmploymentForm] = useState<EmploymentFormState>(initialEmploymentForm);
   const [compensationForm, setCompensationForm] = useState<CompensationFormState>(initialCompensationForm);
+  const [workAuthorizationForm, setWorkAuthorizationForm] = useState<WorkAuthorizationFormState>(initialWorkAuthorizationForm);
 
   const workersQuery = useQuery<Worker[]>({
     queryKey: ["/api/admin/personnel/workers"],
@@ -259,6 +416,26 @@ export default function PersonnelManagement() {
     retry: false,
   });
 
+  const workAuthorizationsQuery = useQuery<WorkAuthorization[]>({
+    queryKey: ["/api/admin/personnel/work-authorizations", selectedWorkerId],
+    enabled: Boolean(selectedWorkerId),
+    retry: false,
+    queryFn: async () => {
+      const response = await apiRequest("GET", `/api/admin/personnel/work-authorizations?workerId=${selectedWorkerId}`);
+      return response.json();
+    },
+  });
+
+  const engagementOptionsQuery = useQuery<AdminEngagementSummary[]>({
+    queryKey: ["/api/admin/personnel/work-authorizations/engagement-options", selectedWorkerId],
+    enabled: Boolean(selectedWorkerId),
+    retry: false,
+    queryFn: async () => {
+      const response = await apiRequest("GET", `/api/admin/personnel/work-authorizations/engagement-options?workerId=${selectedWorkerId}`);
+      return response.json();
+    },
+  });
+
   const workers = workersQuery.data ?? [];
   const admins = adminsQuery.data ?? [];
   const legalEntities = legalEntitiesQuery.data ?? [];
@@ -266,6 +443,8 @@ export default function PersonnelManagement() {
   const employments = selectedWorker?.employments ?? [];
   const selectedEmployment = employments.find((employment) => employment.id === selectedEmploymentId) ?? employments[0] ?? null;
   const compensationTerms = compensationQuery.data ?? [];
+  const workAuthorizations = workAuthorizationsQuery.data ?? [];
+  const engagementOptions = engagementOptionsQuery.data ?? [];
   const requestedAdminUserId = useMemo(() => {
     const [, query = ""] = location.split("?");
     const value = new URLSearchParams(query).get("adminUserId");
@@ -296,6 +475,8 @@ export default function PersonnelManagement() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/personnel/workers"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/personnel/workers", selectedWorkerId] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/personnel/employments", selectedEmploymentId, "compensation"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/personnel/work-authorizations", selectedWorkerId] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/personnel/work-authorizations/engagement-options", selectedWorkerId] });
   };
 
   const createWorkerMutation = useMutation({
@@ -401,6 +582,70 @@ export default function PersonnelManagement() {
     },
   });
 
+  const saveWorkAuthorizationMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedWorker) throw new Error("Select a worker first.");
+      if (workAuthorizationDialogMode === "create") {
+        const response = await apiRequest(
+          "POST",
+          "/api/admin/personnel/work-authorizations",
+          workAuthorizationCreatePayload(workAuthorizationForm, selectedWorker.id),
+        );
+        return response.json() as Promise<WorkAuthorization>;
+      }
+      if (!selectedWorkAuthorization) throw new Error("Select a work authorization first.");
+      if (workAuthorizationDialogMode === "supersede") {
+        const response = await apiRequest(
+          "POST",
+          `/api/admin/personnel/work-authorizations/${selectedWorkAuthorization.id}/supersede`,
+          workAuthorizationSuccessorPayload(workAuthorizationForm),
+        );
+        return response.json() as Promise<WorkAuthorization>;
+      }
+      const response = await apiRequest(
+        "PATCH",
+        `/api/admin/personnel/work-authorizations/${selectedWorkAuthorization.id}`,
+        workAuthorizationUpdatePayload(workAuthorizationForm, selectedWorkAuthorization.status === "active"),
+      );
+      return response.json() as Promise<WorkAuthorization>;
+    },
+    onSuccess: () => {
+      invalidatePersonnel();
+      setWorkAuthorizationDialogOpen(false);
+      setSelectedWorkAuthorization(null);
+      setWorkAuthorizationForm(initialWorkAuthorizationForm);
+      toast({ title: "Work authorization saved", description: "The authorization record has been updated." });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not save work authorization",
+        description: getApiErrorMessage(error, "Please check the authorization fields and try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const transitionWorkAuthorizationMutation = useMutation({
+    mutationFn: async (input: { authorization: WorkAuthorization; action: "activate" | "void" }) => {
+      const response = await apiRequest(
+        "POST",
+        `/api/admin/personnel/work-authorizations/${input.authorization.id}/${input.action}`,
+      );
+      return response.json() as Promise<WorkAuthorization>;
+    },
+    onSuccess: () => {
+      invalidatePersonnel();
+      toast({ title: "Work authorization updated", description: "The authorization lifecycle has been updated." });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not update work authorization",
+        description: getApiErrorMessage(error, "Please try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
   const openWorkerDialog = () => {
     setWorkerForm(initialWorkerForm);
     setWorkerDialogOpen(true);
@@ -425,6 +670,55 @@ export default function PersonnelManagement() {
       effectiveFrom: employment.startDate?.slice(0, 10) ?? "",
     });
     setCompensationDialogOpen(true);
+  };
+
+  const openWorkAuthorizationDialog = () => {
+    setWorkAuthorizationDialogMode("create");
+    setSelectedWorkAuthorization(null);
+    setWorkAuthorizationForm({
+      ...initialWorkAuthorizationForm,
+      employmentId: selectedEmployment ? String(selectedEmployment.id) : "none",
+    });
+    setWorkAuthorizationDialogOpen(true);
+  };
+
+  const openEditWorkAuthorizationDialog = async (authorization: WorkAuthorization) => {
+    try {
+      const response = await apiRequest("GET", `/api/admin/personnel/work-authorizations/${authorization.id}`);
+      const detail = await response.json() as WorkAuthorization;
+      setWorkAuthorizationDialogMode("edit");
+      setSelectedWorkAuthorization(detail);
+      setWorkAuthorizationForm({
+        authorizationType: detail.authorizationType,
+        employmentId: detail.employmentId ? String(detail.employmentId) : "none",
+        adminEngagementId: detail.adminEngagementId ? String(detail.adminEngagementId) : "none",
+        validFrom: detail.validFrom?.slice(0, 10) ?? "",
+        validThrough: detail.validThrough?.slice(0, 10) ?? "",
+        worksiteScope: detail.worksiteScope ?? "",
+        maskedExternalRef: detail.maskedExternalRef ?? "",
+        restrictedNotes: detail.restrictedNotes ?? "",
+      });
+      setWorkAuthorizationDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: "Could not load work authorization",
+        description: getApiErrorMessage(error, "Please try again."),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const openSupersedeWorkAuthorizationDialog = (authorization: WorkAuthorization) => {
+    setWorkAuthorizationDialogMode("supersede");
+    setSelectedWorkAuthorization(authorization);
+    setWorkAuthorizationForm({
+      ...initialWorkAuthorizationForm,
+      authorizationType: authorization.authorizationType === "stem_opt" ? "h1b" : authorization.authorizationType,
+      employmentId: authorization.employmentId ? String(authorization.employmentId) : selectedEmployment ? String(selectedEmployment.id) : "none",
+      adminEngagementId: authorization.adminEngagementId ? String(authorization.adminEngagementId) : "none",
+      worksiteScope: authorization.worksiteScope ?? "",
+    });
+    setWorkAuthorizationDialogOpen(true);
   };
 
   const currentCounts = useMemo(() => {
@@ -663,6 +957,83 @@ export default function PersonnelManagement() {
                   )}
                 </CardContent>
               </Card>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <ShieldCheck className="h-5 w-5" />
+                      Work Authorization
+                    </CardTitle>
+                    <Button onClick={openWorkAuthorizationDialog} data-testid="button-create-work-authorization">
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Authorization
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {workAuthorizationsQuery.isLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading work authorization records...</p>
+                  ) : workAuthorizations.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No work authorization records for this worker.</p>
+                  ) : (
+                    workAuthorizations.map((authorization) => (
+                      <div key={authorization.id} className="rounded-md border border-border p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium">{authorizationTypeLabel(authorization.authorizationType)}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {authorization.validFrom?.slice(0, 10) ?? "Not set"} through {authorization.validThrough?.slice(0, 10) ?? "Not set"}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {statusBadge(authorization.status)}
+                            {authorizationDerivedBadge(authorization)}
+                            {authorization.derived.expiresWithin30Days && (
+                              <Badge variant="destructive" className="flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3" />
+                                30 days
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+                          <Field label="Employment" value={authorization.employment ? `${label(authorization.employment.status)} / ${authorization.employment.legalEntity?.legalName ?? "Legal entity"}` : "Not linked"} />
+                          <Field label="Engagement" value={authorization.adminEngagement ? `${label(authorization.adminEngagement.engagementType)} / ${label(authorization.adminEngagement.status)}` : "Not linked"} />
+                          <Field label="Worksite" value={authorization.worksiteScope ?? "Not set"} />
+                          <Field label="Reference" value={authorization.maskedExternalRef ?? "Not set"} />
+                          <Field label="Supersedes" value={authorization.supersedes ? authorizationTypeLabel(authorization.supersedes.authorizationType) : "None"} />
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {authorization.status === "draft" && (
+                            <>
+                              <Button size="sm" onClick={() => transitionWorkAuthorizationMutation.mutate({ authorization, action: "activate" })}>
+                                Activate
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => void openEditWorkAuthorizationDialog(authorization)}>
+                                Edit
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => transitionWorkAuthorizationMutation.mutate({ authorization, action: "void" })}>
+                                Void
+                              </Button>
+                            </>
+                          )}
+                          {authorization.status === "active" && (
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => void openEditWorkAuthorizationDialog(authorization)}>
+                                Update Worksite
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => openSupersedeWorkAuthorizationDialog(authorization)}>
+                                Supersede
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
             </>
           )}
         </div>
@@ -695,6 +1066,22 @@ export default function PersonnelManagement() {
         onClose={() => setCompensationDialogOpen(false)}
         onSubmit={() => createCompensationMutation.mutate()}
         pending={createCompensationMutation.isPending}
+      />
+
+      <WorkAuthorizationDialog
+        open={workAuthorizationDialogOpen}
+        mode={workAuthorizationDialogMode}
+        form={workAuthorizationForm}
+        setForm={setWorkAuthorizationForm}
+        employments={employments}
+        engagementOptions={engagementOptions}
+        selectedAuthorization={selectedWorkAuthorization}
+        onClose={() => {
+          setWorkAuthorizationDialogOpen(false);
+          setSelectedWorkAuthorization(null);
+        }}
+        onSubmit={() => saveWorkAuthorizationMutation.mutate()}
+        pending={saveWorkAuthorizationMutation.isPending}
       />
 
       <Dialog open={Boolean(endingEmployment)} onOpenChange={(open) => !open && setEndingEmployment(null)}>
@@ -799,7 +1186,7 @@ function WorkerDialog({
                   <SelectItem value="none">No admin login</SelectItem>
                   {admins.map((admin) => (
                     <SelectItem key={admin.id} value={String(admin.id)}>
-                      {admin.name} · {label(admin.accountType)}
+                      {admin.name} / {label(admin.accountType)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1047,6 +1434,153 @@ function CompensationDialog({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>
             <Button type="submit" disabled={pending}>{pending ? "Saving..." : "Save Compensation"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WorkAuthorizationDialog({
+  open,
+  mode,
+  form,
+  setForm,
+  employments,
+  engagementOptions,
+  selectedAuthorization,
+  onClose,
+  onSubmit,
+  pending,
+}: {
+  open: boolean;
+  mode: WorkAuthorizationDialogMode;
+  form: WorkAuthorizationFormState;
+  setForm: (value: WorkAuthorizationFormState) => void;
+  employments: Employment[];
+  engagementOptions: AdminEngagementSummary[];
+  selectedAuthorization: WorkAuthorization | null;
+  onClose: () => void;
+  onSubmit: () => void;
+  pending: boolean;
+}) {
+  const activeOperationalOnly = mode === "edit" && selectedAuthorization?.status === "active";
+  const title = mode === "supersede"
+    ? "Supersede Work Authorization"
+    : mode === "edit"
+      ? "Edit Work Authorization"
+      : "New Work Authorization";
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {activeOperationalOnly
+              ? "Only operational worksite and notes fields can be updated after activation."
+              : "Record operational authorization facts for this worker."}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Authorization Type</Label>
+              <Select
+                value={form.authorizationType}
+                disabled={activeOperationalOnly}
+                onValueChange={(value) => setForm({ ...form, authorizationType: value as WorkAuthorizationType })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="stem_opt">STEM OPT</SelectItem>
+                  <SelectItem value="h1b">H-1B</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Employment</Label>
+              <Select
+                value={form.employmentId}
+                disabled={activeOperationalOnly}
+                onValueChange={(value) => setForm({ ...form, employmentId: value })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not linked</SelectItem>
+                  {employments.map((employment) => (
+                    <SelectItem key={employment.id} value={String(employment.id)}>
+                      {employment.legalEntity?.legalName ?? `Employment ${employment.id}`} / {label(employment.status)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Admin Engagement</Label>
+              <Select
+                value={form.adminEngagementId}
+                disabled={activeOperationalOnly}
+                onValueChange={(value) => setForm({ ...form, adminEngagementId: value })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not linked</SelectItem>
+                  {engagementOptions.map((engagement) => (
+                    <SelectItem key={engagement.id} value={String(engagement.id)}>
+                      {label(engagement.engagementType)} / {label(engagement.status)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Masked Reference</Label>
+              <Input
+                value={form.maskedExternalRef}
+                disabled={activeOperationalOnly}
+                onChange={(event) => setForm({ ...form, maskedExternalRef: event.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Valid From</Label>
+              <Input
+                type="date"
+                required={mode === "supersede"}
+                value={form.validFrom}
+                disabled={activeOperationalOnly}
+                onChange={(event) => setForm({ ...form, validFrom: event.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Valid Through</Label>
+              <Input
+                type="date"
+                required={mode === "supersede"}
+                value={form.validThrough}
+                disabled={activeOperationalOnly}
+                onChange={(event) => setForm({ ...form, validThrough: event.target.value })}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label>Worksite Scope</Label>
+              <Input value={form.worksiteScope} onChange={(event) => setForm({ ...form, worksiteScope: event.target.value })} />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label>Restricted Notes</Label>
+              <Textarea value={form.restrictedNotes} onChange={(event) => setForm({ ...form, restrictedNotes: event.target.value })} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>
+            <Button type="submit" disabled={pending}>{pending ? "Saving..." : "Save Authorization"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

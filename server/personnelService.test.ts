@@ -5,20 +5,31 @@ import test from "node:test";
 import {
   PersonnelServiceError,
   activatePersonnelCompensationTerm,
+  activatePersonnelWorkAuthorization,
   archivePersonnelWorker,
   createPersonnelCompensationTerm,
   createPersonnelEmployment,
+  createPersonnelWorkAuthorization,
+  createWorkAuthorizationPayloadSchema,
   createPersonnelWorker,
   createPersonnelWorkerFromAdminUser,
   createWorkerPayloadSchema,
+  deriveWorkAuthorizationStatus,
   deriveWorkerLifecycleState,
   getPersonnelForAdminUser,
+  getPersonnelWorkAuthorization,
   getPersonnelWorker,
+  listPersonnelWorkAuthorizations,
+  listWorkAuthorizationEngagementOptions,
+  supersedePersonnelWorkAuthorization,
+  supersedeWorkAuthorizationPayloadSchema,
   listPersonnelWorkers,
   transitionPersonnelEmployment,
   updateDraftPersonnelCompensationTerm,
   updatePersonnelEmployment,
+  updatePersonnelWorkAuthorization,
   voidPersonnelCompensationTerm,
+  voidPersonnelWorkAuthorization,
   voidPersonnelWorker,
   type PersonnelRepository,
 } from "./personnelService";
@@ -42,10 +53,12 @@ function compact<T extends Record<string, unknown>>(value: T): T {
 
 interface PersonnelState {
   adminUsers: any[];
+  adminEngagements: any[];
   legalEntities: any[];
   workers: any[];
   employments: any[];
   compensationTerms: any[];
+  workAuthorizations: any[];
   auditEvents: any[];
   locks: string[];
   failNextAudit: boolean;
@@ -53,6 +66,7 @@ interface PersonnelState {
     worker: number;
     employment: number;
     compensation: number;
+    workAuthorization: number;
     audit: number;
   };
 }
@@ -63,10 +77,12 @@ function cloneState(state: PersonnelState): PersonnelState {
 
 function restoreState(state: PersonnelState, snapshot: PersonnelState) {
   state.adminUsers = snapshot.adminUsers;
+  state.adminEngagements = snapshot.adminEngagements;
   state.legalEntities = snapshot.legalEntities;
   state.workers = snapshot.workers;
   state.employments = snapshot.employments;
   state.compensationTerms = snapshot.compensationTerms;
+  state.workAuthorizations = snapshot.workAuthorizations;
   state.auditEvents = snapshot.auditEvents;
   state.locks = snapshot.locks;
   state.failNextAudit = snapshot.failNextAudit;
@@ -126,6 +142,52 @@ function createFixture() {
         permissions: [],
       },
     ],
+    adminEngagements: [
+      {
+        id: 40,
+        adminUserId: 2,
+        engagementType: "intern",
+        scheduleType: "part_time",
+        workAuthorizationType: "stem_opt",
+        startDate: "2026-01-01",
+        endDate: "2026-12-31",
+        supervisorAdminId: 1,
+        workScope: "Training",
+        positionTitle: "Operations Intern",
+        schoolName: "Example University",
+        programOrMajor: "Business",
+        responseDeadline: null,
+        workLocation: "California",
+        expectedHoursPerWeek: 20,
+        status: "active",
+        endedAt: null,
+        createdBy: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: 41,
+        adminUserId: 3,
+        engagementType: "employee",
+        scheduleType: "full_time",
+        workAuthorizationType: "none",
+        startDate: "2026-01-01",
+        endDate: null,
+        supervisorAdminId: 1,
+        workScope: "Finance operations",
+        positionTitle: "Finance Admin",
+        schoolName: null,
+        programOrMajor: null,
+        responseDeadline: null,
+        workLocation: "Remote",
+        expectedHoursPerWeek: 40,
+        status: "active",
+        endedAt: null,
+        createdBy: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
     legalEntities: [
       {
         id: 10,
@@ -153,6 +215,7 @@ function createFixture() {
     workers: [],
     employments: [],
     compensationTerms: [],
+    workAuthorizations: [],
     auditEvents: [],
     locks: [],
     failNextAudit: false,
@@ -160,6 +223,7 @@ function createFixture() {
       worker: 100,
       employment: 200,
       compensation: 300,
+      workAuthorization: 350,
       audit: 400,
     },
   };
@@ -178,10 +242,15 @@ function createFixture() {
     lockWorker: async (id) => { state.locks.push(`worker:${id}`); },
     lockEmployment: async (id) => { state.locks.push(`employment:${id}`); },
     lockCompensationTerm: async (id) => { state.locks.push(`compensation:${id}`); },
+    lockAdminEngagement: async (id) => { state.locks.push(`engagement:${id}`); },
+    lockWorkAuthorization: async (id) => { state.locks.push(`work_auth:${id}`); },
     getAdminUser: async (id) => state.adminUsers.find((row) => row.id === id),
     listAdminUsers: async (filters) => state.adminUsers
       .filter((row) => !filters.status || filters.status === "all" || row.status === filters.status)
       .slice(0, filters.pageSize ?? 100),
+    getAdminEngagement: async (id) => state.adminEngagements.find((row) => row.id === id),
+    listAdminEngagementsForAdminUser: async (adminUserId) => state.adminEngagements
+      .filter((row) => row.adminUserId === adminUserId),
     getLegalEntity: async (id) => state.legalEntities.find((row) => row.id === id),
     listLegalEntities: async () => state.legalEntities
       .filter((row) => row.status === "active")
@@ -291,6 +360,40 @@ function createFixture() {
       state.compensationTerms[index] = { ...state.compensationTerms[index], ...compact(values) };
       return state.compensationTerms[index];
     },
+    getWorkAuthorization: async (id) => state.workAuthorizations.find((row) => row.id === id),
+    listWorkAuthorizations: async (filters) => state.workAuthorizations
+      .filter((row) => !filters.workerId || row.workerId === filters.workerId)
+      .filter((row) => !filters.status || filters.status === "all" || row.status === filters.status)
+      .filter((row) => !filters.authorizationType || filters.authorizationType === "all" || row.authorizationType === filters.authorizationType)
+      .slice(0, filters.pageSize ?? 100),
+    createWorkAuthorization: async (values) => {
+      const row = {
+        id: state.ids.workAuthorization++,
+        workerId: values.workerId,
+        employmentId: values.employmentId ?? null,
+        adminEngagementId: values.adminEngagementId ?? null,
+        authorizationType: values.authorizationType,
+        status: values.status ?? "draft",
+        validFrom: values.validFrom ?? null,
+        validThrough: values.validThrough ?? null,
+        worksiteScope: values.worksiteScope ?? null,
+        maskedExternalRef: values.maskedExternalRef ?? null,
+        restrictedNotes: values.restrictedNotes ?? null,
+        metadata: values.metadata ?? {},
+        supersedesWorkAuthorizationId: values.supersedesWorkAuthorizationId ?? null,
+        createdBy: values.createdBy ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.workAuthorizations.push(row);
+      return row;
+    },
+    updateWorkAuthorization: async (id, values) => {
+      const index = state.workAuthorizations.findIndex((row) => row.id === id);
+      if (index < 0) return undefined;
+      state.workAuthorizations[index] = { ...state.workAuthorizations[index], ...compact(values) };
+      return state.workAuthorizations[index];
+    },
     createPersonnelAuditEvent: async (values) => {
       if (state.failNextAudit) {
         state.failNextAudit = false;
@@ -371,7 +474,31 @@ function createFixture() {
     return row;
   };
 
-  return { repo, state, seedWorker, seedEmployment, seedCompensation };
+  const seedWorkAuthorization = (values: Partial<any> = {}) => {
+    const row = {
+      id: state.ids.workAuthorization++,
+      workerId: values.workerId ?? seedWorker().id,
+      employmentId: values.employmentId ?? null,
+      adminEngagementId: values.adminEngagementId ?? null,
+      authorizationType: "stem_opt",
+      status: "active",
+      validFrom: "2026-01-01",
+      validThrough: "2026-12-31",
+      worksiteScope: "California",
+      maskedExternalRef: "IOE****1234",
+      restrictedNotes: null,
+      metadata: {},
+      supersedesWorkAuthorizationId: null,
+      createdBy: 1,
+      createdAt: now,
+      updatedAt: now,
+      ...values,
+    };
+    state.workAuthorizations.push(row);
+    return row;
+  };
+
+  return { repo, state, seedWorker, seedEmployment, seedCompensation, seedWorkAuthorization };
 }
 
 test("admin identities can remain separate from worker and employment records", async () => {
@@ -774,6 +901,384 @@ test("personnel audit records only sanitized field deltas", async () => {
   );
 });
 
+test("work authorization records stay separate from admin identity employment and payroll", async () => {
+  const { repo, state, seedEmployment } = createFixture();
+  const staffWorker = await createPersonnelWorkerFromAdminUser(repo, {
+    adminUserId: 3,
+    workerCode: "W-STAFF-WA",
+    actorAdminId: 1,
+  });
+  assert.equal(state.adminUsers.find((row) => row.id === 3).accountType, "admin_staff");
+  assert.deepEqual(await listPersonnelWorkAuthorizations(repo, { workerId: staffWorker.id, pageSize: 100 }), []);
+
+  const stemForStaff = await createPersonnelWorkAuthorization(repo, {
+    workerId: staffWorker.id,
+    authorizationType: "stem_opt",
+    validFrom: "2026-07-01",
+    validThrough: "2028-06-30",
+    maskedExternalRef: "EAD****1234",
+    actorAdminId: 1,
+  });
+  assert.equal(stemForStaff.authorizationType, "stem_opt");
+  assert.equal(stemForStaff.status, "draft");
+  assert.equal(state.adminUsers.find((row) => row.id === 3).accountType, "admin_staff");
+  assert.equal((await getPersonnelWorker(repo, staffWorker.id)).currentEmployment, null);
+
+  const traineeWorker = await createPersonnelWorkerFromAdminUser(repo, {
+    adminUserId: 2,
+    workerCode: "W-TRAINEE-H1B",
+    actorAdminId: 1,
+  });
+  assert.equal(state.adminUsers.find((row) => row.id === 2).accountType, "trainee");
+  assert.deepEqual(await listPersonnelWorkAuthorizations(repo, { workerId: traineeWorker.id, pageSize: 100 }), []);
+  const employment = seedEmployment({ workerId: traineeWorker.id, status: "active", payrollParticipation: "active" });
+  const h1bForTrainee = await createPersonnelWorkAuthorization(repo, {
+    workerId: traineeWorker.id,
+    employmentId: employment.id,
+    authorizationType: "h1b",
+    validFrom: "2026-10-01",
+    validThrough: "2029-09-30",
+    maskedExternalRef: "IOE****5678",
+    actorAdminId: 1,
+  });
+  assert.equal(h1bForTrainee.authorizationType, "h1b");
+  assert.equal(state.adminUsers.find((row) => row.id === 2).accountType, "trainee");
+  assert.equal(state.employments.find((row) => row.id === employment.id).status, "active");
+  assert.equal(state.employments.find((row) => row.id === employment.id).payrollParticipation, "active");
+});
+
+test("work authorization employment and engagement linkage must match the worker", async () => {
+  const { repo, seedWorker, seedEmployment } = createFixture();
+  const traineeWorker = seedWorker({ adminUserId: 2, workerCode: "W-LINK-TRAINEE" });
+  const staffWorker = seedWorker({ adminUserId: 3, workerCode: "W-LINK-STAFF" });
+  const staffEmployment = seedEmployment({ workerId: staffWorker.id, status: "active" });
+  const traineeEmployment = seedEmployment({ workerId: traineeWorker.id, status: "active" });
+
+  await assertPersonnelRejects(() => createPersonnelWorkAuthorization(repo, {
+    workerId: traineeWorker.id,
+    employmentId: staffEmployment.id,
+    authorizationType: "stem_opt",
+    validFrom: "2026-01-01",
+    validThrough: "2026-12-31",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_EMPLOYMENT_WORKER_MISMATCH");
+
+  await assertPersonnelRejects(() => createPersonnelWorkAuthorization(repo, {
+    workerId: traineeWorker.id,
+    employmentId: traineeEmployment.id,
+    adminEngagementId: 41,
+    authorizationType: "stem_opt",
+    validFrom: "2026-01-01",
+    validThrough: "2026-12-31",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_ENGAGEMENT_WORKER_MISMATCH");
+
+  const unlinkedWorker = seedWorker({ adminUserId: null, workerCode: "W-LINK-NONE" });
+  await assertPersonnelRejects(() => createPersonnelWorkAuthorization(repo, {
+    workerId: unlinkedWorker.id,
+    adminEngagementId: 40,
+    authorizationType: "stem_opt",
+    validFrom: "2026-01-01",
+    validThrough: "2026-12-31",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_ENGAGEMENT_WORKER_MISMATCH");
+
+  const options = await listWorkAuthorizationEngagementOptions(repo, traineeWorker.id);
+  assert.deepEqual(options.map((engagement) => engagement.id), [40]);
+  const linked = await createPersonnelWorkAuthorization(repo, {
+    workerId: traineeWorker.id,
+    employmentId: traineeEmployment.id,
+    adminEngagementId: 40,
+    authorizationType: "stem_opt",
+    validFrom: "2026-01-01",
+    validThrough: "2026-12-31",
+    actorAdminId: 1,
+  });
+  assert.equal(linked.adminEngagement?.id, 40);
+});
+
+test("work authorization draft correction active immutability and derived expiration indicators", async () => {
+  const { repo, state, seedWorker, seedEmployment } = createFixture();
+  const worker = seedWorker({ workerCode: "W-WA-DERIVED" });
+  const missingDates = await createPersonnelWorkAuthorization(repo, {
+    workerId: worker.id,
+    authorizationType: "other",
+    actorAdminId: 1,
+  });
+  await assertPersonnelRejects(() => activatePersonnelWorkAuthorization(repo, missingDates.id, 1), "WORK_AUTHORIZATION_DATES_REQUIRED");
+
+  const corrected = await updatePersonnelWorkAuthorization(repo, missingDates.id, {
+    authorizationType: "stem_opt",
+    validFrom: "2026-01-01",
+    validThrough: "2026-09-28",
+    maskedExternalRef: "EAD****1234",
+    actorAdminId: 1,
+  });
+  assert.equal(corrected.authorizationType, "stem_opt");
+
+  const active = await activatePersonnelWorkAuthorization(repo, corrected.id, 1);
+  assert.equal(active.status, "active");
+  await assertPersonnelRejects(() => updatePersonnelWorkAuthorization(repo, active.id, {
+    authorizationType: "h1b",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE");
+  await assertPersonnelRejects(() => updatePersonnelWorkAuthorization(repo, active.id, {
+    validFrom: "2026-02-01",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE");
+  await assertPersonnelRejects(() => updatePersonnelWorkAuthorization(repo, active.id, {
+    validThrough: "2027-02-01",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE");
+  await assertPersonnelRejects(() => updatePersonnelWorkAuthorization(repo, active.id, {
+    workerId: worker.id,
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE");
+  const employment = seedEmployment({ workerId: worker.id, status: "active" });
+  await assertPersonnelRejects(() => updatePersonnelWorkAuthorization(repo, active.id, {
+    employmentId: employment.id,
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE");
+  await assertPersonnelRejects(() => updatePersonnelWorkAuthorization(repo, active.id, {
+    adminEngagementId: 40,
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE");
+  await assertPersonnelRejects(() => updatePersonnelWorkAuthorization(repo, active.id, {
+    maskedExternalRef: "IOE****9999",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE");
+
+  const operationalUpdate = await updatePersonnelWorkAuthorization(repo, active.id, {
+    worksiteScope: "Remote California",
+    restrictedNotes: "Internal note with IOE0912345678",
+    actorAdminId: 1,
+  });
+  assert.equal(operationalUpdate.worksiteScope, "Remote California");
+  const auditJson = JSON.stringify(state.auditEvents.filter((event) => event.entityType === "work_authorization"));
+  assert.equal(auditJson.includes("IOE0912345678"), false);
+  assert.equal(auditJson.includes("[redacted]"), true);
+  assert.equal(state.workAuthorizations.find((row) => row.id === active.id).status, "active");
+  const listed = await listPersonnelWorkAuthorizations(repo, { workerId: worker.id, pageSize: 100 }, "2026-08-29");
+  assert.equal(Object.hasOwn(listed[0], "restrictedNotes"), false);
+  assert.equal(JSON.stringify(listed).includes("Internal note with IOE0912345678"), false);
+  const detail = await getPersonnelWorkAuthorization(repo, active.id, "2026-08-29");
+  assert.equal(detail.restrictedNotes, "Internal note with IOE0912345678");
+
+  assert.equal(createWorkAuthorizationPayloadSchema.safeParse({
+    workerId: worker.id,
+    authorizationType: "other_employment_authorized",
+  }).success, false);
+  assert.equal(createWorkAuthorizationPayloadSchema.safeParse({
+    workerId: worker.id,
+    authorizationType: "other",
+  }).success, true);
+  assert.equal(createWorkAuthorizationPayloadSchema.safeParse({
+    workerId: worker.id,
+    authorizationType: "h1b",
+    maskedExternalRef: "IOE0912345678",
+  }).success, false);
+  assert.equal(createWorkAuthorizationPayloadSchema.safeParse({
+    workerId: worker.id,
+    authorizationType: "other",
+    maskedExternalRef: "123-45-6789",
+  }).success, false);
+  assert.equal(createWorkAuthorizationPayloadSchema.safeParse({
+    workerId: worker.id,
+    authorizationType: "h1b",
+    maskedExternalRef: "IOE****5678",
+  }).success, true);
+
+  const validThroughToday = deriveWorkAuthorizationStatus({
+    status: "active",
+    validFrom: "2026-01-01",
+    validThrough: "2027-09-30",
+  } as any, "2027-09-30");
+  assert.equal(validThroughToday.state, "currently_valid");
+  assert.equal(validThroughToday.daysUntilExpiration, 0);
+  assert.equal(validThroughToday.expiresWithin30Days, true);
+  assert.equal(deriveWorkAuthorizationStatus({
+    status: "active",
+    validFrom: "2026-01-01",
+    validThrough: "2027-09-30",
+  } as any, "2027-10-01").state, "expired");
+
+  for (const lifecycle of ["draft", "superseded", "voided"] as const) {
+    const derived = deriveWorkAuthorizationStatus({
+      status: lifecycle,
+      validFrom: "2026-01-01",
+      validThrough: "2027-09-30",
+    } as any, "2026-08-29");
+    assert.equal(derived.state, lifecycle);
+    assert.equal(derived.currentlyValid, false);
+  }
+
+  assert.deepEqual(deriveWorkAuthorizationStatus({
+    status: "active",
+    validFrom: "2026-01-01",
+    validThrough: "2026-08-28",
+  } as any, "2026-08-29").state, "expired");
+  assert.deepEqual(deriveWorkAuthorizationStatus({
+    status: "active",
+    validFrom: "2026-09-01",
+    validThrough: "2026-12-31",
+  } as any, "2026-08-29").state, "not_yet_effective");
+  const thirtyDays = deriveWorkAuthorizationStatus({
+    status: "active",
+    validFrom: "2026-01-01",
+    validThrough: "2026-09-28",
+  } as any, "2026-08-29");
+  assert.equal(thirtyDays.expiresWithin30Days, true);
+  assert.equal(thirtyDays.expiresWithin60Days, true);
+  assert.equal(thirtyDays.expiresWithin90Days, true);
+  const sixtyDays = deriveWorkAuthorizationStatus({
+    status: "active",
+    validFrom: "2026-01-01",
+    validThrough: "2026-10-28",
+  } as any, "2026-08-29");
+  assert.equal(sixtyDays.expiresWithin30Days, false);
+  assert.equal(sixtyDays.expiresWithin60Days, true);
+  const ninetyDays = deriveWorkAuthorizationStatus({
+    status: "active",
+    validFrom: "2026-01-01",
+    validThrough: "2026-11-27",
+  } as any, "2026-08-29");
+  assert.equal(ninetyDays.expiresWithin60Days, false);
+  assert.equal(ninetyDays.expiresWithin90Days, true);
+});
+
+test("work authorization supersession preserves history and supports STEM OPT to H-1B and H-1B renewal", async () => {
+  const { repo, state, seedWorker, seedEmployment, seedWorkAuthorization } = createFixture();
+  const worker = seedWorker({ adminUserId: 2, workerCode: "W-SUPERSEDE" });
+  const employment = seedEmployment({ workerId: worker.id, status: "active", payrollParticipation: "active" });
+  const stem = seedWorkAuthorization({
+    workerId: worker.id,
+    employmentId: employment.id,
+    adminEngagementId: 40,
+    authorizationType: "stem_opt",
+    status: "active",
+    validFrom: "2026-07-01",
+    validThrough: "2028-09-30",
+    maskedExternalRef: "EAD****1234",
+  });
+
+  const h1b = await supersedePersonnelWorkAuthorization(repo, stem.id, {
+    employmentId: employment.id,
+    adminEngagementId: 40,
+    authorizationType: "h1b",
+    validFrom: "2028-10-01",
+    validThrough: "2031-09-30",
+    maskedExternalRef: "IOE****5678",
+    worksiteScope: "California",
+    actorAdminId: 1,
+  });
+
+  const storedStem = state.workAuthorizations.find((row) => row.id === stem.id);
+  assert.ok(state.locks.includes(`work_auth:${stem.id}`));
+  assert.equal(storedStem.status, "superseded");
+  assert.equal(storedStem.authorizationType, "stem_opt");
+  assert.equal(storedStem.validThrough, "2028-09-30");
+  assert.equal(storedStem.maskedExternalRef, "EAD****1234");
+  assert.equal(h1b.authorizationType, "h1b");
+  assert.equal(h1b.status, "active");
+  assert.equal(state.workAuthorizations.find((row) => row.id === h1b.id).supersedesWorkAuthorizationId, stem.id);
+  assert.equal(h1b.supersedes?.id, stem.id);
+  assert.equal(deriveWorkAuthorizationStatus(storedStem, "2028-09-01").state, "superseded");
+  assert.equal(state.employments.find((row) => row.id === employment.id).status, "active");
+  assert.equal(state.employments.find((row) => row.id === employment.id).payrollParticipation, "active");
+
+  const laterH1b = await supersedePersonnelWorkAuthorization(repo, h1b.id, {
+    employmentId: employment.id,
+    authorizationType: "h1b",
+    validFrom: "2031-09-01",
+    validThrough: "2034-08-31",
+    maskedExternalRef: "IOE****9012",
+    actorAdminId: 1,
+  });
+  assert.equal(laterH1b.authorizationType, "h1b");
+  assert.equal(laterH1b.status, "active");
+  assert.equal(laterH1b.supersedes?.id, h1b.id);
+  assert.equal(state.workAuthorizations.find((row) => row.id === h1b.id).status, "superseded");
+});
+
+test("work authorization supersession rejects inconsistent lineage and cross-worker links", async () => {
+  const { repo, seedWorker, seedEmployment, seedWorkAuthorization } = createFixture();
+  const worker = seedWorker({ adminUserId: 2, workerCode: "W-SUP-ONE" });
+  const otherWorker = seedWorker({ adminUserId: 3, workerCode: "W-SUP-TWO" });
+  const otherEmployment = seedEmployment({ workerId: otherWorker.id, status: "active" });
+  const active = seedWorkAuthorization({ workerId: worker.id, status: "active" });
+
+  await assertPersonnelRejects(() => supersedePersonnelWorkAuthorization(repo, active.id, {
+    employmentId: otherEmployment.id,
+    authorizationType: "h1b",
+    validFrom: "2027-01-01",
+    validThrough: "2029-12-31",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_EMPLOYMENT_WORKER_MISMATCH");
+
+  assert.equal(supersedeWorkAuthorizationPayloadSchema.safeParse({
+    workerId: otherWorker.id,
+    authorizationType: "h1b",
+    validFrom: "2027-01-01",
+    validThrough: "2029-12-31",
+  }).success, false);
+
+  const draft = seedWorkAuthorization({ workerId: worker.id, status: "draft" });
+  await assertPersonnelRejects(() => supersedePersonnelWorkAuthorization(repo, draft.id, {
+    authorizationType: "h1b",
+    validFrom: "2027-01-01",
+    validThrough: "2029-12-31",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_SUPERSEDE_REQUIRES_ACTIVE");
+
+  const otherPrior = seedWorkAuthorization({ workerId: otherWorker.id, status: "superseded" });
+  const crossWorkerLineage = seedWorkAuthorization({
+    workerId: worker.id,
+    status: "active",
+    supersedesWorkAuthorizationId: otherPrior.id,
+  });
+  await assertPersonnelRejects(() => supersedePersonnelWorkAuthorization(repo, crossWorkerLineage.id, {
+    authorizationType: "h1b",
+    validFrom: "2027-01-01",
+    validThrough: "2029-12-31",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_SUPERSESSION_WORKER_MISMATCH");
+
+  const selfCycle = seedWorkAuthorization({ workerId: worker.id, status: "active" });
+  selfCycle.supersedesWorkAuthorizationId = selfCycle.id;
+  await assertPersonnelRejects(() => supersedePersonnelWorkAuthorization(repo, selfCycle.id, {
+    authorizationType: "h1b",
+    validFrom: "2027-01-01",
+    validThrough: "2029-12-31",
+    actorAdminId: 1,
+  }), "WORK_AUTHORIZATION_SUPERSESSION_CYCLE");
+});
+
+test("work authorization audit failure rolls back mutations", async () => {
+  const { repo, state, seedWorker, seedWorkAuthorization } = createFixture();
+  const worker = seedWorker({ workerCode: "W-WA-ROLLBACK" });
+  state.failNextAudit = true;
+
+  await assert.rejects(() => createPersonnelWorkAuthorization(repo, {
+    workerId: worker.id,
+    authorizationType: "stem_opt",
+    validFrom: "2026-01-01",
+    validThrough: "2026-12-31",
+    actorAdminId: 1,
+  }));
+  assert.equal(state.workAuthorizations.length, 0);
+
+  const active = seedWorkAuthorization({ workerId: worker.id, status: "active" });
+  state.failNextAudit = true;
+  await assert.rejects(() => supersedePersonnelWorkAuthorization(repo, active.id, {
+    authorizationType: "h1b",
+    validFrom: "2027-01-01",
+    validThrough: "2029-12-31",
+    actorAdminId: 1,
+  }));
+  assert.equal(state.workAuthorizations.length, 1);
+  assert.equal(state.workAuthorizations[0].status, "active");
+});
+
 test("personnel response DTO omits auth secrets and future sensitive fields", async () => {
   const { repo } = createFixture();
   const worker = await createPersonnelWorkerFromAdminUser(repo, {
@@ -798,7 +1303,7 @@ test("personnel response DTO omits auth secrets and future sensitive fields", as
   }
 });
 
-test("personnel routes are super-admin-only and do not introduce work authorization APIs", async () => {
+test("personnel and work authorization routes are super-admin-only", async () => {
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
   const personnelRoutes = [
     "/api/admin/personnel/admin-users",
@@ -820,6 +1325,12 @@ test("personnel routes are super-admin-only and do not introduce work authorizat
     "/api/admin/personnel/compensation-terms/:termId",
     "/api/admin/personnel/compensation-terms/:termId/activate",
     "/api/admin/personnel/compensation-terms/:termId/void",
+    "/api/admin/personnel/work-authorizations",
+    "/api/admin/personnel/work-authorizations/engagement-options",
+    "/api/admin/personnel/work-authorizations/:authorizationId",
+    "/api/admin/personnel/work-authorizations/:authorizationId/activate",
+    "/api/admin/personnel/work-authorizations/:authorizationId/supersede",
+    "/api/admin/personnel/work-authorizations/:authorizationId/void",
   ];
 
   for (const route of personnelRoutes) {
@@ -830,29 +1341,71 @@ test("personnel routes are super-admin-only and do not introduce work authorizat
       `${route} must require super_admin`,
     );
   }
-  assert.doesNotMatch(routesSource, /\/api\/admin\/personnel\/(?:work-authorizations|stem-opt|h-1b|h1b|payroll|tax)/i);
+  const workAuthorizationRouteDefinitions = [
+    ["get", "/api/admin/personnel/work-authorizations"],
+    ["get", "/api/admin/personnel/work-authorizations/engagement-options"],
+    ["get", "/api/admin/personnel/work-authorizations/:authorizationId"],
+    ["post", "/api/admin/personnel/work-authorizations"],
+    ["patch", "/api/admin/personnel/work-authorizations/:authorizationId"],
+    ["post", "/api/admin/personnel/work-authorizations/:authorizationId/activate"],
+    ["post", "/api/admin/personnel/work-authorizations/:authorizationId/supersede"],
+    ["post", "/api/admin/personnel/work-authorizations/:authorizationId/void"],
+  ] as const;
+  for (const [method, route] of workAuthorizationRouteDefinitions) {
+    const escapedRoute = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.match(
+      routesSource,
+      new RegExp(`app\\.${method}\\([\\s\\S]*?["']${escapedRoute}["'][\\s\\S]*?requireAuth,[\\s\\S]*?requireRole\\(\\['super_admin'\\]\\)`),
+      `${method.toUpperCase()} ${route} must require super_admin`,
+    );
+  }
+  const workAuthorizationRouteStart = routesSource.indexOf('"/api/admin/personnel/work-authorizations"');
+  const nextRouteStart = routesSource.indexOf('"/api/admin/waitlist/stats"', workAuthorizationRouteStart);
+  assert.ok(workAuthorizationRouteStart > 0, "work authorization route block should exist");
+  assert.ok(nextRouteStart > workAuthorizationRouteStart, "work authorization route block should end before waitlist routes");
+  const workAuthorizationRouteBlock = routesSource.slice(workAuthorizationRouteStart, nextRouteStart);
+  assert.doesNotMatch(workAuthorizationRouteBlock, /admin_finance|admin_verifier|admin_support|requireAnyAccessGroup|requireAccessGroup/);
+  assert.doesNotMatch(workAuthorizationRouteBlock, /payrollRuns|taxLiabilities|financeExpenseRepository|FinanceExpense/i);
+
+  const personnelRouteStart = routesSource.indexOf('"/api/admin/personnel/admin-users"');
+  const personnelRouteBlock = routesSource.slice(personnelRouteStart, nextRouteStart);
+  assert.doesNotMatch(personnelRouteBlock, /payroll-runs|tax-|\/api\/admin\/finance|vendor|subscription|bill|expense|reconciliation/i);
   assert.doesNotMatch(routesSource, /\/api\/admin\/finance\/.*compensation/i);
 });
 
-test("admin profile compensation summary uses only the restricted personnel API", async () => {
+test("admin profile personnel summaries use only restricted personnel APIs", async () => {
   const routesSource = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
   const profileSource = await readFile(
     new URL("../client/src/pages/AdminProfile.tsx", import.meta.url),
     "utf8",
   );
+  const appSource = await readFile(
+    new URL("../client/src/App.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(profileSource, /queryKey:\s*\["\/api\/admin\/personnel\/admin-users", adminId\]/);
+  assert.match(profileSource, /queryKey:\s*\["\/api\/admin\/personnel\/work-authorizations", personnelWorkerId\]/);
   assert.match(profileSource, /currentCompensation/);
+  assert.match(profileSource, /currentWorkAuthorization/);
   const adminProfileRoute = routesSource.match(/app\.get\("\/api\/admin\/users\/:id"[\s\S]*?res\.json\(await serializeAdminUser\(admin\)\);[\s\S]*?\n\s*\}\);/);
   assert.ok(adminProfileRoute, "admin profile route should be present");
-  assert.doesNotMatch(adminProfileRoute[0], /getPersonnelForAdminUser|currentCompensation|compensationTerms/);
+  assert.doesNotMatch(adminProfileRoute[0], /getPersonnelForAdminUser|currentCompensation|compensationTerms|listPersonnelWorkAuthorizations|workAuthorization/i);
   assert.match(
     routesSource,
     /"\/api\/admin\/personnel\/admin-users\/:adminUserId"[\s\S]*?requireRole\(\['super_admin'\]\)/,
   );
+  assert.match(
+    routesSource,
+    /"\/api\/admin\/personnel\/work-authorizations"[\s\S]*?requireRole\(\['super_admin'\]\)/,
+  );
+  assert.match(
+    appSource,
+    /<Route path="\/admin-management\/profile\/:id">[\s\S]*?<ProtectedRoute allowedRoles=\{\["super_admin"\]\}>[\s\S]*?<AdminProfile \/>/,
+  );
 });
 
-test("personnel audit migration is domain-specific and service-role isolated", async () => {
+test("base personnel audit migration remains domain-specific and service-role isolated", async () => {
   const migration = await readFile(
     new URL("../migrations/0020_personnel_audit_events.sql", import.meta.url),
     "utf8",
@@ -870,6 +1423,28 @@ test("personnel audit migration is domain-specific and service-role isolated", a
   assert.match(migration, /WITH CHECK \(false\)/);
 });
 
+test("work authorization audit scope is added by forward-only personnel migration", async () => {
+  const migration = await readFile(
+    new URL("../migrations/0021_personnel_work_authorization.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS "work_authorizations_type_check"/);
+  assert.match(migration, /SET "authorization_type" = 'other'[\s\S]*WHERE "authorization_type" = 'other_employment_authorized'/);
+  assert.match(migration, /ADD CONSTRAINT "work_authorizations_type_check"/);
+  assert.match(migration, /"authorization_type" IN \('stem_opt', 'h1b', 'other'\)/);
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS "personnel_audit_events_entity_type_check"/);
+  assert.match(migration, /ADD CONSTRAINT "personnel_audit_events_entity_type_check"/);
+  for (const entityType of ["worker", "employment", "compensation_term", "work_authorization"]) {
+    assert.match(migration, new RegExp(`'${entityType}'`));
+  }
+  for (const action of ["created", "updated", "voided", "activated", "superseded"]) {
+    assert.match(migration, new RegExp(`'${action}'`));
+  }
+  assert.doesNotMatch(migration, /finance_audit_events|payroll_runs|tax_liabilities|vendor_bills|expense_payments|recurring_expenses/i);
+  assert.doesNotMatch(migration, /CREATE TABLE/i);
+});
+
 test("worker payload rejects employment and work authorization identity leakage", () => {
   assert.equal(createWorkerPayloadSchema.safeParse({
     workerCode: "W-BAD",
@@ -883,14 +1458,31 @@ test("worker payload rejects employment and work authorization identity leakage"
   }).success, false);
 });
 
-test("personnel UI stays within Worker Employment Compensation scope", async () => {
+test("personnel UI exposes work authorization separately from admin identity", async () => {
   const pageSource = await readFile(
     new URL("../client/src/pages/PersonnelManagement.tsx", import.meta.url),
+    "utf8",
+  );
+  const adminIdentitySource = await readFile(
+    new URL("../client/src/lib/adminIdentity.ts", import.meta.url),
+    "utf8",
+  );
+  const createAdminSource = await readFile(
+    new URL("../client/src/pages/CreateAdmin.tsx", import.meta.url),
     "utf8",
   );
 
   assert.match(pageSource, /Worker/);
   assert.match(pageSource, /Employment/);
   assert.match(pageSource, /Compensation/);
-  assert.doesNotMatch(pageSource, /Work Authorization|STEM OPT|H-1B|H1B|passport|I-94|USCIS|Social Security/i);
+  assert.match(pageSource, /Work Authorization/);
+  assert.match(pageSource, /STEM OPT/);
+  assert.match(pageSource, /H-1B/);
+  assert.match(pageSource, /Supersede Work Authorization/);
+  assert.match(pageSource, /\/api\/admin\/personnel\/work-authorizations/);
+  assert.doesNotMatch(pageSource, /passport|I-94|USCIS|Social Security|A-number|visa foil/i);
+  assert.doesNotMatch(pageSource, /other_employment_authorized|Other authorized status/);
+  assert.match(adminIdentitySource, /export type IdentityType = "admin_staff" \| "trainee"/);
+  assert.doesNotMatch(adminIdentitySource, /stem_opt|h1b|H-1B|STEM OPT/);
+  assert.match(createAdminSource, /identityType: z\.enum\(\['admin_staff', 'trainee'\]/);
 });

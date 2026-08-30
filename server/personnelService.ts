@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  AdminEngagement,
   AdminUser,
   CompensationPayBasis,
   CompensationStatus,
@@ -10,12 +11,16 @@ import type {
   InsertCompensationTerm,
   InsertEmployment,
   InsertPersonnelAuditEvent,
+  InsertWorkAuthorization,
   InsertWorker,
   LegalEntity,
   PayrollParticipation,
   PersonnelAuditEvent,
+  WorkAuthorization,
   Worker,
   WorkerLifecycleState,
+  WorkerWorkAuthorizationStatus,
+  WorkerWorkAuthorizationType,
 } from "@shared/schema";
 
 export class PersonnelServiceError extends Error {
@@ -68,6 +73,19 @@ const COMPENSATION_AUDIT_FIELDS = [
   "status",
 ] as const;
 
+const WORK_AUTHORIZATION_AUDIT_FIELDS = [
+  "workerId",
+  "employmentId",
+  "adminEngagementId",
+  "authorizationType",
+  "status",
+  "validFrom",
+  "validThrough",
+  "worksiteScope",
+  "maskedExternalRef",
+  "supersedesWorkAuthorizationId",
+] as const;
+
 const EMPLOYEE_CLASSIFICATIONS = ["employee", "paid_intern", "other_employee"] as const;
 const PAYROLL_PARTICIPATION_VALUES = ["not_enrolled", "eligible", "active", "inactive"] as const;
 const EMPLOYMENT_STATUSES = ["draft", "active", "on_leave", "ended", "voided"] as const;
@@ -91,7 +109,12 @@ const COMPENSATION_PAY_FREQUENCIES = [
   "other",
 ] as const;
 const COMPENSATION_INITIAL_STATUSES = ["draft", "active"] as const;
-const PERSONNEL_AUDIT_ENTITY_TYPES = ["worker", "employment", "compensation_term"] as const;
+const WORK_AUTHORIZATION_TYPES = ["stem_opt", "h1b", "other"] as const;
+const WORK_AUTHORIZATION_STATUSES = ["draft", "active", "superseded", "voided"] as const;
+const WORK_AUTHORIZATION_STATUS_FILTERS = ["all", ...WORK_AUTHORIZATION_STATUSES] as const;
+const WORK_AUTHORIZATION_TYPE_FILTERS = ["all", ...WORK_AUTHORIZATION_TYPES] as const;
+const WORK_AUTHORIZATION_ACTIVE_EDIT_FIELDS = ["worksiteScope", "restrictedNotes"] as const;
+const PERSONNEL_AUDIT_ENTITY_TYPES = ["worker", "employment", "compensation_term", "work_authorization"] as const;
 const PERSONNEL_AUDIT_ACTIONS = [
   "created",
   "updated",
@@ -116,6 +139,10 @@ const currencySchema = z
   .trim()
   .regex(/^[a-zA-Z]{3}$/)
   .transform((value) => value.toUpperCase());
+const optionalIdSchema = z.preprocess(
+  (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
+  z.coerce.number().int().positive().nullable().optional(),
+);
 
 function requiredText(max: number) {
   return z.string().trim().min(1).max(max);
@@ -151,18 +178,38 @@ function optionalEmail() {
   );
 }
 
+function maskedExternalRef() {
+  return optionalText(120).refine(
+    (value) => {
+      if (!value || /[*xX]/.test(value)) return true;
+      return value.replace(/[^A-Za-z0-9]/g, "").length < 9;
+    },
+    "Use a masked reference instead of a full identifier.",
+  );
+}
+
 function nonEmptyPatch(value: Record<string, unknown>) {
   return Object.values(value).some((item) => item !== undefined);
 }
 
+const PERSONNEL_BUSINESS_TIME_ZONE = process.env.PERSONNEL_BUSINESS_TIME_ZONE || "America/New_York";
+
 function dateOnly(value = new Date()) {
-  return value.toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: PERSONNEL_BUSINESS_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${partMap.year}-${partMap.month}-${partMap.day}`;
 }
 
 function previousDateOnly(value: string) {
-  const date = new Date(`${value}T00:00:00.000Z`);
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
   date.setUTCDate(date.getUTCDate() - 1);
-  return dateOnly(date);
+  return date.toISOString().slice(0, 10);
 }
 
 function refineDateOrder(data: { startDate?: string | null; endDate?: string | null }, ctx: z.RefinementCtx) {
@@ -184,6 +231,19 @@ function refineEffectiveDateOrder(
       code: z.ZodIssueCode.custom,
       path: ["effectiveTo"],
       message: "Effective end cannot be before effective start.",
+    });
+  }
+}
+
+function refineValidityDateOrder(
+  data: { validFrom?: string | null; validThrough?: string | null },
+  ctx: z.RefinementCtx,
+) {
+  if (data.validFrom && data.validThrough && data.validThrough < data.validFrom) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["validThrough"],
+      message: "Valid through cannot be before valid from.",
     });
   }
 }
@@ -316,6 +376,66 @@ export const updateCompensationTermPayloadSchema = z
   .refine(nonEmptyPatch, "At least one compensation field is required.")
   .superRefine(refineEffectiveDateOrder);
 
+export const workAuthorizationListQuerySchema = z.object({
+  workerId: z.preprocess(
+    (value) => value === "" || value === undefined ? undefined : value,
+    z.coerce.number().int().positive().optional(),
+  ),
+  status: z.enum(WORK_AUTHORIZATION_STATUS_FILTERS).default("all"),
+  authorizationType: z.enum(WORK_AUTHORIZATION_TYPE_FILTERS).default("all"),
+  pageSize: z.preprocess(
+    (value) => value === "" || value === undefined ? 100 : value,
+    z.coerce.number().int().min(1).max(250).default(100),
+  ),
+}).strict();
+
+const workAuthorizationWriteFields = {
+  workerId: positiveIdSchema,
+  employmentId: optionalIdSchema,
+  adminEngagementId: optionalIdSchema,
+  authorizationType: z.enum(WORK_AUTHORIZATION_TYPES),
+  validFrom: optionalDateOnlySchema,
+  validThrough: optionalDateOnlySchema,
+  worksiteScope: optionalText(500),
+  maskedExternalRef: maskedExternalRef(),
+  restrictedNotes: optionalText(4000),
+};
+
+export const createWorkAuthorizationPayloadSchema = z
+  .object(workAuthorizationWriteFields)
+  .strict()
+  .superRefine(refineValidityDateOrder);
+
+export const updateWorkAuthorizationPayloadSchema = z
+  .object({
+    workerId: workAuthorizationWriteFields.workerId.optional(),
+    employmentId: workAuthorizationWriteFields.employmentId,
+    adminEngagementId: workAuthorizationWriteFields.adminEngagementId,
+    authorizationType: workAuthorizationWriteFields.authorizationType.optional(),
+    validFrom: workAuthorizationWriteFields.validFrom,
+    validThrough: workAuthorizationWriteFields.validThrough,
+    worksiteScope: workAuthorizationWriteFields.worksiteScope,
+    maskedExternalRef: workAuthorizationWriteFields.maskedExternalRef,
+    restrictedNotes: workAuthorizationWriteFields.restrictedNotes,
+  })
+  .strict()
+  .refine(nonEmptyPatch, "At least one work authorization field is required.")
+  .superRefine(refineValidityDateOrder);
+
+export const supersedeWorkAuthorizationPayloadSchema = z
+  .object({
+    employmentId: workAuthorizationWriteFields.employmentId,
+    adminEngagementId: workAuthorizationWriteFields.adminEngagementId,
+    authorizationType: workAuthorizationWriteFields.authorizationType,
+    validFrom: dateOnlySchema,
+    validThrough: dateOnlySchema,
+    worksiteScope: workAuthorizationWriteFields.worksiteScope,
+    maskedExternalRef: workAuthorizationWriteFields.maskedExternalRef,
+    restrictedNotes: workAuthorizationWriteFields.restrictedNotes,
+  })
+  .strict()
+  .superRefine(refineValidityDateOrder);
+
 export type PersonnelListQuery = z.infer<typeof personnelListQuerySchema>;
 export type PersonnelListFilters = Partial<PersonnelListQuery>;
 export type CreateWorkerPayload = z.infer<typeof createWorkerPayloadSchema>;
@@ -326,6 +446,11 @@ export type UpdateEmploymentPayload = z.infer<typeof updateEmploymentPayloadSche
 export type EndEmploymentPayload = z.infer<typeof endEmploymentPayloadSchema>;
 export type CreateCompensationTermPayload = z.infer<typeof createCompensationTermPayloadSchema>;
 export type UpdateCompensationTermPayload = z.infer<typeof updateCompensationTermPayloadSchema>;
+export type WorkAuthorizationListQuery = z.infer<typeof workAuthorizationListQuerySchema>;
+export type WorkAuthorizationListFilters = Partial<WorkAuthorizationListQuery>;
+export type CreateWorkAuthorizationPayload = z.infer<typeof createWorkAuthorizationPayloadSchema>;
+export type UpdateWorkAuthorizationPayload = z.infer<typeof updateWorkAuthorizationPayloadSchema>;
+export type SupersedeWorkAuthorizationPayload = z.infer<typeof supersedeWorkAuthorizationPayloadSchema>;
 
 type PersonnelAuditEntityType = typeof PERSONNEL_AUDIT_ENTITY_TYPES[number];
 type PersonnelAuditAction = typeof PERSONNEL_AUDIT_ACTIONS[number];
@@ -403,15 +528,87 @@ export interface CompensationTermResponse {
   updatedAt: Date | string | null;
 }
 
+export type WorkAuthorizationDerivedState =
+  | "draft"
+  | "voided"
+  | "superseded"
+  | "not_yet_effective"
+  | "currently_valid"
+  | "expired"
+  | "active_dates_missing";
+
+export interface WorkAuthorizationDerivedStatus {
+  state: WorkAuthorizationDerivedState;
+  currentlyValid: boolean;
+  expired: boolean;
+  notYetEffective: boolean;
+  daysUntilExpiration: number | null;
+  expiresWithin30Days: boolean;
+  expiresWithin60Days: boolean;
+  expiresWithin90Days: boolean;
+}
+
+export interface AdminEngagementSummary {
+  id: number;
+  adminUserId: number;
+  engagementType: string;
+  status: string;
+  workAuthorizationType: string;
+  startDate: string | Date | null;
+  endDate: string | Date | null;
+  positionTitle: string | null;
+  workLocation: string | null;
+}
+
+export interface WorkAuthorizationEmploymentSummary {
+  id: number;
+  workerId: number;
+  legalEntityId: number;
+  legalEntity: LegalEntitySummary | null;
+  employeeClassification: EmployeeClassification;
+  payrollParticipation: PayrollParticipation;
+  status: EmploymentStatus;
+  startDate: string | Date;
+  endDate: string | Date | null;
+}
+
+export interface WorkAuthorizationSummary {
+  id: number;
+  workerId: number;
+  authorizationType: WorkerWorkAuthorizationType;
+  status: WorkerWorkAuthorizationStatus;
+  validFrom: string | Date | null;
+  validThrough: string | Date | null;
+}
+
+export interface WorkAuthorizationResponse extends WorkAuthorizationSummary {
+  employmentId: number | null;
+  adminEngagementId: number | null;
+  worksiteScope: string | null;
+  maskedExternalRef: string | null;
+  restrictedNotes?: string | null;
+  supersedesWorkAuthorizationId: number | null;
+  derived: WorkAuthorizationDerivedStatus;
+  employment: WorkAuthorizationEmploymentSummary | null;
+  adminEngagement: AdminEngagementSummary | null;
+  supersedes: WorkAuthorizationSummary | null;
+  createdAt: Date | string | null;
+  updatedAt: Date | string | null;
+}
+
 export interface PersonnelRepository {
   transaction<T>(work: (tx: PersonnelRepository) => Promise<T>): Promise<T>;
   lockAdminUser(id: number): Promise<void>;
   lockWorker(id: number): Promise<void>;
   lockEmployment(id: number): Promise<void>;
   lockCompensationTerm(id: number): Promise<void>;
+  lockAdminEngagement(id: number): Promise<void>;
+  lockWorkAuthorization(id: number): Promise<void>;
 
   getAdminUser(id: number): Promise<AdminUser | undefined>;
   listAdminUsers(filters: PersonnelListFilters): Promise<AdminUser[]>;
+  getAdminEngagement(id: number): Promise<AdminEngagement | undefined>;
+  listAdminEngagementsForAdminUser(adminUserId: number): Promise<AdminEngagement[]>;
   getLegalEntity(id: number): Promise<LegalEntity | undefined>;
   listLegalEntities(): Promise<LegalEntitySummary[]>;
 
@@ -438,6 +635,11 @@ export interface PersonnelRepository {
   createCompensationTerm(values: InsertCompensationTerm): Promise<CompensationTerm>;
   updateCompensationTerm(id: number, values: Partial<InsertCompensationTerm>): Promise<CompensationTerm | undefined>;
 
+  getWorkAuthorization(id: number): Promise<WorkAuthorization | undefined>;
+  listWorkAuthorizations(filters: WorkAuthorizationListFilters): Promise<WorkAuthorization[]>;
+  createWorkAuthorization(values: InsertWorkAuthorization): Promise<WorkAuthorization>;
+  updateWorkAuthorization(id: number, values: Partial<InsertWorkAuthorization>): Promise<WorkAuthorization | undefined>;
+
   createPersonnelAuditEvent(values: InsertPersonnelAuditEvent): Promise<PersonnelAuditEvent>;
 }
 
@@ -458,6 +660,19 @@ function auditChanges<T extends Record<string, unknown>>(
     if (JSON.stringify(beforeValue) !== JSON.stringify(afterValue)) {
       changes[field] = { before: beforeValue, after: afterValue };
     }
+  }
+  return changes;
+}
+
+function workAuthorizationAuditChanges(before: WorkAuthorization | null, after: WorkAuthorization) {
+  const changes = auditChanges(before, after, WORK_AUTHORIZATION_AUDIT_FIELDS);
+  const beforeNotes = before?.restrictedNotes ?? null;
+  const afterNotes = after.restrictedNotes ?? null;
+  if (beforeNotes !== afterNotes) {
+    changes.restrictedNotes = {
+      before: beforeNotes ? "[redacted]" : null,
+      after: afterNotes ? "[redacted]" : null,
+    };
   }
   return changes;
 }
@@ -507,6 +722,104 @@ function legalEntitySummary(entity: LegalEntity | undefined | null): LegalEntity
     legalName: entity.legalName,
     entityType: entity.entityType,
     status: entity.status,
+  };
+}
+
+function adminEngagementSummary(engagement: AdminEngagement | undefined | null): AdminEngagementSummary | null {
+  if (!engagement) return null;
+  return {
+    id: engagement.id,
+    adminUserId: engagement.adminUserId,
+    engagementType: engagement.engagementType,
+    status: engagement.status,
+    workAuthorizationType: engagement.workAuthorizationType,
+    startDate: engagement.startDate,
+    endDate: engagement.endDate,
+    positionTitle: engagement.positionTitle,
+    workLocation: engagement.workLocation,
+  };
+}
+
+async function workAuthorizationEmploymentSummary(
+  repo: PersonnelRepository,
+  employment: Employment | undefined | null,
+): Promise<WorkAuthorizationEmploymentSummary | null> {
+  if (!employment) return null;
+  const legalEntity = await repo.getLegalEntity(employment.legalEntityId);
+  return {
+    id: employment.id,
+    workerId: employment.workerId,
+    legalEntityId: employment.legalEntityId,
+    legalEntity: legalEntitySummary(legalEntity),
+    employeeClassification: employment.employeeClassification as EmployeeClassification,
+    payrollParticipation: employment.payrollParticipation as PayrollParticipation,
+    status: employment.status as EmploymentStatus,
+    startDate: employment.startDate,
+    endDate: employment.endDate,
+  };
+}
+
+function workAuthorizationSummary(authorization: WorkAuthorization | undefined | null): WorkAuthorizationSummary | null {
+  if (!authorization) return null;
+  return {
+    id: authorization.id,
+    workerId: authorization.workerId,
+    authorizationType: authorization.authorizationType as WorkerWorkAuthorizationType,
+    status: authorization.status as WorkerWorkAuthorizationStatus,
+    validFrom: authorization.validFrom,
+    validThrough: authorization.validThrough,
+  };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function normalizeDateOnly(value: string | Date) {
+  return String(value).slice(0, 10);
+}
+
+function dateOnlyToOrdinal(value: string | Date) {
+  const [year, month, day] = normalizeDateOnly(value).split("-").map(Number);
+  return Math.floor(Date.UTC(year, month - 1, day) / DAY_MS);
+}
+
+function daysBetweenDateOnly(from: string | Date, through: string | Date) {
+  return dateOnlyToOrdinal(through) - dateOnlyToOrdinal(from);
+}
+
+export function deriveWorkAuthorizationStatus(
+  authorization: Pick<WorkAuthorization, "status" | "validFrom" | "validThrough">,
+  today = dateOnly(),
+): WorkAuthorizationDerivedStatus {
+  const lifecycle = authorization.status as WorkerWorkAuthorizationStatus;
+  const todayDate = normalizeDateOnly(today);
+  const validFrom = authorization.validFrom ? normalizeDateOnly(authorization.validFrom) : null;
+  const validThrough = authorization.validThrough ? normalizeDateOnly(authorization.validThrough) : null;
+  const daysUntilExpiration = validThrough ? daysBetweenDateOnly(today, validThrough) : null;
+
+  let state: WorkAuthorizationDerivedState;
+  if (lifecycle === "draft" || lifecycle === "voided" || lifecycle === "superseded") {
+    state = lifecycle;
+  } else if (!validFrom || !validThrough) {
+    state = "active_dates_missing";
+  } else if (todayDate < validFrom) {
+    state = "not_yet_effective";
+  } else if (todayDate > validThrough) {
+    state = "expired";
+  } else {
+    state = "currently_valid";
+  }
+
+  const currentlyValid = state === "currently_valid";
+  const inWindow = (days: number) => currentlyValid && daysUntilExpiration !== null && daysUntilExpiration >= 0 && daysUntilExpiration <= days;
+  return {
+    state,
+    currentlyValid,
+    expired: state === "expired",
+    notYetEffective: state === "not_yet_effective",
+    daysUntilExpiration,
+    expiresWithin30Days: inWindow(30),
+    expiresWithin60Days: inWindow(60),
+    expiresWithin90Days: inWindow(90),
   };
 }
 
@@ -574,6 +887,78 @@ async function assertNoCurrentEmploymentConflict(
   }
 }
 
+async function assertWorkAuthorizationLinks(
+  repo: PersonnelRepository,
+  input: {
+    workerId: number;
+    employmentId?: number | null;
+    adminEngagementId?: number | null;
+  },
+) {
+  const worker = await repo.getWorker(input.workerId);
+  if (!worker) {
+    fail(404, "WORKER_NOT_FOUND", "Worker not found.");
+  }
+  assertWorkerUsable(worker);
+
+  if (input.employmentId) {
+    const employment = await repo.getEmployment(input.employmentId);
+    if (!employment) {
+      fail(404, "EMPLOYMENT_NOT_FOUND", "Employment not found.");
+    }
+    if (employment.workerId !== input.workerId) {
+      fail(409, "WORK_AUTHORIZATION_EMPLOYMENT_WORKER_MISMATCH", "Employment must belong to the same worker as the work authorization.");
+    }
+  }
+
+  if (input.adminEngagementId) {
+    const engagement = await repo.getAdminEngagement(input.adminEngagementId);
+    if (!engagement) {
+      fail(404, "ADMIN_ENGAGEMENT_NOT_FOUND", "Admin engagement not found.");
+    }
+    if (!worker.adminUserId || engagement.adminUserId !== worker.adminUserId) {
+      fail(409, "WORK_AUTHORIZATION_ENGAGEMENT_WORKER_MISMATCH", "Admin engagement must belong to the worker's linked admin user.");
+    }
+  }
+
+  return worker;
+}
+
+async function assertWorkAuthorizationLineageAcyclic(repo: PersonnelRepository, authorization: WorkAuthorization) {
+  const seen = new Set<number>();
+  const workerId = authorization.workerId;
+  let current: WorkAuthorization | undefined = authorization;
+  while (current) {
+    if (seen.has(current.id)) {
+      fail(409, "WORK_AUTHORIZATION_SUPERSESSION_CYCLE", "Work authorization supersession lineage cannot contain a cycle.");
+    }
+    seen.add(current.id);
+    if (!current.supersedesWorkAuthorizationId) {
+      return;
+    }
+    if (current.supersedesWorkAuthorizationId === current.id) {
+      fail(409, "WORK_AUTHORIZATION_SUPERSESSION_CYCLE", "Work authorization cannot supersede itself.");
+    }
+    const next = await repo.getWorkAuthorization(current.supersedesWorkAuthorizationId);
+    if (next && next.workerId !== workerId) {
+      fail(409, "WORK_AUTHORIZATION_SUPERSESSION_WORKER_MISMATCH", "Superseded work authorizations must belong to the same worker.");
+    }
+    current = next;
+  }
+}
+
+function assertActiveWorkAuthorizationPatch(payload: UpdateWorkAuthorizationPayload) {
+  for (const field of Object.keys(payload)) {
+    if (!WORK_AUTHORIZATION_ACTIVE_EDIT_FIELDS.includes(field as typeof WORK_AUTHORIZATION_ACTIVE_EDIT_FIELDS[number])) {
+      fail(
+        409,
+        "WORK_AUTHORIZATION_COMMITTED_FIELD_IMMUTABLE",
+        "Committed work authorization core facts require a superseding authorization.",
+      );
+    }
+  }
+}
+
 function assertEmploymentDates(startDate: string | Date, endDate?: string | Date | null) {
   const start = String(startDate).slice(0, 10);
   const end = endDate ? String(endDate).slice(0, 10) : null;
@@ -591,6 +976,21 @@ function assertEmploymentPayrollParticipation(status: EmploymentStatus, payrollP
       "Payroll participation is inconsistent with the employment status.",
     );
   }
+}
+
+function assertWorkAuthorizationDates(validFrom?: string | Date | null, validThrough?: string | Date | null) {
+  const start = validFrom ? String(validFrom).slice(0, 10) : null;
+  const end = validThrough ? String(validThrough).slice(0, 10) : null;
+  if (start && end && end < start) {
+    fail(400, "WORK_AUTHORIZATION_DATES_INVALID", "Valid through cannot be before valid from.");
+  }
+}
+
+function assertWorkAuthorizationReadyForActivation(authorization: { validFrom?: string | Date | null; validThrough?: string | Date | null }) {
+  if (!authorization.validFrom || !authorization.validThrough) {
+    fail(409, "WORK_AUTHORIZATION_DATES_REQUIRED", "Valid from and valid through are required before activation.");
+  }
+  assertWorkAuthorizationDates(authorization.validFrom, authorization.validThrough);
 }
 
 function nextEmploymentStatus(employment: Employment, action: "activate" | "place_on_leave" | "return" | "end" | "void") {
@@ -689,6 +1089,44 @@ function compensationResponse(term: CompensationTerm): CompensationTermResponse 
     createdAt: term.createdAt,
     updatedAt: term.updatedAt,
   };
+}
+
+async function workAuthorizationResponse(
+  repo: PersonnelRepository,
+  authorization: WorkAuthorization,
+  today = dateOnly(),
+  options: { includeRestrictedNotes?: boolean } = {},
+): Promise<WorkAuthorizationResponse> {
+  const [employment, adminEngagement, supersedes] = await Promise.all([
+    authorization.employmentId ? repo.getEmployment(authorization.employmentId) : Promise.resolve(undefined),
+    authorization.adminEngagementId ? repo.getAdminEngagement(authorization.adminEngagementId) : Promise.resolve(undefined),
+    authorization.supersedesWorkAuthorizationId
+      ? repo.getWorkAuthorization(authorization.supersedesWorkAuthorizationId)
+      : Promise.resolve(undefined),
+  ]);
+  const response: WorkAuthorizationResponse = {
+    id: authorization.id,
+    workerId: authorization.workerId,
+    employmentId: authorization.employmentId,
+    adminEngagementId: authorization.adminEngagementId,
+    authorizationType: authorization.authorizationType as WorkerWorkAuthorizationType,
+    status: authorization.status as WorkerWorkAuthorizationStatus,
+    validFrom: authorization.validFrom,
+    validThrough: authorization.validThrough,
+    worksiteScope: authorization.worksiteScope,
+    maskedExternalRef: authorization.maskedExternalRef,
+    supersedesWorkAuthorizationId: authorization.supersedesWorkAuthorizationId,
+    derived: deriveWorkAuthorizationStatus(authorization, today),
+    employment: await workAuthorizationEmploymentSummary(repo, employment),
+    adminEngagement: adminEngagementSummary(adminEngagement),
+    supersedes: workAuthorizationSummary(supersedes),
+    createdAt: authorization.createdAt,
+    updatedAt: authorization.updatedAt,
+  };
+  if (options.includeRestrictedNotes) {
+    response.restrictedNotes = authorization.restrictedNotes;
+  }
+  return response;
 }
 
 async function employmentResponse(
@@ -1287,6 +1725,265 @@ export async function voidPersonnelCompensationTerm(
       changes: auditChanges(existing, updated, COMPENSATION_AUDIT_FIELDS),
     });
     return compensationResponse(updated);
+  });
+}
+
+export async function listWorkAuthorizationEngagementOptions(repo: PersonnelRepository, workerId: number) {
+  const worker = await repo.getWorker(workerId);
+  if (!worker) {
+    fail(404, "WORKER_NOT_FOUND", "Worker not found.");
+  }
+  if (!worker.adminUserId) {
+    return [];
+  }
+  return (await repo.listAdminEngagementsForAdminUser(worker.adminUserId)).map((engagement) => adminEngagementSummary(engagement)!);
+}
+
+export async function listPersonnelWorkAuthorizations(
+  repo: PersonnelRepository,
+  query: WorkAuthorizationListQuery,
+  today = dateOnly(),
+) {
+  const authorizations = await repo.listWorkAuthorizations(query);
+  return await Promise.all(authorizations.map((authorization) => (
+    workAuthorizationResponse(repo, authorization, today, { includeRestrictedNotes: false })
+  )));
+}
+
+export async function getPersonnelWorkAuthorization(
+  repo: PersonnelRepository,
+  authorizationId: number,
+  today = dateOnly(),
+) {
+  const authorization = await repo.getWorkAuthorization(authorizationId);
+  if (!authorization) {
+    fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+  }
+  return await workAuthorizationResponse(repo, authorization, today, { includeRestrictedNotes: true });
+}
+
+export async function createPersonnelWorkAuthorization(
+  repo: PersonnelRepository,
+  input: CreateWorkAuthorizationPayload & { actorAdminId: number },
+) {
+  const { actorAdminId, ...payload } = input;
+  return await runPersonnelTransaction(repo, async (tx) => {
+    await tx.lockWorker(payload.workerId);
+    if (payload.employmentId) {
+      await tx.lockEmployment(payload.employmentId);
+    }
+    if (payload.adminEngagementId) {
+      await tx.lockAdminEngagement(payload.adminEngagementId);
+    }
+    await assertWorkAuthorizationLinks(tx, payload);
+    assertWorkAuthorizationDates(payload.validFrom, payload.validThrough);
+    const authorization = await tx.createWorkAuthorization({
+      ...payload,
+      status: "draft",
+      createdBy: actorAdminId,
+    });
+    await writePersonnelAuditEvent(tx, {
+      actorAdminId,
+      entityType: "work_authorization",
+      entityId: authorization.id,
+      action: "created",
+      changes: workAuthorizationAuditChanges(null, authorization),
+    });
+    return await workAuthorizationResponse(tx, authorization, dateOnly(), { includeRestrictedNotes: true });
+  });
+}
+
+export async function updatePersonnelWorkAuthorization(
+  repo: PersonnelRepository,
+  authorizationId: number,
+  input: UpdateWorkAuthorizationPayload & { actorAdminId: number },
+) {
+  const { actorAdminId, ...payload } = input;
+  return await runPersonnelTransaction(repo, async (tx) => {
+    await tx.lockWorkAuthorization(authorizationId);
+    const existing = await tx.getWorkAuthorization(authorizationId);
+    if (!existing) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    if (existing.status === "voided" || existing.status === "superseded") {
+      fail(409, "WORK_AUTHORIZATION_TERMINAL_STATE", "Voided or superseded work authorizations cannot be edited.");
+    }
+    if (existing.status === "active") {
+      assertActiveWorkAuthorizationPatch(payload);
+    }
+
+    const merged = {
+      ...existing,
+      ...payload,
+    };
+    await tx.lockWorker(merged.workerId);
+    if (merged.employmentId) {
+      await tx.lockEmployment(merged.employmentId);
+    }
+    if (merged.adminEngagementId) {
+      await tx.lockAdminEngagement(merged.adminEngagementId);
+    }
+    await assertWorkAuthorizationLinks(tx, {
+      workerId: merged.workerId,
+      employmentId: merged.employmentId,
+      adminEngagementId: merged.adminEngagementId,
+    });
+    assertWorkAuthorizationDates(merged.validFrom, merged.validThrough);
+
+    const updated = await tx.updateWorkAuthorization(authorizationId, {
+      ...payload,
+      updatedAt: new Date(),
+    } as Partial<InsertWorkAuthorization>);
+    if (!updated) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    await writePersonnelAuditEvent(tx, {
+      actorAdminId,
+      entityType: "work_authorization",
+      entityId: updated.id,
+      action: "updated",
+      changes: workAuthorizationAuditChanges(existing, updated),
+    });
+    return await workAuthorizationResponse(tx, updated, dateOnly(), { includeRestrictedNotes: true });
+  });
+}
+
+export async function activatePersonnelWorkAuthorization(
+  repo: PersonnelRepository,
+  authorizationId: number,
+  actorAdminId: number,
+) {
+  return await runPersonnelTransaction(repo, async (tx) => {
+    await tx.lockWorkAuthorization(authorizationId);
+    const existing = await tx.getWorkAuthorization(authorizationId);
+    if (!existing) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    if (existing.status !== "draft") {
+      fail(409, "WORK_AUTHORIZATION_ACTIVATE_REQUIRES_DRAFT", "Only draft work authorizations can be activated.");
+    }
+    await tx.lockWorker(existing.workerId);
+    if (existing.employmentId) {
+      await tx.lockEmployment(existing.employmentId);
+    }
+    if (existing.adminEngagementId) {
+      await tx.lockAdminEngagement(existing.adminEngagementId);
+    }
+    await assertWorkAuthorizationLinks(tx, existing);
+    assertWorkAuthorizationReadyForActivation(existing);
+    const updated = await tx.updateWorkAuthorization(authorizationId, {
+      status: "active",
+      updatedAt: new Date(),
+    } as Partial<InsertWorkAuthorization>);
+    if (!updated) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    await writePersonnelAuditEvent(tx, {
+      actorAdminId,
+      entityType: "work_authorization",
+      entityId: updated.id,
+      action: "activated",
+      changes: workAuthorizationAuditChanges(existing, updated),
+    });
+    return await workAuthorizationResponse(tx, updated, dateOnly(), { includeRestrictedNotes: true });
+  });
+}
+
+export async function voidPersonnelWorkAuthorization(
+  repo: PersonnelRepository,
+  authorizationId: number,
+  actorAdminId: number,
+  now = new Date(),
+) {
+  return await runPersonnelTransaction(repo, async (tx) => {
+    await tx.lockWorkAuthorization(authorizationId);
+    const existing = await tx.getWorkAuthorization(authorizationId);
+    if (!existing) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    if (existing.status === "voided") {
+      return await workAuthorizationResponse(tx, existing, dateOnly(now), { includeRestrictedNotes: true });
+    }
+    if (existing.status !== "draft") {
+      fail(409, "WORK_AUTHORIZATION_VOID_REQUIRES_DRAFT", "Only draft work authorizations can be voided.");
+    }
+    const updated = await tx.updateWorkAuthorization(authorizationId, {
+      status: "voided",
+      updatedAt: now,
+    } as Partial<InsertWorkAuthorization>);
+    if (!updated) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    await writePersonnelAuditEvent(tx, {
+      actorAdminId,
+      entityType: "work_authorization",
+      entityId: updated.id,
+      action: "voided",
+      changes: workAuthorizationAuditChanges(existing, updated),
+    });
+    return await workAuthorizationResponse(tx, updated, dateOnly(now), { includeRestrictedNotes: true });
+  });
+}
+
+export async function supersedePersonnelWorkAuthorization(
+  repo: PersonnelRepository,
+  authorizationId: number,
+  input: SupersedeWorkAuthorizationPayload & { actorAdminId: number },
+) {
+  const { actorAdminId, ...payload } = input;
+  return await runPersonnelTransaction(repo, async (tx) => {
+    await tx.lockWorkAuthorization(authorizationId);
+    const existing = await tx.getWorkAuthorization(authorizationId);
+    if (!existing) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    if (existing.status !== "active") {
+      fail(409, "WORK_AUTHORIZATION_SUPERSEDE_REQUIRES_ACTIVE", "Only active work authorizations can be superseded.");
+    }
+    await assertWorkAuthorizationLineageAcyclic(tx, existing);
+    await tx.lockWorker(existing.workerId);
+    if (payload.employmentId) {
+      await tx.lockEmployment(payload.employmentId);
+    }
+    if (payload.adminEngagementId) {
+      await tx.lockAdminEngagement(payload.adminEngagementId);
+    }
+    await assertWorkAuthorizationLinks(tx, {
+      workerId: existing.workerId,
+      employmentId: payload.employmentId,
+      adminEngagementId: payload.adminEngagementId,
+    });
+    assertWorkAuthorizationReadyForActivation(payload);
+
+    const successor = await tx.createWorkAuthorization({
+      ...payload,
+      workerId: existing.workerId,
+      status: "active",
+      supersedesWorkAuthorizationId: existing.id,
+      createdBy: actorAdminId,
+    });
+    const superseded = await tx.updateWorkAuthorization(existing.id, {
+      status: "superseded",
+      updatedAt: new Date(),
+    } as Partial<InsertWorkAuthorization>);
+    if (!superseded) {
+      fail(404, "WORK_AUTHORIZATION_NOT_FOUND", "Work authorization not found.");
+    }
+    await writePersonnelAuditEvent(tx, {
+      actorAdminId,
+      entityType: "work_authorization",
+      entityId: superseded.id,
+      action: "superseded",
+      changes: workAuthorizationAuditChanges(existing, superseded),
+    });
+    await writePersonnelAuditEvent(tx, {
+      actorAdminId,
+      entityType: "work_authorization",
+      entityId: successor.id,
+      action: "created",
+      changes: workAuthorizationAuditChanges(null, successor),
+    });
+    return await workAuthorizationResponse(tx, successor, dateOnly(), { includeRestrictedNotes: true });
   });
 }
 
