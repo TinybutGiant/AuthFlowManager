@@ -163,6 +163,26 @@ test("auth me route denies requests without Cloudflare Access", async () => {
   assert.deepEqual(body, { status: "error", code: "ACCESS_REQUIRED" });
 });
 
+test("db health route requires StaffPrincipal before database checks", async () => {
+  const response = await handleV2Request(
+    new Request("https://authflowmanager.example/api/v2/db-health"),
+  );
+  const body = (await response.json()) as { code: string; status: string };
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(body, { status: "error", code: "ACCESS_REQUIRED" });
+});
+
+test("db health route fails closed when Access JWT config is missing", async () => {
+  const response = await handleV2Request(
+    authRequest("not-a-real-access-jwt"),
+  );
+  const body = (await response.json()) as { code: string; status: string };
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(body, { status: "error", code: "STAFF_ACCESS_DENIED" });
+});
+
 test("denies missing Access identity without database lookup", async () => {
   const repository = new MemoryStaffRepository();
   const result = await resolveStaffPrincipalWithRepository(

@@ -81,6 +81,18 @@ export async function handleV2Request(
       return methodNotAllowed(["GET", "HEAD"]);
     }
 
+    const authResult = await resolveStaffPrincipalFromAuthflow(
+      request,
+      env,
+      ctx,
+    );
+
+    if (!authResult.ok) {
+      return json(publicStaffAuthFailure(authResult), {
+        status: authResult.status,
+      });
+    }
+
     const [authflow, main] = await Promise.all([
       checkAuthflowDatabaseHealth(env),
       checkMainDatabaseHealth(env),
