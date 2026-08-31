@@ -9,6 +9,8 @@ export type HyperdriveBinding = {
 export type WorkerV2Env = {
   AUTHFLOW_DB?: HyperdriveBinding;
   MAIN_DB?: HyperdriveBinding;
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_AUD?: string;
 };
 
 export type DatabaseHealthErrorCode =

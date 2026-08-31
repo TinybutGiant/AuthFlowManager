@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Client } from "pg";
-import * as schema from "../../../shared/schema";
+import * as schema from "./authflowSchema";
 import {
   createHyperdrivePgClientConfig,
   logDatabaseHealthError,

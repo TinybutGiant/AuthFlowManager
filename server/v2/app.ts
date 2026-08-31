@@ -1,4 +1,9 @@
 import { v2RouteModules } from "./routes";
+import {
+  publicStaffAuthFailure,
+  resolveStaffPrincipalFromAuthflow,
+} from "./auth/authorize";
+import type { WorkerV2ExecutionContext } from "./auth/access";
 import { checkAuthflowDatabaseHealth } from "./db/authflow";
 import { checkMainDatabaseHealth } from "./db/main";
 import type { WorkerV2Env } from "./db/types";
@@ -39,6 +44,7 @@ function methodNotAllowed(allowed: string[]) {
 export async function handleV2Request(
   request: Request,
   env: WorkerV2Env = {},
+  ctx: WorkerV2ExecutionContext = {},
 ): Promise<Response> {
   const url = new URL(request.url);
 
@@ -92,6 +98,29 @@ export async function handleV2Request(
       },
       { status: ok ? 200 : 503 },
     );
+  }
+
+  if (url.pathname === "/api/v2/auth/me") {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return methodNotAllowed(["GET", "HEAD"]);
+    }
+
+    const authResult = await resolveStaffPrincipalFromAuthflow(
+      request,
+      env,
+      ctx,
+    );
+
+    if (!authResult.ok) {
+      return json(publicStaffAuthFailure(authResult), {
+        status: authResult.status,
+      });
+    }
+
+    return json({
+      status: "ok",
+      staff: authResult.principal,
+    });
   }
 
   if (url.pathname.startsWith("/api/")) {
