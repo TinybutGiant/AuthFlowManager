@@ -825,7 +825,7 @@ export default function FinanceTaxPanel() {
         </Alert>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <MetricCard title="Registrations" value={overviewQuery.data?.activeRegistrationCount ?? 0} detail="Active" icon={Landmark} />
         <MetricCard title="Liabilities" value={formatTaxTotals(overviewQuery.data?.effectiveLiabilityTotalsByCurrency)} detail="Recognized and disputed" icon={Scale} />
         <MetricCard title="Liability due" value={(overviewQuery.data?.dueSoonLiabilityCount ?? 0) + (overviewQuery.data?.overdueLiabilityCount ?? 0)} detail={`${overviewQuery.data?.overdueLiabilityCount ?? 0} overdue`} icon={CalendarClock} />
@@ -1054,8 +1054,16 @@ function TaxAgenciesTable({
   isMutating: boolean;
   onEdit: (agency: TaxAgency) => void;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading tax agencies" description="Loading agency directory records." />;
+  }
+
+  if (agencies.length === 0) {
+    return <CompactEmptyState title="No tax agencies" description="Add agencies before creating registrations, liabilities, filings, or agency payments." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[760px]">
       <TableHeader>
         <TableRow>
           <TableHead>Code</TableHead>
@@ -1066,13 +1074,8 @@ function TaxAgenciesTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={5} label="Loading tax agencies..." />
-        ) : agencies.length === 0 ? (
-          <EmptyRow colSpan={5} label="No tax agencies." />
-        ) : (
-          agencies.map((agency) => (
-            <TableRow key={agency.id}>
+        {agencies.map((agency) => (
+            <TableRow key={agency.id} className="h-12">
               <TableCell className="font-medium">{agency.agencyCode}</TableCell>
               <TableCell>{agency.name}</TableCell>
               <TableCell>{humanize(agency.jurisdictionType)} / {agency.jurisdictionCode}</TableCell>
@@ -1086,8 +1089,7 @@ function TaxAgenciesTable({
                 </div>
               </TableCell>
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -1106,8 +1108,16 @@ function TaxRegistrationsTable({
   onEdit: (registration: TaxRegistration) => void;
   onTransition: (registration: TaxRegistration, action: "activate" | "deactivate" | "close") => void;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading registrations" description="Loading tax account registrations." />;
+  }
+
+  if (registrations.length === 0) {
+    return <CompactEmptyState title="No registrations" description="Tax registrations will appear here after they are added for an entity and agency." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[900px]">
       <TableHeader>
         <TableRow>
           <TableHead>Entity</TableHead>
@@ -1119,22 +1129,17 @@ function TaxRegistrationsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={6} label="Loading registrations..." />
-        ) : registrations.length === 0 ? (
-          <EmptyRow colSpan={6} label="No registrations." />
-        ) : (
-          registrations.map((registration) => (
-            <TableRow key={registration.id}>
+        {registrations.map((registration) => (
+            <TableRow key={registration.id} className="h-12">
               <TableCell className="font-medium">{registration.legalEntity?.legalName || `Entity #${registration.legalEntityId}`}</TableCell>
               <TableCell>{registration.taxAgency?.name || `Agency #${registration.taxAgencyId}`}</TableCell>
               <TableCell>
                 <div>{humanize(registration.taxType)}</div>
-                <div className="text-xs text-muted-foreground">{humanize(registration.jurisdictionType)} / {registration.jurisdictionCode}</div>
+                <div className="text-[13px] text-muted-foreground">{humanize(registration.jurisdictionType)} / {registration.jurisdictionCode}</div>
               </TableCell>
               <TableCell>
                 <div>{formatDate(registration.effectiveFrom)} - {formatDate(registration.effectiveTo)}</div>
-                <div className="text-xs text-muted-foreground">{humanize(registration.dateState)}</div>
+                <div className="text-[13px] text-muted-foreground">{humanize(registration.dateState)}</div>
               </TableCell>
               <TableCell>{statusBadge(registration.status)}</TableCell>
               <TableCell>
@@ -1170,8 +1175,7 @@ function TaxRegistrationsTable({
                 </div>
               </TableCell>
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -1192,8 +1196,16 @@ function TaxLiabilitiesTable({
   onCreateAdjustment: (liability: TaxLiability) => void;
   onTransition: (liability: TaxLiability, action: "recognize" | "dispute" | "void") => void;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading liabilities" description="Loading recognized, disputed, and draft tax liabilities." />;
+  }
+
+  if (liabilities.length === 0) {
+    return <CompactEmptyState title="No liabilities" description="Tax liabilities and adjustments will appear here once recorded." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[1180px]">
       <TableHeader>
         <TableRow>
           <TableHead>Registration</TableHead>
@@ -1210,40 +1222,35 @@ function TaxLiabilitiesTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={11} label="Loading liabilities..." />
-        ) : liabilities.length === 0 ? (
-          <EmptyRow colSpan={11} label="No liabilities." />
-        ) : (
-          liabilities.map((liability) => {
+        {liabilities.map((liability) => {
             const isAdjustment = Boolean(liability.adjustsTaxLiabilityId);
             return (
-              <TableRow key={liability.id}>
+              <TableRow key={liability.id} className="h-12">
                 <TableCell>
                   <div className="font-medium">{liability.registration?.taxAgency?.agencyCode || `Registration #${liability.taxRegistrationId}`}</div>
-                  <div className="text-xs text-muted-foreground">{liability.registration?.legalEntity?.legalName || "Legal entity"}</div>
+                  <div className="text-[13px] text-muted-foreground">{liability.registration?.legalEntity?.legalName || "Legal entity"}</div>
                 </TableCell>
                 <TableCell>{formatDate(liability.periodStart)} - {formatDate(liability.periodEnd)}</TableCell>
                 <TableCell>
                   <div>{formatDate(liability.dueDate)}</div>
-                  <div className="text-xs text-muted-foreground">{humanize(liability.dueState)}</div>
+                  <div className="text-[13px] text-muted-foreground">{humanize(liability.dueState)}</div>
                 </TableCell>
                 <TableCell>
                   <div>{humanize(liability.component)}</div>
-                  {isAdjustment && <div className="text-xs text-muted-foreground">Adjusts #{liability.adjustsTaxLiabilityId}</div>}
+                  {isAdjustment && <div className="text-[13px] text-muted-foreground">Adjusts #{liability.adjustsTaxLiabilityId}</div>}
                 </TableCell>
-                <TableCell className="text-right">{formatSignedMoney(liability.signedAmountCents, liability.currency)}</TableCell>
-                <TableCell className="text-right">{formatMoney(liability.effectiveAmountCents, liability.currency)}</TableCell>
-                <TableCell className="text-right">{isAdjustment ? "-" : formatMoney(liability.clearedAllocatedAmountCents, liability.currency)}</TableCell>
-                <TableCell className="text-right">{isAdjustment ? "-" : formatMoney(liability.inFlightAllocatedAmountCents, liability.currency)}</TableCell>
-                <TableCell className="text-right">
+                <TableCell className="text-right font-medium tabular-nums">{formatSignedMoney(liability.signedAmountCents, liability.currency)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatMoney(liability.effectiveAmountCents, liability.currency)}</TableCell>
+                <TableCell className="text-right tabular-nums">{isAdjustment ? "-" : formatMoney(liability.clearedAllocatedAmountCents, liability.currency)}</TableCell>
+                <TableCell className="text-right tabular-nums">{isAdjustment ? "-" : formatMoney(liability.inFlightAllocatedAmountCents, liability.currency)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">
                   {isAdjustment
                     ? "-"
                     : liability.overappliedAmountCents > 0
                       ? formatMoney(liability.overappliedAmountCents, liability.currency)
                       : formatMoney(liability.outstandingAmountCents, liability.currency)}
                   {!isAdjustment && liability.overappliedAmountCents > 0 && (
-                    <div className="text-xs text-muted-foreground">Overapplied</div>
+                    <div className="text-[13px] text-muted-foreground">Overapplied</div>
                   )}
                 </TableCell>
                 <TableCell>
@@ -1296,8 +1303,7 @@ function TaxLiabilitiesTable({
                 </TableCell>
               </TableRow>
             );
-          })
-        )}
+          })}
       </TableBody>
     </Table>
   );
@@ -1318,8 +1324,16 @@ function TaxPaymentsTable({
   onApply: (payment: TaxPayment) => void;
   onTransition: (payment: TaxPayment, action: "submit" | "clear" | "fail" | "void" | "reverse") => void;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading agency payments" description="Loading tax payment attempts and unapplied balances." />;
+  }
+
+  if (payments.length === 0) {
+    return <CompactEmptyState title="No agency payments" description="Recorded payments to tax agencies will appear here." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[1080px]">
       <TableHeader>
         <TableRow>
           <TableHead>Registration</TableHead>
@@ -1333,28 +1347,23 @@ function TaxPaymentsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={8} label="Loading tax payments..." />
-        ) : payments.length === 0 ? (
-          <EmptyRow colSpan={8} label="No tax payments." />
-        ) : (
-          payments.map((payment) => (
-            <TableRow key={payment.id}>
+        {payments.map((payment) => (
+            <TableRow key={payment.id} className="h-12">
               <TableCell>
                 <div className="font-medium">{payment.registration?.taxAgency?.agencyCode || `Registration #${payment.taxRegistrationId}`}</div>
-                <div className="text-xs text-muted-foreground">{payment.registration?.legalEntity?.legalName || "Legal entity"}</div>
+                <div className="text-[13px] text-muted-foreground">{payment.registration?.legalEntity?.legalName || "Legal entity"}</div>
               </TableCell>
               <TableCell>
                 <div>{humanize(payment.methodType)}</div>
-                <div className="text-xs text-muted-foreground">{payment.confirmationRef || payment.methodLabel || "-"}</div>
+                <div className="text-[13px] text-muted-foreground">{payment.confirmationRef || payment.methodLabel || "-"}</div>
               </TableCell>
               <TableCell>{formatDate(payment.paymentDate)}</TableCell>
-              <TableCell className="text-right">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
-              <TableCell className="text-right">
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
+              <TableCell className="text-right tabular-nums">
                 <div>{formatMoney(payment.activeAllocatedAmountCents, payment.currency)}</div>
-                <div className="text-xs text-muted-foreground">{humanize(payment.settlementImpact)}</div>
+                <div className="text-[13px] text-muted-foreground">{humanize(payment.settlementImpact)}</div>
               </TableCell>
-              <TableCell className="text-right">{formatMoney(payment.unappliedAmountCents, payment.currency)}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(payment.unappliedAmountCents, payment.currency)}</TableCell>
               <TableCell>{statusBadge(payment.status)}</TableCell>
               <TableCell>
                 <div className="flex flex-wrap justify-end gap-2">
@@ -1413,8 +1422,7 @@ function TaxPaymentsTable({
                 </div>
               </TableCell>
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -1431,8 +1439,16 @@ function TaxAllocationsTable({
   isMutating: boolean;
   onReverse: (allocation: TaxPaymentAllocation) => void;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading allocations" description="Loading tax payment allocations." />;
+  }
+
+  if (allocations.length === 0) {
+    return <CompactEmptyState title="No payment allocations" description="Tax payment allocations will appear after payments are applied to liabilities." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[760px]">
       <TableHeader>
         <TableRow>
           <TableHead>Allocation</TableHead>
@@ -1444,17 +1460,12 @@ function TaxAllocationsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={6} label="Loading tax allocations..." />
-        ) : allocations.length === 0 ? (
-          <EmptyRow colSpan={6} label="No tax allocations." />
-        ) : (
-          allocations.map((allocation) => (
-            <TableRow key={allocation.id}>
+        {allocations.map((allocation) => (
+            <TableRow key={allocation.id} className="h-12">
               <TableCell className="font-medium">#{allocation.id}</TableCell>
               <TableCell>#{allocation.taxLiabilityId}</TableCell>
               <TableCell>#{allocation.taxAgencyPaymentId}</TableCell>
-              <TableCell className="text-right">{formatMoney(allocation.amountCents, allocation.currency)}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(allocation.amountCents, allocation.currency)}</TableCell>
               <TableCell>{statusBadge(allocation.status)}</TableCell>
               <TableCell>
                 <div className="flex justify-end">
@@ -1467,8 +1478,7 @@ function TaxAllocationsTable({
                 </div>
               </TableCell>
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -1485,8 +1495,16 @@ function TaxReconciliationTable({
   isMutating: boolean;
   onTransition: (exception: TaxReconciliationException, action: "investigate" | "resolve" | "waive" | "reopen") => void;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading tax reconciliation" description="Loading open tax differences and follow-up items." />;
+  }
+
+  if (exceptions.length === 0) {
+    return <CompactEmptyState title="No tax reconciliation exceptions" description="Open tax differences and unresolved issues will appear here." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[980px]">
       <TableHeader>
         <TableRow>
           <TableHead>Reason</TableHead>
@@ -1499,18 +1517,13 @@ function TaxReconciliationTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={7} label="Loading tax reconciliation..." />
-        ) : exceptions.length === 0 ? (
-          <EmptyRow colSpan={7} label="No tax reconciliation exceptions." />
-        ) : (
-          exceptions.map((exception) => (
-            <TableRow key={exception.id}>
+        {exceptions.map((exception) => (
+            <TableRow key={exception.id} className="h-12">
               <TableCell className="font-medium">{humanize(exception.reasonCode)}</TableCell>
               <TableCell>{exception.summary}</TableCell>
               <TableCell>{entityLabel(exception.expectedEntityType, exception.expectedEntityId)}</TableCell>
               <TableCell>{entityLabel(exception.actualEntityType, exception.actualEntityId)}</TableCell>
-              <TableCell className="text-right">{formatMoney(exception.differenceAmountCents, exception.currency ?? "USD")}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(exception.differenceAmountCents, exception.currency ?? "USD")}</TableCell>
               <TableCell>{statusBadge(exception.status)}</TableCell>
               <TableCell>
                 <div className="flex flex-wrap justify-end gap-2">
@@ -1541,8 +1554,7 @@ function TaxReconciliationTable({
                 </div>
               </TableCell>
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -1563,8 +1575,16 @@ function TaxFilingsTable({
   onCreateAmendment: (filing: TaxFiling) => void;
   onTransition: (filing: TaxFiling, action: "ready" | "file" | "accept" | "reject") => void;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading filings" description="Loading tax filing obligations and amendments." />;
+  }
+
+  if (filings.length === 0) {
+    return <CompactEmptyState title="No filings" description="Tax filings and amendments will appear here once recorded." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[920px]">
       <TableHeader>
         <TableRow>
           <TableHead>Registration</TableHead>
@@ -1576,31 +1596,26 @@ function TaxFilingsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={6} label="Loading filings..." />
-        ) : filings.length === 0 ? (
-          <EmptyRow colSpan={6} label="No filings." />
-        ) : (
-          filings.map((filing) => (
-            <TableRow key={filing.id}>
+        {filings.map((filing) => (
+            <TableRow key={filing.id} className="h-12">
               <TableCell>
                 <div className="font-medium">{filing.registration?.taxAgency?.agencyCode || `Registration #${filing.taxRegistrationId}`}</div>
-                <div className="text-xs text-muted-foreground">{filing.registration?.legalEntity?.legalName || "Legal entity"}</div>
+                <div className="text-[13px] text-muted-foreground">{filing.registration?.legalEntity?.legalName || "Legal entity"}</div>
               </TableCell>
               <TableCell>
                 <div>{filing.filingType}</div>
-                <div className="text-xs text-muted-foreground">
+                <div className="text-[13px] text-muted-foreground">
                   {formatDate(filing.periodStart)} - {formatDate(filing.periodEnd)}
                   {filing.amendsTaxFilingId ? ` / amends #${filing.amendsTaxFilingId}` : ""}
                 </div>
               </TableCell>
               <TableCell>
                 <div>{formatDate(filing.dueDate)}</div>
-                <div className="text-xs text-muted-foreground">{humanize(filing.dueState)}</div>
+                <div className="text-[13px] text-muted-foreground">{humanize(filing.dueState)}</div>
               </TableCell>
               <TableCell>
                 <div>{formatDate(filing.filedAt)}</div>
-                <div className="text-xs text-muted-foreground">{filing.confirmationRef || "-"}</div>
+                <div className="text-[13px] text-muted-foreground">{filing.confirmationRef || "-"}</div>
               </TableCell>
               <TableCell>{statusBadge(filing.status)}</TableCell>
               <TableCell>
@@ -1650,8 +1665,7 @@ function TaxFilingsTable({
                 </div>
               </TableCell>
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -2370,14 +2384,16 @@ function MetricCard({
   icon: React.ElementType;
 }) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
+    <Card className="rounded-md border-border/80 shadow-sm">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <CardTitle className="text-[13px] font-medium text-muted-foreground">{title}</CardTitle>
+        <span className="rounded-md border bg-muted/30 p-1.5 text-muted-foreground">
+          <Icon className="h-4 w-4" />
+        </span>
       </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-semibold">{value}</div>
-        {detail && <p className="mt-1 text-xs text-muted-foreground">{detail}</p>}
+      <CardContent className="pt-0">
+        <div className="text-[28px] font-semibold leading-none tracking-normal text-foreground tabular-nums">{value}</div>
+        {detail && <p className="mt-2 text-[13px] text-muted-foreground">{detail}</p>}
       </CardContent>
     </Card>
   );
@@ -2395,10 +2411,25 @@ function FormField({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+function CompactEmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="rounded-md border border-dashed bg-muted/20 px-5 py-6 text-center">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      {description && <div className="mx-auto mt-1 max-w-md text-[13px] leading-5 text-muted-foreground">{description}</div>}
+    </div>
+  );
+}
+
 function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
   return (
     <TableRow>
-      <TableCell colSpan={colSpan} className="py-8 text-center text-muted-foreground">
+      <TableCell colSpan={colSpan} className="py-6 text-center text-[13px] text-muted-foreground">
         {label}
       </TableCell>
     </TableRow>

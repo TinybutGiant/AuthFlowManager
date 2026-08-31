@@ -8,7 +8,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Edit3,
-  FileWarning,
+  MoreHorizontal,
   Pause,
   Play,
   Plus,
@@ -42,7 +42,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -55,6 +60,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
+import { cn } from "@/lib/utils";
 import FinanceTaxPanel from "./FinanceTaxPanel";
 
 type FinanceSection = "overview" | "expenses" | "subscriptions" | "vendors" | "payroll" | "tax";
@@ -598,7 +604,7 @@ const payrollPaymentMethods = ["payroll_provider", "ach", "check", "manual", "ot
 const payrollPaymentInitialStatuses = ["pending", "sent", "cleared", "failed"] as const;
 
 export default function FinanceManagement() {
-  const [location, setLocation] = useLocation();
+  const [location] = useLocation();
   const { user } = useAuth();
   const isSuperAdmin = (user as { role?: string } | undefined)?.role === "super_admin";
   const requestedSection = sectionFromLocation(location);
@@ -1206,12 +1212,17 @@ export default function FinanceManagement() {
   }
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="mb-2 text-3xl font-light text-foreground" data-testid="text-finance-management-title">
-          Finance
-        </h1>
-      </div>
+    <div className="mx-auto w-full max-w-[1680px] space-y-6 px-4 pb-8 sm:px-6 lg:px-8 2xl:px-10">
+      <FinancePageHeader
+        section={selectedSection}
+        isSuperAdmin={isSuperAdmin}
+        isMutating={isMutating}
+        onCreateBill={openCreateBill}
+        onCreatePayment={openCreatePayment}
+        onCreateSubscription={openCreateSubscription}
+        onCreateVendor={openCreateVendor}
+        onCreatePayrollRun={openCreatePayrollRun}
+      />
 
       {error && (
         <Alert variant="destructive">
@@ -1223,100 +1234,82 @@ export default function FinanceManagement() {
         </Alert>
       )}
 
-      <Tabs
-        value={selectedSection}
-        onValueChange={(value) => {
-          const next = value as FinanceSection;
-          setLocation(next === "overview" ? "/finance-management" : `/finance-management/${next}`);
-        }}
-        className="space-y-6"
-      >
-        <TabsList className={`grid w-full grid-cols-2 ${isSuperAdmin ? "lg:grid-cols-6" : "lg:grid-cols-4"}`}>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="expenses">Expenses</TabsTrigger>
-          <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
-          <TabsTrigger value="vendors">Vendors</TabsTrigger>
-          {isSuperAdmin && <TabsTrigger value="payroll">Payroll</TabsTrigger>}
-          {isSuperAdmin && <TabsTrigger value="tax">Tax</TabsTrigger>}
-        </TabsList>
+      {selectedSection === "overview" && (
+        <OverviewPanel
+          overview={overviewQuery.data}
+          payments={payments}
+          reconciliationExceptions={reconciliationExceptions}
+          isLoading={overviewQuery.isLoading || paymentsQuery.isLoading || reconciliationQuery.isLoading}
+          onCreateBill={openCreateBill}
+          onCreatePayment={openCreatePayment}
+          onCreateSubscription={openCreateSubscription}
+          onCreateReconciliationException={openCreateReconciliationException}
+        />
+      )}
 
-        <TabsContent value="overview" className="space-y-6">
-          <OverviewPanel
-            overview={overviewQuery.data}
-            isLoading={overviewQuery.isLoading}
-          />
-        </TabsContent>
+      {selectedSection === "expenses" && (
+        <ExpensesPanel
+          bills={bills}
+          payments={payments}
+          applications={applications}
+          reconciliationExceptions={reconciliationExceptions}
+          isLoading={billsQuery.isLoading || paymentsQuery.isLoading || applicationsQuery.isLoading || reconciliationQuery.isLoading}
+          onCreateBill={openCreateBill}
+          onEditBill={openEditBill}
+          onBillTransition={transitionBill}
+          onApplyToBill={openApplyToBill}
+          onCreatePayment={openCreatePayment}
+          onEditPayment={openEditPayment}
+          onPaymentTransition={transitionPayment}
+          onReverseApplication={reverseApplication}
+          onCreateReconciliationException={openCreateReconciliationException}
+          onReconciliationTransition={transitionReconciliationException}
+          isMutating={isMutating}
+        />
+      )}
 
-        <TabsContent value="expenses" className="space-y-6">
-          <ExpensesPanel
-            bills={bills}
-            payments={payments}
-            applications={applications}
-            reconciliationExceptions={reconciliationExceptions}
-            isLoading={billsQuery.isLoading || paymentsQuery.isLoading || applicationsQuery.isLoading || reconciliationQuery.isLoading}
-            onCreateBill={openCreateBill}
-            onEditBill={openEditBill}
-            onBillTransition={transitionBill}
-            onApplyToBill={openApplyToBill}
-            onCreatePayment={openCreatePayment}
-            onEditPayment={openEditPayment}
-            onPaymentTransition={transitionPayment}
-            onReverseApplication={reverseApplication}
-            onCreateReconciliationException={openCreateReconciliationException}
-            onReconciliationTransition={transitionReconciliationException}
-            isMutating={isMutating}
-          />
-        </TabsContent>
+      {selectedSection === "subscriptions" && (
+        <SubscriptionsPanel
+          subscriptions={subscriptions}
+          isLoading={subscriptionsQuery.isLoading}
+          onCreateSubscription={openCreateSubscription}
+          onEditSubscription={openEditSubscription}
+          onSubscriptionTransition={transitionSubscription}
+          isMutating={isMutating}
+        />
+      )}
 
-        <TabsContent value="subscriptions" className="space-y-6">
-          <SubscriptionsPanel
-            subscriptions={subscriptions}
-            isLoading={subscriptionsQuery.isLoading}
-            onCreateSubscription={openCreateSubscription}
-            onEditSubscription={openEditSubscription}
-            onSubscriptionTransition={transitionSubscription}
-            isMutating={isMutating}
-          />
-        </TabsContent>
+      {selectedSection === "vendors" && (
+        <VendorsPanel
+          vendors={vendors}
+          isLoading={vendorsQuery.isLoading}
+          onCreateVendor={openCreateVendor}
+          onEditVendor={openEditVendor}
+          onArchiveVendor={archiveVendor}
+          isMutating={isMutating}
+        />
+      )}
 
-        <TabsContent value="vendors" className="space-y-6">
-          <VendorsPanel
-            vendors={vendors}
-            isLoading={vendorsQuery.isLoading}
-            onCreateVendor={openCreateVendor}
-            onEditVendor={openEditVendor}
-            onArchiveVendor={archiveVendor}
-            isMutating={isMutating}
-          />
-        </TabsContent>
+      {isSuperAdmin && selectedSection === "payroll" && (
+        <PayrollPanel
+          overview={payrollOverviewQuery.data}
+          runs={payrollRuns}
+          selectedRun={selectedPayrollRun}
+          selectedRunId={selectedPayrollRunId}
+          isLoading={payrollRunsQuery.isLoading || payrollRunDetailQuery.isLoading || payrollOverviewQuery.isLoading}
+          isMutating={isMutating}
+          onSelectRun={setSelectedPayrollRunId}
+          onCreateRun={openCreatePayrollRun}
+          onCreateCorrection={openCreatePayrollCorrection}
+          onRunTransition={transitionPayrollRun}
+          onAddWorker={openAddPayrollWorker}
+          onAddLine={openAddPayrollLine}
+          onRecordPayment={openRecordPayrollPayment}
+          onPaymentTransition={transitionPayrollPaymentRecord}
+        />
+      )}
 
-        {isSuperAdmin && (
-          <TabsContent value="payroll" className="space-y-6">
-            <PayrollPanel
-              overview={payrollOverviewQuery.data}
-              runs={payrollRuns}
-              selectedRun={selectedPayrollRun}
-              selectedRunId={selectedPayrollRunId}
-              isLoading={payrollRunsQuery.isLoading || payrollRunDetailQuery.isLoading || payrollOverviewQuery.isLoading}
-              isMutating={isMutating}
-              onSelectRun={setSelectedPayrollRunId}
-              onCreateRun={openCreatePayrollRun}
-              onCreateCorrection={openCreatePayrollCorrection}
-              onRunTransition={transitionPayrollRun}
-              onAddWorker={openAddPayrollWorker}
-              onAddLine={openAddPayrollLine}
-              onRecordPayment={openRecordPayrollPayment}
-              onPaymentTransition={transitionPayrollPaymentRecord}
-            />
-          </TabsContent>
-        )}
-
-        {isSuperAdmin && (
-          <TabsContent value="tax" className="space-y-6">
-            <FinanceTaxPanel />
-          </TabsContent>
-        )}
-      </Tabs>
+      {isSuperAdmin && selectedSection === "tax" && <FinanceTaxPanel />}
 
       <VendorDialog
         state={vendorDialog}
@@ -1405,93 +1398,383 @@ export default function FinanceManagement() {
   );
 }
 
-function OverviewPanel({ overview, isLoading }: { overview?: FinanceOverview; isLoading: boolean }) {
-  const metrics = overview?.metrics;
+function FinancePageHeader({
+  section,
+  isSuperAdmin,
+  isMutating,
+  onCreateBill,
+  onCreatePayment,
+  onCreateSubscription,
+  onCreateVendor,
+  onCreatePayrollRun,
+}: {
+  section: FinanceSection;
+  isSuperAdmin: boolean;
+  isMutating: boolean;
+  onCreateBill: () => void;
+  onCreatePayment: () => void;
+  onCreateSubscription: () => void;
+  onCreateVendor: () => void;
+  onCreatePayrollRun: () => void;
+}) {
+  const config = financeHeaderConfig(section);
+  const primaryAction =
+    section === "subscriptions"
+      ? { label: "Add subscription", icon: Repeat2, onClick: onCreateSubscription }
+      : section === "vendors"
+        ? { label: "Add vendor", icon: Building2, onClick: onCreateVendor }
+        : section === "payroll" && isSuperAdmin
+          ? { label: "Create run", icon: ReceiptText, onClick: onCreatePayrollRun }
+          : section === "tax"
+            ? null
+            : { label: "Add bill", icon: ReceiptText, onClick: onCreateBill };
+
+  const PrimaryIcon = primaryAction?.icon;
 
   return (
-    <>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+    <div className="flex flex-col gap-4 border-b border-border/70 pb-5 lg:flex-row lg:items-end lg:justify-between">
+      <div className="min-w-0">
+        <h1 className="text-[28px] font-semibold leading-tight text-foreground" data-testid="text-finance-management-title">
+          {config.title}
+        </h1>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+          {config.description}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {primaryAction && PrimaryIcon && (
+          <Button onClick={primaryAction.onClick} disabled={isMutating}>
+            <PrimaryIcon className="h-4 w-4" />
+            {primaryAction.label}
+          </Button>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="icon" aria-label="Finance actions">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuItem onClick={onCreateBill} disabled={isMutating}>
+              <ReceiptText className="h-4 w-4" />
+              Add bill
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onCreateSubscription} disabled={isMutating}>
+              <Repeat2 className="h-4 w-4" />
+              Add subscription
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onCreatePayment} disabled={isMutating}>
+              <WalletCards className="h-4 w-4" />
+              Record payment
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onCreateVendor} disabled={isMutating}>
+              <Building2 className="h-4 w-4" />
+              Add vendor
+            </DropdownMenuItem>
+            {isSuperAdmin && (
+              <DropdownMenuItem onClick={onCreatePayrollRun} disabled={isMutating}>
+                <ReceiptText className="h-4 w-4" />
+                Create payroll run
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+}
+
+function financeHeaderConfig(section: FinanceSection) {
+  switch (section) {
+    case "expenses":
+      return {
+        title: "Expenses",
+        description: "Review bills, record payments, apply credits, and resolve AP reconciliation work.",
+      };
+    case "subscriptions":
+      return {
+        title: "Subscriptions",
+        description: "Track expected recurring software and service spend without treating expectations as payments.",
+      };
+    case "vendors":
+      return {
+        title: "Vendors",
+        description: "Maintain the internal vendor directory for company finance operations.",
+      };
+    case "payroll":
+      return {
+        title: "Payroll",
+        description: "Review externally calculated payroll runs, worker results, payments, and corrections.",
+      };
+    case "tax":
+      return {
+        title: "Tax",
+        description: "Track registrations, liabilities, filings, agency payments, and reconciliation.",
+      };
+    default:
+      return {
+        title: "Finance",
+        description: "Track company bills, subscriptions, payments, payroll and tax.",
+      };
+  }
+}
+
+function OverviewPanel({
+  overview,
+  payments,
+  reconciliationExceptions,
+  isLoading,
+  onCreateBill,
+  onCreatePayment,
+  onCreateSubscription,
+  onCreateReconciliationException,
+}: {
+  overview?: FinanceOverview;
+  payments: FinancePayment[];
+  reconciliationExceptions: FinanceReconciliationException[];
+  isLoading: boolean;
+  onCreateBill: () => void;
+  onCreatePayment: () => void;
+  onCreateSubscription: () => void;
+  onCreateReconciliationException: () => void;
+}) {
+  const metrics = overview?.metrics;
+  const unappliedPayments = payments.filter((payment) => (
+    ["posted", "cleared"].includes(payment.status) && (payment.remainingAmountCents ?? 0) > 0
+  ));
+  const attentionItems = buildAttentionItems({
+    overview,
+    unappliedPayments,
+    reconciliationExceptions,
+  });
+  const needsAttentionCount = attentionItems.length;
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           title="Unpaid balance"
           value={formatMoneyBreakdown(metrics?.unpaidBalanceByCurrency)}
+          detail={`${metrics?.billsDueThisMonthCount ?? 0} due this month`}
           icon={WalletCards}
         />
         <MetricCard
-          title="Due this week"
+          title="Due next 7 days"
           value={formatMoneyBreakdown(metrics?.billsDueThisWeekByCurrency)}
-          detail={`${metrics?.billsDueThisWeekCount ?? 0} bill(s)`}
+          detail={`${metrics?.billsDueThisWeekCount ?? 0} bills`}
           icon={CalendarClock}
         />
         <MetricCard
           title="Monthly recurring"
           value={formatMoneyBreakdown(metrics?.monthlyRecurringSpendByCurrency)}
-          detail={`${metrics?.variableOrUnknownRecurringCount ?? 0} variable`}
+          detail={recurringMetricDetail(metrics)}
           icon={Repeat2}
         />
         <MetricCard
-          title="Active subscriptions"
-          value={metrics?.activeSubscriptionsCount ?? 0}
+          title="Needs attention"
+          value={needsAttentionCount}
+          detail={attentionMetricDetail(metrics, unappliedPayments.length)}
+          icon={AlertCircle}
+        />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
+        <FinanceSectionCard
+          title="Bills due soon"
+          description="Upcoming vendor bills that still need attention."
+          icon={CalendarClock}
+          action={<Button size="sm" onClick={onCreateBill}><Plus className="h-4 w-4" />Add bill</Button>}
+        >
+          <BillsTable
+            bills={overview?.billsDueSoon ?? []}
+            isLoading={isLoading}
+            compact
+            emptyTitle="No upcoming bills"
+            emptyDescription="Add a bill to start tracking company expenses."
+            emptyActionLabel="Add bill"
+            onEmptyAction={onCreateBill}
+          />
+        </FinanceSectionCard>
+
+        <FinanceSectionCard
+          title="Recurring spend"
+          description={`${metrics?.activeSubscriptionsCount ?? 0} active subscriptions`}
           icon={Repeat2}
+          action={<Button size="sm" variant="outline" onClick={onCreateSubscription}><Plus className="h-4 w-4" />Add</Button>}
+        >
+          <SubscriptionsTable
+            subscriptions={overview?.activeSubscriptions ?? []}
+            isLoading={isLoading}
+            compact
+            emptyTitle="No active subscriptions"
+            emptyDescription="Track recurring software and service costs."
+            emptyActionLabel="Add subscription"
+            onEmptyAction={onCreateSubscription}
+          />
+        </FinanceSectionCard>
+      </div>
+
+      <NeedsAttentionPanel
+        items={attentionItems}
+        isLoading={isLoading}
+        onCreateBill={onCreateBill}
+        onCreatePayment={onCreatePayment}
+        onCreateReconciliationException={onCreateReconciliationException}
+      />
+    </div>
+  );
+}
+
+type AttentionItem = {
+  key: string;
+  label: string;
+  title: string;
+  detail?: string;
+  amount?: string;
+  status?: string;
+};
+
+function buildAttentionItems({
+  overview,
+  unappliedPayments,
+  reconciliationExceptions,
+}: {
+  overview?: FinanceOverview;
+  unappliedPayments: FinancePayment[];
+  reconciliationExceptions: FinanceReconciliationException[];
+}): AttentionItem[] {
+  const openReconciliation = reconciliationExceptions.filter((item) => !["resolved", "waived"].includes(item.status));
+  const missingDocs = overview?.missingDocumentationBills ?? [];
+  const priceVariances = overview?.subscriptionPriceVariances ?? [];
+  const items: AttentionItem[] = [];
+
+  openReconciliation.slice(0, 4).forEach((item) => {
+    items.push({
+      key: `reconciliation-${item.id}`,
+      label: humanize(item.reasonCode),
+      title: item.summary,
+      detail: entityLabel(item.expectedEntityType, item.expectedEntityId),
+      amount: formatMoney(item.differenceAmountCents, item.currency ?? "USD"),
+      status: item.status,
+    });
+  });
+
+  missingDocs.slice(0, 4).forEach((bill) => {
+    items.push({
+      key: `missing-doc-${bill.id}`,
+      label: "Missing receipt",
+      title: bill.vendorName || `Vendor #${bill.vendorId}`,
+      detail: bill.invoiceNumber ? `Invoice ${bill.invoiceNumber}` : humanize(bill.categoryCode),
+      amount: formatMoney(bill.amountCents, bill.currency),
+      status: bill.settlementState ?? bill.status,
+    });
+  });
+
+  unappliedPayments.slice(0, 4).forEach((payment) => {
+    items.push({
+      key: `unapplied-payment-${payment.id}`,
+      label: "Unapplied payment",
+      title: payment.vendorName || (payment.vendorId ? `Vendor #${payment.vendorId}` : "Unassigned payment"),
+      detail: `${payment.methodLabel || humanize(payment.methodType)} - ${formatDate(payment.paymentDate)}`,
+      amount: formatMoney(payment.remainingAmountCents, payment.currency),
+      status: payment.status,
+    });
+  });
+
+  priceVariances.slice(0, 4).forEach((row) => {
+    const percent = formatDeltaPercent(row.differenceAmountCents, row.expectedAmountCents);
+    items.push({
+      key: `price-variance-${row.recurringExpenseId}-${row.billId}`,
+      label: row.differenceAmountCents > 0 ? "Price increased" : "Price changed",
+      title: row.vendorName || `Vendor #${row.vendorId}`,
+      detail: `${formatMoney(row.expectedAmountCents, row.currency)} -> ${formatMoney(row.actualAmountCents, row.currency)}${percent ? ` (${percent})` : ""}`,
+      amount: formatSignedMoney(row.differenceAmountCents, row.currency),
+      status: "needs_attention",
+    });
+  });
+
+  return items.slice(0, 8);
+}
+
+function recurringMetricDetail(metrics?: FinanceOverview["metrics"]) {
+  const active = metrics?.activeSubscriptionsCount ?? 0;
+  const variable = metrics?.variableOrUnknownRecurringCount ?? 0;
+  if (variable > 0) {
+    return `${active} active; ${variable} variable/custom`;
+  }
+  return `${active} active subscriptions`;
+}
+
+function attentionMetricDetail(metrics?: FinanceOverview["metrics"], unappliedPaymentCount = 0) {
+  const reconciliation = metrics?.openReconciliationIssuesCount ?? 0;
+  const missingDocs = metrics?.missingDocumentsCount ?? 0;
+  const variances = metrics?.subscriptionPriceVarianceCount ?? 0;
+  return `${reconciliation} reconciliation / ${missingDocs} docs / ${unappliedPaymentCount} unapplied / ${variances} price`;
+}
+
+function NeedsAttentionPanel({
+  items,
+  isLoading,
+  onCreateBill,
+  onCreatePayment,
+  onCreateReconciliationException,
+}: {
+  items: AttentionItem[];
+  isLoading: boolean;
+  onCreateBill: () => void;
+  onCreatePayment: () => void;
+  onCreateReconciliationException: () => void;
+}) {
+  return (
+    <FinanceSectionCard
+      title="Needs attention"
+      description="Missing documentation, unapplied payments, price changes, and open reconciliation work."
+      icon={AlertCircle}
+      action={<Button size="sm" variant="outline" onClick={onCreateReconciliationException}><Plus className="h-4 w-4" />Open exception</Button>}
+    >
+      {isLoading ? (
+        <CompactEmptyState title="Loading attention items" description="Checking finance records that may need follow-up." />
+      ) : items.length === 0 ? (
+        <CompactEmptyState
+          title="Nothing needs attention"
+          description="Bills, payments, documentation, and reconciliation are clear for now."
+          actionLabel="Add bill"
+          onAction={onCreateBill}
         />
-        <MetricCard
-          title="Missing docs"
-          value={metrics?.missingDocumentsCount ?? 0}
-          icon={FileWarning}
-        />
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CalendarClock className="h-5 w-5" />
-              Bills Due Soon
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <BillsTable bills={overview?.billsDueSoon ?? []} isLoading={isLoading} compact />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Repeat2 className="h-5 w-5" />
-              Active Subscriptions
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <SubscriptionsTable subscriptions={overview?.activeSubscriptions ?? []} isLoading={isLoading} compact />
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileWarning className="h-5 w-5" />
-              Missing Documents
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <BillsTable bills={overview?.missingDocumentationBills ?? []} isLoading={isLoading} compact />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5" />
-              Price Variance
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <PriceVarianceTable rows={overview?.subscriptionPriceVariances ?? []} isLoading={isLoading} />
-          </CardContent>
-        </Card>
-      </div>
-    </>
+      ) : (
+        <>
+          <div className="divide-y divide-border/70">
+            {items.map((item) => (
+              <div key={item.key} className="grid gap-3 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[13px] font-medium text-muted-foreground">{item.label}</span>
+                    {item.status && statusBadge(item.status)}
+                  </div>
+                  <div className="mt-1 truncate text-sm font-medium text-foreground">{item.title}</div>
+                  {item.detail && <div className="mt-0.5 text-[13px] text-muted-foreground">{item.detail}</div>}
+                </div>
+                {item.amount && (
+                  <div className="text-right text-sm font-semibold tabular-nums text-foreground">
+                    {item.amount}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={onCreateBill}>
+              <ReceiptText className="h-4 w-4" />
+              Add bill
+            </Button>
+            <Button size="sm" variant="outline" onClick={onCreatePayment}>
+              <WalletCards className="h-4 w-4" />
+              Record payment
+            </Button>
+          </div>
+        </>
+      )}
+    </FinanceSectionCard>
   );
 }
 
@@ -1538,19 +1821,14 @@ function ExpensesPanel({
   ));
 
   return (
-    <>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <CardTitle className="flex items-center gap-2">
-            <ReceiptText className="h-5 w-5" />
-            Bills
-          </CardTitle>
-          <Button size="sm" onClick={onCreateBill}>
-            <Plus className="h-4 w-4" />
-            Bill
-          </Button>
-        </CardHeader>
-        <CardContent>
+    <div className="space-y-6">
+      <FinanceSectionCard
+        title="Bills"
+        description="Vendor invoices and bills with due dates, remaining balances, and settlement state."
+        icon={ReceiptText}
+        action={<Button size="sm" onClick={onCreateBill}><Plus className="h-4 w-4" />Add bill</Button>}
+      >
+        <div className="overflow-x-auto">
           <BillsTable
             bills={bills}
             isLoading={isLoading}
@@ -1558,78 +1836,74 @@ function ExpensesPanel({
             onTransition={onBillTransition}
             onApply={onApplyToBill}
             isMutating={isMutating}
+            emptyTitle="No bills yet"
+            emptyDescription="Add vendor bills as they arrive so due dates, balances, and receipts stay visible."
+            emptyActionLabel="Add bill"
+            onEmptyAction={onCreateBill}
           />
-        </CardContent>
-      </Card>
+        </div>
+      </FinanceSectionCard>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <CardTitle className="flex items-center gap-2">
-            <WalletCards className="h-5 w-5" />
-            Payments
-          </CardTitle>
-          <Button size="sm" onClick={onCreatePayment}>
-            <Plus className="h-4 w-4" />
-            Payment
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <PaymentsTable
-            payments={payments}
-            isLoading={isLoading}
-            onEdit={onEditPayment}
-            onTransition={onPaymentTransition}
-            isMutating={isMutating}
-          />
+      <div className="grid gap-6 xl:grid-cols-2">
+        <FinanceSectionCard
+          title="Payments"
+          description="Actual payments and unapplied balances that may need to be matched to bills."
+          icon={WalletCards}
+          action={<Button size="sm" onClick={onCreatePayment}><Plus className="h-4 w-4" />Record payment</Button>}
+        >
+          <div className="overflow-x-auto">
+            <PaymentsTable
+              payments={payments}
+              isLoading={isLoading}
+              onEdit={onEditPayment}
+              onTransition={onPaymentTransition}
+              isMutating={isMutating}
+            />
+          </div>
           {unappliedPayments.length > 0 && (
             <div className="mt-4 rounded-md border border-yellow-500/20 bg-yellow-500/5 p-3">
-              <div className="mb-2 text-sm font-medium">Unapplied Payments</div>
-              <PaymentsTable payments={unappliedPayments.slice(0, 5)} isLoading={false} compact />
+              <div className="mb-2 text-sm font-medium">Unapplied payments</div>
+              <div className="overflow-x-auto">
+                <PaymentsTable payments={unappliedPayments.slice(0, 5)} isLoading={false} compact />
+              </div>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </FinanceSectionCard>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Link2 className="h-5 w-5" />
-            Applications
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ApplicationsTable
-            applications={applications}
-            bills={bills}
-            payments={payments}
-            isLoading={isLoading}
-            onReverse={onReverseApplication}
-            isMutating={isMutating}
-          />
-        </CardContent>
-      </Card>
+        <FinanceSectionCard
+          title="Applied payments"
+          description="Payment and credit applications against vendor bills."
+          icon={Link2}
+        >
+          <div className="overflow-x-auto">
+            <ApplicationsTable
+              applications={applications}
+              bills={bills}
+              payments={payments}
+              isLoading={isLoading}
+              onReverse={onReverseApplication}
+              isMutating={isMutating}
+            />
+          </div>
+        </FinanceSectionCard>
+      </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <CardTitle className="flex items-center gap-2">
-            <AlertCircle className="h-5 w-5" />
-            Reconciliation
-          </CardTitle>
-          <Button size="sm" onClick={onCreateReconciliationException}>
-            <Plus className="h-4 w-4" />
-            Exception
-          </Button>
-        </CardHeader>
-        <CardContent>
+      <FinanceSectionCard
+        title="Reconciliation"
+        description="Open AP exceptions, differences, and follow-up states."
+        icon={AlertCircle}
+        action={<Button size="sm" onClick={onCreateReconciliationException}><Plus className="h-4 w-4" />Open exception</Button>}
+      >
+        <div className="overflow-x-auto">
           <ReconciliationTable
             exceptions={reconciliationExceptions}
             isLoading={isLoading}
             onTransition={onReconciliationTransition}
             isMutating={isMutating}
           />
-        </CardContent>
-      </Card>
-    </>
+        </div>
+      </FinanceSectionCard>
+    </div>
   );
 }
 
@@ -1649,27 +1923,26 @@ function SubscriptionsPanel({
   isMutating: boolean;
 }) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-4">
-        <CardTitle className="flex items-center gap-2">
-          <Repeat2 className="h-5 w-5" />
-          Subscriptions
-        </CardTitle>
-        <Button size="sm" onClick={onCreateSubscription}>
-          <Plus className="h-4 w-4" />
-          Subscription
-        </Button>
-      </CardHeader>
-      <CardContent>
+    <FinanceSectionCard
+      title="Subscriptions"
+      description="Expected recurring obligations. Actual invoices and payments remain separate records."
+      icon={Repeat2}
+      action={<Button size="sm" onClick={onCreateSubscription}><Plus className="h-4 w-4" />Add subscription</Button>}
+    >
+      <div className="overflow-x-auto">
         <SubscriptionsTable
           subscriptions={subscriptions}
           isLoading={isLoading}
           onEdit={onEditSubscription}
           onTransition={onSubscriptionTransition}
           isMutating={isMutating}
+          emptyTitle="No subscriptions yet"
+          emptyDescription="Track SaaS, payroll providers, utilities, and services before invoices arrive."
+          emptyActionLabel="Add subscription"
+          onEmptyAction={onCreateSubscription}
         />
-      </CardContent>
-    </Card>
+      </div>
+    </FinanceSectionCard>
   );
 }
 
@@ -1689,19 +1962,24 @@ function VendorsPanel({
   isMutating: boolean;
 }) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-4">
-        <CardTitle className="flex items-center gap-2">
-          <Building2 className="h-5 w-5" />
-          Vendors
-        </CardTitle>
-        <Button size="sm" onClick={onCreateVendor}>
-          <Plus className="h-4 w-4" />
-          Vendor
-        </Button>
-      </CardHeader>
-      <CardContent>
-        <Table>
+    <FinanceSectionCard
+      title="Vendors"
+      description="Reusable company vendors for AP, payroll providers, tax agencies, contractors, and services."
+      icon={Building2}
+      action={<Button size="sm" onClick={onCreateVendor}><Plus className="h-4 w-4" />Add vendor</Button>}
+    >
+      <div className="overflow-x-auto">
+        {isLoading ? (
+          <CompactEmptyState title="Loading vendors" description="Loading the vendor directory." />
+        ) : vendors.length === 0 ? (
+          <CompactEmptyState
+            title="No vendors yet"
+            description="Add vendors before creating subscriptions, bills, or payment records."
+            actionLabel="Add vendor"
+            onAction={onCreateVendor}
+          />
+        ) : (
+          <Table className="min-w-[820px]">
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
@@ -1712,14 +1990,12 @@ function VendorsPanel({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
-              <EmptyRow colSpan={5} label="Loading vendors..." />
-            ) : vendors.length === 0 ? (
-              <EmptyRow colSpan={5} label="No vendors." />
-            ) : (
-              vendors.map((vendor) => (
-                <TableRow key={vendor.id}>
-                  <TableCell className="font-medium">{vendor.name}</TableCell>
+            {vendors.map((vendor) => (
+                <TableRow key={vendor.id} className="h-12">
+                  <TableCell>
+                    <div className="font-medium text-foreground">{vendor.name}</div>
+                    {vendor.website && <div className="text-[13px] text-muted-foreground">{vendor.website}</div>}
+                  </TableCell>
                   <TableCell>{humanize(vendor.vendorType)}</TableCell>
                   <TableCell>{statusBadge(vendor.status)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -1740,12 +2016,12 @@ function VendorsPanel({
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
+              ))}
           </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+          </Table>
+        )}
+      </div>
+    </FinanceSectionCard>
   );
 }
 
@@ -1783,7 +2059,7 @@ function PayrollPanel({
   const selected = selectedRun ?? runs.find((run) => run.id === selectedRunId);
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           title="Open runs"
           value={overview?.draftRuns.length ?? 0}
@@ -1811,20 +2087,23 @@ function PayrollPanel({
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
-            <div>
-              <CardTitle>Payroll Runs</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Historical records by pay period.
-              </p>
-            </div>
-            <Button size="sm" onClick={onCreateRun} disabled={isMutating}>
-              <Plus className="h-4 w-4" />
-              Run
-            </Button>
-          </CardHeader>
-          <CardContent>
+        <FinanceSectionCard
+          title="Payroll runs"
+          description="Historical records by pay period."
+          icon={ReceiptText}
+          action={<Button size="sm" onClick={onCreateRun} disabled={isMutating}><Plus className="h-4 w-4" />Create run</Button>}
+        >
+          <div className="overflow-x-auto">
+            {isLoading ? (
+              <CompactEmptyState title="Loading payroll runs" description="Loading payroll periods and payment summaries." />
+            ) : runs.length === 0 ? (
+              <CompactEmptyState
+                title="No payroll runs"
+                description="Create a run after payroll has been calculated externally."
+                actionLabel="Create run"
+                onAction={onCreateRun}
+              />
+            ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1834,15 +2113,10 @@ function PayrollPanel({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading ? (
-                  <EmptyRow colSpan={3} label="Loading payroll runs..." />
-                ) : runs.length === 0 ? (
-                  <EmptyRow colSpan={3} label="No payroll runs." />
-                ) : (
-                  runs.map((run) => (
+                {runs.map((run) => (
                     <TableRow
                       key={run.id}
-                      className={run.id === selected?.id ? "bg-muted/50" : undefined}
+                      className={cn("h-12 cursor-pointer", run.id === selected?.id && "bg-muted/50")}
                       onClick={() => onSelectRun(run.id)}
                     >
                       <TableCell>
@@ -1854,14 +2128,14 @@ function PayrollPanel({
                         </div>
                       </TableCell>
                       <TableCell>{statusBadge(run.status)}</TableCell>
-                      <TableCell className="text-right">{formatPayrollTotals(run.totalsByCurrency, "netPayCents")}</TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">{formatPayrollTotals(run.totalsByCurrency, "netPayCents")}</TableCell>
                     </TableRow>
-                  ))
-                )}
+                  ))}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
+            )}
+          </div>
+        </FinanceSectionCard>
 
         <PayrollRunDetailPanel
           run={selected}
@@ -1899,38 +2173,24 @@ function PayrollRunDetailPanel({
 }) {
   if (!run) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Run Detail</CardTitle>
-        </CardHeader>
-        <CardContent className="py-10 text-center text-muted-foreground">
-          Select or create a payroll run.
-        </CardContent>
-      </Card>
+      <FinanceSectionCard title="Run detail" description="Select a run to review workers, lines, and payments." icon={ReceiptText}>
+        <CompactEmptyState
+          title="No run selected"
+          description="Select a payroll run from the list or create a new run."
+        />
+      </FinanceSectionCard>
     );
   }
 
   const canEditOutput = run.status === "draft";
   const canRecordPayments = run.status === "finalized";
   return (
-    <Card>
-      <CardHeader className="space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <CardTitle>
-              {formatDate(run.periodStart)} - {formatDate(run.periodEnd)}
-            </CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Pay {formatDate(run.payDate)} - {run.legalEntity?.legalName || `Entity #${run.legalEntityId}`}
-            </p>
-          </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            {statusBadge(run.status)}
-            {statusBadge(run.runKind)}
-            {run.sourceVendor && statusBadge(run.sourceVendor.name)}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
+    <FinanceSectionCard
+      title={`${formatDate(run.periodStart)} - ${formatDate(run.periodEnd)}`}
+      description={`Pay ${formatDate(run.payDate)} - ${run.legalEntity?.legalName || `Entity #${run.legalEntityId}`}`}
+      icon={ReceiptText}
+      action={(
+        <div className="flex flex-wrap justify-end gap-2">
           {run.status === "draft" && (
             <>
               <Button size="sm" variant="outline" onClick={() => onAddWorker(run)} disabled={isMutating}>
@@ -1956,32 +2216,32 @@ function PayrollRunDetailPanel({
             </Button>
           )}
         </div>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div className="grid gap-3 md:grid-cols-4">
-          <div>
-            <div className="text-xs text-muted-foreground">Gross</div>
-            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "grossPayCents")}</div>
+      )}
+    >
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-wrap justify-end gap-2">
+            {statusBadge(run.status)}
+            {statusBadge(run.runKind)}
+            {run.sourceVendor && statusBadge(run.sourceVendor.name)}
           </div>
-          <div>
-            <div className="text-xs text-muted-foreground">Net</div>
-            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "netPayCents")}</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted-foreground">Cleared</div>
-            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "clearedPaymentCents")}</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted-foreground">In flight</div>
-            <div className="font-medium">{formatPayrollTotals(run.totalsByCurrency, "inFlightPaymentCents")}</div>
-          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <PayrollSummaryAmount label="Gross" value={formatPayrollTotals(run.totalsByCurrency, "grossPayCents")} />
+          <PayrollSummaryAmount label="Net" value={formatPayrollTotals(run.totalsByCurrency, "netPayCents")} />
+          <PayrollSummaryAmount label="Cleared" value={formatPayrollTotals(run.totalsByCurrency, "clearedPaymentCents")} />
+          <PayrollSummaryAmount label="In flight" value={formatPayrollTotals(run.totalsByCurrency, "inFlightPaymentCents")} />
         </div>
 
         <div className="space-y-4">
           {(run.workers ?? []).length === 0 ? (
-            <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-              No worker results recorded.
-            </div>
+            <CompactEmptyState
+              title="No worker results"
+              description="Add worker results after payroll output is available."
+              actionLabel={canEditOutput ? "Add worker" : undefined}
+              onAction={canEditOutput ? () => onAddWorker(run) : undefined}
+            />
           ) : (
             (run.workers ?? []).map((worker) => (
               <div key={worker.id} className="rounded-md border p-4">
@@ -2036,24 +2296,42 @@ function PayrollRunDetailPanel({
             ))
           )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </FinanceSectionCard>
+  );
+}
+
+function PayrollSummaryAmount({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border bg-muted/20 p-3">
+      <div className="text-[13px] font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 text-base font-semibold tabular-nums text-foreground">{value}</div>
+    </div>
   );
 }
 
 function PayrollAmount({ label, value, currency }: { label: string; value: number; currency: string }) {
   return (
     <div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="font-medium">{formatMoney(value, currency)}</div>
+      <div className="text-[13px] text-muted-foreground">{label}</div>
+      <div className="font-medium tabular-nums">{formatMoney(value, currency)}</div>
     </div>
   );
 }
 
 function PayrollLinesTable({ lines }: { lines: PayrollResultLine[] }) {
+  if (lines.length === 0) {
+    return (
+      <div>
+        <div className="mb-2 text-sm font-medium">Result lines</div>
+        <CompactEmptyState title="No result lines" description="Earnings, taxes, deductions, and employer costs will appear here." />
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="mb-2 text-sm font-medium">Result Lines</div>
+      <div className="mb-2 text-sm font-medium">Result lines</div>
       <Table>
         <TableHeader>
           <TableRow>
@@ -2063,23 +2341,19 @@ function PayrollLinesTable({ lines }: { lines: PayrollResultLine[] }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {lines.length === 0 ? (
-            <EmptyRow colSpan={3} label="No lines." />
-          ) : (
-            lines.map((line) => (
-              <TableRow key={line.id}>
+          {lines.map((line) => (
+              <TableRow key={line.id} className="h-12">
                 <TableCell>
                   <div className="font-medium">{line.lineCode}</div>
                   <div className="text-xs text-muted-foreground">{line.description || "-"}</div>
                 </TableCell>
                 <TableCell>{humanize(line.lineCategory)}</TableCell>
-                <TableCell className="text-right">
+                <TableCell className="text-right font-medium tabular-nums">
                   {line.amountEffect === "decrease" ? "-" : ""}
                   {formatMoney(line.amountCents, line.currency)}
                 </TableCell>
               </TableRow>
-            ))
-          )}
+            ))}
         </TableBody>
       </Table>
     </div>
@@ -2095,6 +2369,15 @@ function PayrollPaymentsTable({
   isMutating: boolean;
   onPaymentTransition: (payment: PayrollPayment, action: "send" | "clear" | "fail" | "void" | "reverse") => void;
 }) {
+  if (payments.length === 0) {
+    return (
+      <div>
+        <div className="mb-2 text-sm font-medium">Payments</div>
+        <CompactEmptyState title="No payroll payments" description="Recorded worker payment attempts will appear here." />
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="mb-2 text-sm font-medium">Payments</div>
@@ -2108,17 +2391,14 @@ function PayrollPaymentsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {payments.length === 0 ? (
-            <EmptyRow colSpan={4} label="No payments." />
-          ) : (
-            payments.map((payment) => (
-              <TableRow key={payment.id}>
+          {payments.map((payment) => (
+              <TableRow key={payment.id} className="h-12">
                 <TableCell>
                   <div>{formatDate(payment.paymentDate)}</div>
                   <div className="text-xs text-muted-foreground">{payment.methodLabel || humanize(payment.methodType)}</div>
                 </TableCell>
                 <TableCell>{statusBadge(payment.status)}</TableCell>
-                <TableCell className="text-right">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
                 <TableCell>
                   <div className="flex flex-wrap justify-end gap-2">
                     {payment.status === "pending" && (
@@ -2154,8 +2434,7 @@ function PayrollPaymentsTable({
                   </div>
                 </TableCell>
               </TableRow>
-            ))
-          )}
+            ))}
         </TableBody>
       </Table>
     </div>
@@ -2170,6 +2449,10 @@ function BillsTable({
   onTransition,
   onApply,
   isMutating = false,
+  emptyTitle = "No bills",
+  emptyDescription = "Add a bill to start tracking vendor invoices and due dates.",
+  emptyActionLabel,
+  onEmptyAction,
 }: {
   bills: FinanceBill[];
   isLoading: boolean;
@@ -2178,47 +2461,66 @@ function BillsTable({
   onTransition?: (bill: FinanceBill, action: "receive" | "approve" | "dispute" | "void") => void;
   onApply?: (bill: FinanceBill) => void;
   isMutating?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  emptyActionLabel?: string;
+  onEmptyAction?: () => void;
 }) {
   const showActions = !compact && Boolean(onEdit && onTransition);
-  const colSpan = compact ? 5 : showActions ? 8 : 7;
+
+  if (isLoading) {
+    return <CompactEmptyState title="Loading bills" description="Loading vendor bills and settlement details." />;
+  }
+
+  if (bills.length === 0) {
+    return (
+      <CompactEmptyState
+        title={emptyTitle}
+        description={emptyDescription}
+        actionLabel={emptyActionLabel}
+        onAction={onEmptyAction}
+      />
+    );
+  }
 
   return (
-    <Table>
+    <Table className={compact ? "min-w-[720px]" : "min-w-[980px]"}>
       <TableHeader>
         <TableRow>
-          <TableHead>Vendor</TableHead>
-          {!compact && <TableHead>Invoice</TableHead>}
+          <TableHead>Vendor / reference</TableHead>
           <TableHead>Due</TableHead>
-          <TableHead>Status</TableHead>
+          <TableHead>{compact ? "Status" : "Lifecycle"}</TableHead>
+          {!compact && <TableHead>Settlement</TableHead>}
           <TableHead className="text-right">Amount</TableHead>
-          <TableHead className="text-right">Open</TableHead>
-          {!compact && <TableHead>Docs</TableHead>}
+          <TableHead className="text-right">Remaining</TableHead>
+          {!compact && <TableHead className="text-right">Docs</TableHead>}
           {showActions && <TableHead className="text-right">Actions</TableHead>}
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={colSpan} label="Loading bills..." />
-        ) : bills.length === 0 ? (
-          <EmptyRow colSpan={colSpan} label="No bills." />
-        ) : (
-          bills.map((bill) => (
-            <TableRow key={bill.id}>
+        {bills.map((bill) => (
+            <TableRow key={bill.id} className="h-12">
               <TableCell>
-                <div className="font-medium">{bill.vendorName || `Vendor #${bill.vendorId}`}</div>
-                <div className="text-xs text-muted-foreground">{humanize(bill.categoryCode)}</div>
+                <div className="font-medium text-foreground">{bill.vendorName || `Vendor #${bill.vendorId}`}</div>
+                <div className="text-[13px] text-muted-foreground">
+                  {bill.invoiceNumber ? `Invoice ${bill.invoiceNumber}` : humanize(bill.categoryCode)}
+                </div>
               </TableCell>
-              {!compact && <TableCell>{bill.invoiceNumber || "-"}</TableCell>}
               <TableCell>{formatDate(bill.dueDate)}</TableCell>
               <TableCell>
                 <div className="flex flex-wrap gap-2">
                   {statusBadge(bill.status)}
-                  {bill.settlementState && statusBadge(bill.settlementState)}
+                  {compact && bill.settlementState && statusBadge(bill.settlementState)}
                 </div>
               </TableCell>
-              <TableCell className="text-right">{formatMoney(bill.amountCents, bill.currency)}</TableCell>
-              <TableCell className="text-right">{formatMoney(bill.remainingAmountCents, bill.currency)}</TableCell>
-              {!compact && <TableCell>{bill.documentCount ?? 0}</TableCell>}
+              {!compact && (
+                <TableCell>
+                  {bill.settlementState ? statusBadge(bill.settlementState) : "-"}
+                </TableCell>
+              )}
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(bill.amountCents, bill.currency)}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(bill.remainingAmountCents, bill.currency)}</TableCell>
+              {!compact && <TableCell className="text-right tabular-nums">{bill.documentCount ?? 0}</TableCell>}
               {showActions && (
                 <TableCell>
                   <BillActionButtons
@@ -2231,8 +2533,7 @@ function BillsTable({
                 </TableCell>
               )}
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -2311,9 +2612,17 @@ function PaymentsTable({
   isMutating?: boolean;
 }) {
   const showActions = !compact && Boolean(onEdit && onTransition);
-  const colSpan = showActions ? 7 : 6;
+
+  if (isLoading) {
+    return <CompactEmptyState title="Loading payments" description="Loading payment records and unapplied balances." />;
+  }
+
+  if (payments.length === 0) {
+    return <CompactEmptyState title="No payments recorded" description="Record an actual payment after money has moved or is in flight." />;
+  }
+
   return (
-    <Table>
+    <Table className={compact ? "min-w-[680px]" : "min-w-[920px]"}>
       <TableHeader>
         <TableRow>
           <TableHead>Vendor</TableHead>
@@ -2326,13 +2635,8 @@ function PaymentsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={colSpan} label="Loading payments..." />
-        ) : payments.length === 0 ? (
-          <EmptyRow colSpan={colSpan} label="No payments." />
-        ) : (
-          payments.map((payment) => (
-            <TableRow key={payment.id}>
+        {payments.map((payment) => (
+            <TableRow key={payment.id} className="h-12">
               <TableCell className="font-medium">
                 {payment.vendorName || (payment.vendorId ? `Vendor #${payment.vendorId}` : "Unassigned")}
               </TableCell>
@@ -2344,8 +2648,8 @@ function PaymentsTable({
                   {statusBadge(payment.status)}
                 </div>
               </TableCell>
-              <TableCell className="text-right">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
-              <TableCell className="text-right">{formatMoney(payment.remainingAmountCents, payment.currency)}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(payment.remainingAmountCents, payment.currency)}</TableCell>
               {showActions && (
                 <TableCell>
                   <PaymentActionButtons
@@ -2357,8 +2661,7 @@ function PaymentsTable({
                 </TableCell>
               )}
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -2442,8 +2745,16 @@ function ApplicationsTable({
   const billById = new Map(bills.map((bill) => [bill.id, bill]));
   const paymentById = new Map(payments.map((payment) => [payment.id, payment]));
 
+  if (isLoading) {
+    return <CompactEmptyState title="Loading applied payments" description="Loading payment and credit applications." />;
+  }
+
+  if (applications.length === 0) {
+    return <CompactEmptyState title="No applied payments" description="Payments and credits will appear here after they are applied to bills." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[760px]">
       <TableHeader>
         <TableRow>
           <TableHead>Target bill</TableHead>
@@ -2454,17 +2765,12 @@ function ApplicationsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={5} label="Loading applications..." />
-        ) : applications.length === 0 ? (
-          <EmptyRow colSpan={5} label="No applications." />
-        ) : (
-          applications.map((application) => {
+        {applications.map((application) => {
             const targetBill = billById.get(application.targetVendorBillId);
             const payment = application.expensePaymentId ? paymentById.get(application.expensePaymentId) : undefined;
             const credit = application.creditVendorBillId ? billById.get(application.creditVendorBillId) : undefined;
             return (
-              <TableRow key={application.id}>
+              <TableRow key={application.id} className="h-12">
                 <TableCell className="font-medium">
                   {targetBill?.invoiceNumber || `Bill #${application.targetVendorBillId}`}
                 </TableCell>
@@ -2474,7 +2780,7 @@ function ApplicationsTable({
                     : credit?.invoiceNumber || `Credit #${application.creditVendorBillId}`}
                 </TableCell>
                 <TableCell>{statusBadge(application.status)}</TableCell>
-                <TableCell className="text-right">{formatMoney(application.amountCents, application.currency)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatMoney(application.amountCents, application.currency)}</TableCell>
                 <TableCell>
                   <div className="flex justify-end">
                     {application.status === "active" && (
@@ -2487,8 +2793,7 @@ function ApplicationsTable({
                 </TableCell>
               </TableRow>
             );
-          })
-        )}
+          })}
       </TableBody>
     </Table>
   );
@@ -2508,8 +2813,16 @@ function ReconciliationTable({
   ) => void;
   isMutating: boolean;
 }) {
+  if (isLoading) {
+    return <CompactEmptyState title="Loading reconciliation" description="Loading open exceptions and difference records." />;
+  }
+
+  if (exceptions.length === 0) {
+    return <CompactEmptyState title="No reconciliation exceptions" description="Open AP differences and follow-up items will appear here." />;
+  }
+
   return (
-    <Table>
+    <Table className="min-w-[860px]">
       <TableHeader>
         <TableRow>
           <TableHead>Reason</TableHead>
@@ -2520,17 +2833,12 @@ function ReconciliationTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={5} label="Loading exceptions..." />
-        ) : exceptions.length === 0 ? (
-          <EmptyRow colSpan={5} label="No exceptions." />
-        ) : (
-          exceptions.map((exception) => (
-            <TableRow key={exception.id}>
+        {exceptions.map((exception) => (
+            <TableRow key={exception.id} className="h-12">
               <TableCell className="font-medium">{humanize(exception.reasonCode)}</TableCell>
               <TableCell>{exception.summary}</TableCell>
               <TableCell>{statusBadge(exception.status)}</TableCell>
-              <TableCell className="text-right">{formatMoney(exception.differenceAmountCents, exception.currency || "USD")}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatMoney(exception.differenceAmountCents, exception.currency || "USD")}</TableCell>
               <TableCell>
                 <div className="flex flex-wrap justify-end gap-2">
                   {exception.status === "open" && (
@@ -2560,8 +2868,7 @@ function ReconciliationTable({
                 </div>
               </TableCell>
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -2574,6 +2881,10 @@ function SubscriptionsTable({
   onEdit,
   onTransition,
   isMutating = false,
+  emptyTitle = "No subscriptions",
+  emptyDescription = "Add subscriptions to track expected recurring obligations.",
+  emptyActionLabel,
+  onEmptyAction,
 }: {
   subscriptions: FinanceSubscription[];
   isLoading: boolean;
@@ -2581,43 +2892,82 @@ function SubscriptionsTable({
   onEdit?: (subscription: FinanceSubscription) => void;
   onTransition?: (subscription: FinanceSubscription, action: "pause" | "resume" | "cancel") => void;
   isMutating?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  emptyActionLabel?: string;
+  onEmptyAction?: () => void;
 }) {
   const showActions = !compact && Boolean(onEdit && onTransition);
-  const colSpan = compact ? 5 : showActions ? 7 : 6;
+
+  if (isLoading) {
+    return <CompactEmptyState title="Loading subscriptions" description="Loading expected recurring expenses." />;
+  }
+
+  if (subscriptions.length === 0) {
+    return (
+      <CompactEmptyState
+        title={emptyTitle}
+        description={emptyDescription}
+        actionLabel={emptyActionLabel}
+        onAction={onEmptyAction}
+      />
+    );
+  }
 
   return (
-    <Table>
+    <Table className={compact ? "min-w-[560px]" : "min-w-[920px]"}>
       <TableHeader>
         <TableRow>
           <TableHead>Vendor</TableHead>
-          {!compact && <TableHead>Category</TableHead>}
-          <TableHead>Cadence</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Next bill</TableHead>
           <TableHead className="text-right">Expected</TableHead>
+          {!compact && <TableHead>Cadence</TableHead>}
+          <TableHead>{compact ? "Next bill" : "Next bill / renewal"}</TableHead>
+          {!compact && <TableHead>Auto-renew</TableHead>}
+          <TableHead>Status</TableHead>
           {showActions && <TableHead className="text-right">Actions</TableHead>}
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isLoading ? (
-          <EmptyRow colSpan={colSpan} label="Loading subscriptions..." />
-        ) : subscriptions.length === 0 ? (
-          <EmptyRow colSpan={colSpan} label="No subscriptions." />
-        ) : (
-          subscriptions.map((subscription) => (
-            <TableRow key={subscription.id}>
-              <TableCell className="font-medium">
-                {subscription.vendorName || `Vendor #${subscription.vendorId}`}
+        {subscriptions.map((subscription) => (
+            <TableRow key={subscription.id} className="h-12">
+              <TableCell>
+                <div className="font-medium text-foreground">
+                  {subscription.vendorName || `Vendor #${subscription.vendorId}`}
+                </div>
+                <div className="text-[13px] text-muted-foreground">
+                  {humanize(subscription.categoryCode)}
+                </div>
               </TableCell>
-              {!compact && <TableCell>{humanize(subscription.categoryCode)}</TableCell>}
-              <TableCell>{humanize(subscription.cadence)}</TableCell>
-              <TableCell>{statusBadge(subscription.status)}</TableCell>
-              <TableCell>{formatDate(subscription.nextBillingDate)}</TableCell>
               <TableCell className="text-right">
                 {subscription.variableAmount
-                  ? "Variable"
-                  : formatMoney(subscription.expectedAmountCents, subscription.currency)}
+                  ? (
+                    <div>
+                      <div className="font-medium">Variable</div>
+                      <div className="text-[13px] text-muted-foreground">{humanize(subscription.cadence)}</div>
+                    </div>
+                  )
+                  : (
+                    <div>
+                      <div className="font-medium tabular-nums">{formatMoney(subscription.expectedAmountCents, subscription.currency)}</div>
+                      <div className="text-[13px] text-muted-foreground">{humanize(subscription.cadence)}</div>
+                    </div>
+                  )}
               </TableCell>
+              {!compact && <TableCell>{humanize(subscription.cadence)}</TableCell>}
+              <TableCell>
+                <div>{formatDate(subscription.nextBillingDate)}</div>
+                {!compact && subscription.renewalDate && (
+                  <div className="text-[13px] text-muted-foreground">Renews {formatDate(subscription.renewalDate)}</div>
+                )}
+              </TableCell>
+              {!compact && (
+                <TableCell>
+                  <Badge variant="outline" className={subscription.autoRenew ? "border-blue-500/20 bg-blue-500/10 text-blue-700" : "border-muted bg-muted text-muted-foreground"}>
+                    {subscription.autoRenew ? "Auto" : "Manual"}
+                  </Badge>
+                </TableCell>
+              )}
+              <TableCell>{statusBadge(subscription.status)}</TableCell>
               {showActions && (
                 <TableCell>
                   <SubscriptionActionButtons
@@ -2629,8 +2979,7 @@ function SubscriptionsTable({
                 </TableCell>
               )}
             </TableRow>
-          ))
-        )}
+          ))}
       </TableBody>
     </Table>
   );
@@ -3942,24 +4291,85 @@ function MetricCard({
   icon: React.ElementType;
 }) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
+    <Card className="rounded-md border-border/80 shadow-sm">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <CardTitle className="text-[13px] font-medium text-muted-foreground">{title}</CardTitle>
+        <span className="rounded-md border bg-muted/30 p-1.5 text-muted-foreground">
+          <Icon className="h-4 w-4" />
+        </span>
       </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-semibold">{value}</div>
-        {detail && <p className="mt-1 text-xs text-muted-foreground">{detail}</p>}
+      <CardContent className="pt-0">
+        <div className="text-[28px] font-semibold leading-none tracking-normal text-foreground tabular-nums">{value}</div>
+        {detail && <p className="mt-2 text-[13px] text-muted-foreground">{detail}</p>}
       </CardContent>
     </Card>
+  );
+}
+
+function FinanceSectionCard({
+  title,
+  description,
+  icon: Icon,
+  action,
+  children,
+  className,
+}: {
+  title: string;
+  description?: string;
+  icon?: React.ElementType;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <Card className={cn("rounded-md border-border/80 shadow-sm", className)}>
+      <CardHeader className="flex flex-col gap-3 pb-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <CardTitle className="flex items-center gap-2 text-[17px] font-semibold">
+            {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+            {title}
+          </CardTitle>
+          {description && (
+            <p className="mt-1 max-w-3xl text-sm leading-5 text-muted-foreground">{description}</p>
+          )}
+        </div>
+        {action && <div className="flex shrink-0 flex-wrap justify-end gap-2">{action}</div>}
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
+  );
+}
+
+function CompactEmptyState({
+  title,
+  description,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  description?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-dashed bg-muted/20 px-5 py-6 text-center">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      {description && <div className="mx-auto mt-1 max-w-md text-[13px] leading-5 text-muted-foreground">{description}</div>}
+      {actionLabel && onAction && (
+        <Button className="mt-4" size="sm" variant="outline" onClick={onAction}>
+          <Plus className="h-4 w-4" />
+          {actionLabel}
+        </Button>
+      )}
+    </div>
   );
 }
 
 function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
   return (
     <TableRow>
-      <TableCell colSpan={colSpan} className="py-8 text-center text-muted-foreground">
-        {label}
+      <TableCell colSpan={colSpan} className="py-6 text-center text-[13px] text-muted-foreground">
+        <span>{label}</span>
       </TableCell>
     </TableRow>
   );
@@ -4376,6 +4786,25 @@ function formatMoneyBreakdown(values?: CurrencyAmount[]) {
   return values.map((value) => formatMoney(value.amountCents, value.currency)).join(" / ");
 }
 
+function formatSignedMoney(value?: number | null, currency = "USD") {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  return `${sign}${formatMoney(Math.abs(value), currency)}`;
+}
+
+function formatDeltaPercent(delta?: number | null, base?: number | null) {
+  if (typeof delta !== "number" || typeof base !== "number" || base === 0) {
+    return "";
+  }
+  const percent = (delta / base) * 100;
+  if (!Number.isFinite(percent)) {
+    return "";
+  }
+  return `${percent > 0 ? "+" : ""}${percent.toFixed(1)}%`;
+}
+
 function formatPayrollTotals(values: PayrollCurrencyTotals[] | undefined, field: keyof PayrollCurrencyTotals) {
   if (!values || values.length === 0) {
     return formatMoney(0);
@@ -4399,11 +4828,18 @@ function humanize(value?: string | null) {
   return value ? value.replace(/_/g, " ") : "-";
 }
 
+function entityLabel(entityType?: string | null, entityId?: number | null) {
+  if (!entityType || !entityId) {
+    return "-";
+  }
+  return `${humanize(entityType)} #${entityId}`;
+}
+
 function statusBadge(status: string) {
   const className =
     ["active", "paid", "cleared", "approved", "finalized", "sent", "not_payable"].includes(status)
       ? "border-green-500/20 bg-green-500/10 text-green-700"
-      : ["pending", "draft", "reviewed", "received", "partially_paid", "outflow"].includes(status)
+      : ["pending", "draft", "reviewed", "received", "partially_paid", "outflow", "needs_attention"].includes(status)
         ? "border-blue-500/20 bg-blue-500/10 text-blue-700"
         : ["disputed", "failed", "missing", "trial", "paused", "mixed", "overpaid"].includes(status)
           ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-700"
