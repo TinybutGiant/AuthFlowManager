@@ -2,6 +2,7 @@
   "name": "authflowmanager-v2",
   "main": "server/worker.ts",
   "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist/public",
     "not_found_handling": "single-page-application",

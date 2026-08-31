@@ -1,4 +1,7 @@
 import { v2RouteModules } from "./routes";
+import { checkAuthflowDatabaseHealth } from "./db/authflow";
+import { checkMainDatabaseHealth } from "./db/main";
+import type { WorkerV2Env } from "./db/types";
 
 type JsonBody = Record<string, unknown> | Record<string, unknown>[];
 
@@ -33,7 +36,10 @@ function methodNotAllowed(allowed: string[]) {
   );
 }
 
-export async function handleV2Request(request: Request): Promise<Response> {
+export async function handleV2Request(
+  request: Request,
+  env: WorkerV2Env = {},
+): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.pathname === "/api/health") {
@@ -62,6 +68,30 @@ export async function handleV2Request(request: Request): Promise<Response> {
         routeCount: routeModule.routes.length,
       })),
     });
+  }
+
+  if (url.pathname === "/api/v2/db-health") {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return methodNotAllowed(["GET", "HEAD"]);
+    }
+
+    const [authflow, main] = await Promise.all([
+      checkAuthflowDatabaseHealth(env),
+      checkMainDatabaseHealth(env),
+    ]);
+    const ok = authflow.ok && main.ok;
+
+    return json(
+      {
+        status: ok ? "ok" : "error",
+        endpoint: "temporary-internal-db-health",
+        databases: {
+          authflow,
+          main,
+        },
+      },
+      { status: ok ? 200 : 503 },
+    );
   }
 
   if (url.pathname.startsWith("/api/")) {
