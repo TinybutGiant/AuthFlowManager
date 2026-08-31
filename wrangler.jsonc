@@ -9,6 +9,16 @@
     "binding": "ASSETS",
     "run_worker_first": ["/api/*"]
   },
+  "hyperdrive": [
+    {
+      "binding": "AUTHFLOW_DB",
+      "id": "830ccad3f0d7415280def2d2ec59e6fd"
+    },
+    {
+      "binding": "MAIN_DB",
+      "id": "f5cb2e058454400a967a5c0f1ad0462b"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
