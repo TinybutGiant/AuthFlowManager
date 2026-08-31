@@ -24,6 +24,9 @@ Preferred communication style: Simple, everyday language.
 
 ## Database Design
 - **ORM**: Drizzle with PostgreSQL dialect for schema definition and migrations
+- **Migration Runner**: `npm run db:migrate` uses a dedicated `schema_migrations` ledger, canonical SHA-256 checksums, a PostgreSQL advisory lock, and one transaction per pending numbered migration. Already-ledgered migrations are skipped and checksum mismatches fail closed.
+- **Migration Adoption**: Pre-ledger databases must be adopted explicitly with `npm run db:migrate:adopt` after repository-owned schema fingerprints prove a contiguous migration prefix. Adopted historical rows use `application_mode = adopted`; migrations actually executed by the new runner use `application_mode = applied`.
+- **Baseline Dump**: `db_dump.sql` contains legacy table data, including user/session/authentication-related rows, so it is not an automated bootstrap artifact. New-environment baseline automation requires a sanitized baseline first; routine migrations do not execute `db_dump.sql`.
 - **Schema Structure**: 
   - `adminUsers` table for admin-specific data with role and status fields
   - `adminUserApprovals` table for approval workflow management
@@ -46,7 +49,7 @@ Preferred communication style: Simple, everyday language.
 - **Internal Payroll Routes**: Super-admin-only Payroll APIs expose payroll runs, worker result snapshots, controlled result lines, employee payment records, lifecycle transitions, correction runs, and external references. Payroll stores externally calculated or manually entered payroll facts; correction runs are replacement snapshots in a single successor chain, overview totals use effective finalized snapshots, and settled paid amounts come from cleared payments only. Payroll does not calculate payroll, execute ACH, or generate Tax-domain liabilities/payments/filings.
 - **Internal Personnel Routes**: Admin Personnel APIs expose workers, employment records, compensation terms, payroll participation setup, and super-admin-only Work Authorization tracking through deliberate DTOs.
 - **Internal Tax Routes**: Super-admin-only Tax APIs expose agencies, legal-entity registrations, recognized liability facts, adjustments, agency payments, payment allocations, tax-scoped reconciliation exceptions, filings, amendments, and external references through deliberate DTOs. Tax records externally calculated or manually entered tax facts; cleared agency payment allocations drive derived settlement, while submitted allocations remain in flight. Tax does not calculate payroll tax, generate liabilities from Payroll, sync providers, ingest bank feeds, or file returns electronically.
-- **Migration Gate**: Local commits may be made after static and unit verification, but the migration chain through the latest Finance/Personnel/Payroll/Tax migration must be applied on disposable or staging PostgreSQL before any production migration.
+- **Migration Gate**: Local commits may be made after static and unit verification, but the migration chain through the latest Finance/Personnel/Payroll/Tax migration must be applied on disposable or staging PostgreSQL before any production migration. Production/staging deploys must have a valid migration ledger and must not use routine CI/CD for automatic adoption.
 
 ## Frontend-Backend Integration
 - **API Client**: Custom fetch wrapper with bearer-token handling and error management
