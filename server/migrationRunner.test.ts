@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createPostgresPool } from "./db-client";
 import {
   canonicalSqlSha256,
   MigrationRunnerError,
@@ -19,6 +20,131 @@ function migration(filename: string, sql: string): MigrationFile {
     checksumSha256: canonicalSqlSha256(sql),
     sql,
   };
+}
+
+const POSTGRES_TEST_DATABASE_URL = process.env.MIGRATION_RUNNER_TEST_DATABASE_URL;
+
+function assertDisposablePostgresTestUrl(connectionString: string) {
+  let databaseName = "";
+  try {
+    const parsed = new URL(connectionString.replace(/^postgres:\/\//, "postgresql://"));
+    databaseName = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+  } catch {
+    throw new Error("MIGRATION_RUNNER_TEST_DATABASE_URL must be a valid PostgreSQL URL.");
+  }
+
+  if (!/(test|tmp|scratch|disposable|codex)/i.test(databaseName)) {
+    throw new Error(
+      "MIGRATION_RUNNER_TEST_DATABASE_URL must point to a disposable database whose name contains test, tmp, scratch, disposable, or codex.",
+    );
+  }
+}
+
+function quoteIdentifier(identifier: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+    throw new Error(`Unsafe PostgreSQL identifier: ${identifier}`);
+  }
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+async function withMigrationClient<T>(pool: MigrationPool, callback: (client: MigrationDbClient) => Promise<T>) {
+  const client = await pool.connect();
+  try {
+    return await callback(client);
+  } finally {
+    client.release?.();
+  }
+}
+
+async function ensurePostgresRole(client: MigrationDbClient, roleName: string) {
+  const existing = await client.query<{ exists: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AS exists`,
+    [roleName],
+  );
+  if (existing.rows[0]?.exists) return false;
+
+  await client.query(`CREATE ROLE ${quoteIdentifier(roleName)}`);
+  return true;
+}
+
+async function readPostgresLedgerRows(pool: MigrationPool) {
+  return withMigrationClient(pool, async (client) => {
+    const result = await client.query<MigrationLedgerRow>(
+      `
+        SELECT "filename", "checksum_sha256", "applied_at", "execution_ms", "application_mode"
+        FROM public."schema_migrations"
+        ORDER BY "filename"
+      `,
+    );
+    return result.rows.map((row) => ({
+      ...row,
+      applied_at: row.applied_at instanceof Date ? row.applied_at.toISOString() : row.applied_at,
+    }));
+  });
+}
+
+async function readPostgresLedgerSecurity(pool: MigrationPool) {
+  return withMigrationClient(pool, async (client) => {
+    const result = await client.query<{ rls_enabled: boolean; force_rls: boolean }>(
+      `
+        SELECT c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'schema_migrations'
+      `,
+    );
+    return result.rows[0];
+  });
+}
+
+async function readPostgresLedgerPolicyCount(pool: MigrationPool) {
+  return withMigrationClient(pool, async (client) => {
+    const result = await client.query<{ policy_count: number }>(
+      `
+        SELECT count(*)::integer AS policy_count
+        FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'schema_migrations'
+      `,
+    );
+    return result.rows[0]?.policy_count ?? 0;
+  });
+}
+
+async function readPostgresRoleTablePrivileges(pool: MigrationPool, roleName: string) {
+  return withMigrationClient(pool, async (client) => {
+    const result = await client.query<{
+      can_select: boolean;
+      can_insert: boolean;
+      can_update: boolean;
+      can_delete: boolean;
+    }>(
+      `
+        SELECT
+          has_table_privilege($1, 'public.schema_migrations', 'SELECT') AS can_select,
+          has_table_privilege($1, 'public.schema_migrations', 'INSERT') AS can_insert,
+          has_table_privilege($1, 'public.schema_migrations', 'UPDATE') AS can_update,
+          has_table_privilege($1, 'public.schema_migrations', 'DELETE') AS can_delete
+      `,
+      [roleName],
+    );
+    return result.rows[0];
+  });
+}
+
+async function assertRoleCannotReadPostgresLedger(pool: MigrationPool, roleName: string) {
+  await withMigrationClient(pool, async (client) => {
+    await client.query(`SET ROLE ${quoteIdentifier(roleName)}`);
+    try {
+      await assert.rejects(
+        client.query(`SELECT "filename" FROM public."schema_migrations" LIMIT 1`),
+        /permission denied|insufficient privilege/i,
+      );
+    } finally {
+      await client.query("RESET ROLE");
+    }
+  });
 }
 
 class AsyncLock {
@@ -51,6 +177,8 @@ type FakeTransaction = {
 
 class FakeMigrationDatabase implements MigrationPool {
   ledgerExists = true;
+  ledgerRlsEnabled = false;
+  revokedLedgerClientRoles: string[] = [];
   applicationTablesPresent = false;
   ledgerRows: MigrationLedgerRow[] = [];
   committedStatements: string[] = [];
@@ -106,6 +234,16 @@ class FakeMigrationClient implements MigrationDbClient {
 
     if (normalized.startsWith("CREATE TABLE IF NOT EXISTS \"schema_migrations\"")) {
       this.db.ledgerExists = true;
+      return { rows: [] as T[], rowCount: 0 };
+    }
+
+    if (
+      normalized.startsWith('ALTER TABLE public."schema_migrations" ENABLE ROW LEVEL SECURITY;') &&
+      normalized.includes('REVOKE ALL ON TABLE public."schema_migrations" FROM anon') &&
+      normalized.includes('REVOKE ALL ON TABLE public."schema_migrations" FROM authenticated')
+    ) {
+      this.db.ledgerRlsEnabled = true;
+      this.db.revokedLedgerClientRoles = ["anon", "authenticated"];
       return { rows: [] as T[], rowCount: 0 };
     }
 
@@ -243,6 +381,28 @@ test("second ledger run skips already-ledgered migrations", async () => {
   assert.equal(db.committedStatements.length, 1);
 });
 
+test("existing ledger is hardened without changing ledger rows", async () => {
+  const db = new FakeMigrationDatabase();
+  const first = migration("0001_first.sql", "CREATE TABLE first_table (id integer);");
+  db.ledgerRows.push({
+    filename: first.filename,
+    checksum_sha256: first.checksumSha256,
+    applied_at: new Date("2026-01-01T00:00:00.000Z").toISOString(),
+    execution_ms: 5,
+    application_mode: "applied",
+  });
+  const beforeRows = db.ledgerRows.map((row) => ({ ...row }));
+
+  const result = await runMigrations(db, [first]);
+
+  assert.deepEqual(result.skipped, ["0001_first.sql"]);
+  assert.deepEqual(result.applied, []);
+  assert.equal(db.ledgerRlsEnabled, true);
+  assert.deepEqual(db.revokedLedgerClientRoles, ["anon", "authenticated"]);
+  assert.deepEqual(db.ledgerRows, beforeRows);
+  assert.deepEqual(db.committedStatements, []);
+});
+
 test("modified historical migration checksum fails closed", async () => {
   const db = new FakeMigrationDatabase();
   const original = migration("0001_first.sql", "CREATE TABLE first_table (id integer);");
@@ -324,3 +484,95 @@ test("concurrent migration runners are serialized by advisory lock", async () =>
   assert.deepEqual(db.lockReleaseOrder, [1, 2]);
   assert.deepEqual(db.committedStatements, [slow.sql]);
 });
+
+test(
+  "PostgreSQL ledger hardening preserves runner access and blocks client roles",
+  {
+    skip: POSTGRES_TEST_DATABASE_URL
+      ? false
+      : "Set MIGRATION_RUNNER_TEST_DATABASE_URL to a disposable PostgreSQL database to run.",
+  },
+  async () => {
+    assert.ok(POSTGRES_TEST_DATABASE_URL);
+    assertDisposablePostgresTestUrl(POSTGRES_TEST_DATABASE_URL);
+
+    const pool = createPostgresPool(POSTGRES_TEST_DATABASE_URL, {
+      sslEnvNames: ["MIGRATION_RUNNER_TEST_DB_SSL", "DB_SSL"],
+    });
+    const createdRoles: string[] = [];
+
+    try {
+      await withMigrationClient(pool, async (client) => {
+        await client.query(`DROP TABLE IF EXISTS public."migration_runner_second"`);
+        await client.query(`DROP TABLE IF EXISTS public."migration_runner_first"`);
+        await client.query(`DROP TABLE IF EXISTS public."schema_migrations"`);
+        for (const roleName of ["anon", "authenticated"]) {
+          if (await ensurePostgresRole(client, roleName)) {
+            createdRoles.push(roleName);
+          }
+        }
+      });
+
+      const first = migration(
+        "0001_ledger_security_first.sql",
+        `CREATE TABLE public."migration_runner_first" ("id" integer PRIMARY KEY);`,
+      );
+      const second = migration(
+        "0002_ledger_security_second.sql",
+        `CREATE TABLE public."migration_runner_second" ("id" integer PRIMARY KEY);`,
+      );
+
+      const firstRun = await runMigrations(pool, [first]);
+      assert.deepEqual(firstRun.applied, [first.filename]);
+
+      const rowsAfterFirstRun = await readPostgresLedgerRows(pool);
+      assert.equal(rowsAfterFirstRun.length, 1);
+      assert.equal(rowsAfterFirstRun[0]?.filename, first.filename);
+      assert.equal(rowsAfterFirstRun[0]?.checksum_sha256, first.checksumSha256);
+      assert.equal(rowsAfterFirstRun[0]?.application_mode, "applied");
+
+      assert.deepEqual(await readPostgresLedgerSecurity(pool), {
+        rls_enabled: true,
+        force_rls: false,
+      });
+      assert.equal(await readPostgresLedgerPolicyCount(pool), 0);
+      assert.deepEqual(await readPostgresRoleTablePrivileges(pool, "anon"), {
+        can_select: false,
+        can_insert: false,
+        can_update: false,
+        can_delete: false,
+      });
+      assert.deepEqual(await readPostgresRoleTablePrivileges(pool, "authenticated"), {
+        can_select: false,
+        can_insert: false,
+        can_update: false,
+        can_delete: false,
+      });
+      await assertRoleCannotReadPostgresLedger(pool, "anon");
+      await assertRoleCannotReadPostgresLedger(pool, "authenticated");
+
+      const secondRunWithSameSet = await runMigrations(pool, [first]);
+      assert.deepEqual(secondRunWithSameSet.applied, []);
+      assert.deepEqual(await readPostgresLedgerRows(pool), rowsAfterFirstRun);
+
+      const secondRunWithNewMigration = await runMigrations(pool, [first, second]);
+      assert.deepEqual(secondRunWithNewMigration.applied, [second.filename]);
+      const rowsAfterSecondRun = await readPostgresLedgerRows(pool);
+      assert.deepEqual(rowsAfterSecondRun[0], rowsAfterFirstRun[0]);
+      assert.equal(rowsAfterSecondRun[1]?.filename, second.filename);
+      assert.equal(rowsAfterSecondRun[1]?.checksum_sha256, second.checksumSha256);
+      assert.equal(rowsAfterSecondRun[1]?.application_mode, "applied");
+    } finally {
+      await withMigrationClient(pool, async (client) => {
+        await client.query(`DROP TABLE IF EXISTS public."migration_runner_second"`);
+        await client.query(`DROP TABLE IF EXISTS public."migration_runner_first"`);
+        await client.query(`DROP TABLE IF EXISTS public."schema_migrations"`);
+        for (const roleName of [...createdRoles].reverse()) {
+          await client.query(`DROP ROLE IF EXISTS ${quoteIdentifier(roleName)}`);
+        }
+      }).finally(async () => {
+        await pool.end?.();
+      });
+    }
+  },
+);

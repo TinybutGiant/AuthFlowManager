@@ -124,6 +124,22 @@ CREATE TABLE IF NOT EXISTS "schema_migrations" (
 );
 `;
 
+const LEDGER_HARDENING_SQL = `
+ALTER TABLE public."schema_migrations" ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE ALL ON TABLE public."schema_migrations" FROM anon;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    REVOKE ALL ON TABLE public."schema_migrations" FROM authenticated;
+  END IF;
+END
+$$;
+`;
+
 type LedgerAnalysis = {
   ledgeredMigrations: string[];
   skipped: string[];
@@ -248,6 +264,11 @@ async function ledgerTableExists(client: MigrationDbClient) {
 
 async function ensureLedgerTable(client: MigrationDbClient) {
   await client.query(LEDGER_SQL);
+  await hardenLedgerTable(client);
+}
+
+async function hardenLedgerTable(client: MigrationDbClient) {
+  await client.query(LEDGER_HARDENING_SQL);
 }
 
 async function readLedgerRows(client: MigrationDbClient) {
@@ -420,6 +441,8 @@ export async function runMigrations(pool: MigrationPool, migrations: MigrationFi
         ].join(" "),
       );
     }
+
+    await hardenLedgerTable(client);
 
     const rows = await readLedgerRows(client);
     if (rows.length === 0 && await publicSchemaHasApplicationTables(client)) {
