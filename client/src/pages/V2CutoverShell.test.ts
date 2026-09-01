@@ -98,16 +98,17 @@ test("V2 navigation exposes only migrated modules from effective permissions", (
   assert.match(accessSource, /permission: "admin_operations"/);
   assert.match(accessSource, /permission: "finance_admin"/);
   assert.match(accessSource, /permission: "payroll_admin"/);
+  assert.match(accessSource, /permission: "tax_admin"/);
   assert.match(accessSource, /permission: "verifier_admin"/);
   assert.match(accessSource, /permissions\.includes\("super_admin"\)/);
   assert.doesNotMatch(accessSource, /role\s*===|allowedRoles|ROLE_PERMISSIONS/);
 
-  for (const path of ["/v2/staff", "/v2/finance", "/v2/payroll", "/v2/verifier"]) {
+  for (const path of ["/v2/staff", "/v2/finance", "/v2/payroll", "/v2/tax", "/v2/verifier"]) {
     assert.match(combinedV2ShellSource, new RegExp(path.replace(/\//g, "\\/")));
   }
 
   assert.doesNotMatch(
     `${shellSource}\n${homeSource}\n${accessSource}`,
-    /\/admin-management|\/finance-management|\/verifier-management|tax|support|documents|lifecycle/i,
+    /\/admin-management|\/finance-management|\/verifier-management|support|documents|lifecycle/i,
   );
 });

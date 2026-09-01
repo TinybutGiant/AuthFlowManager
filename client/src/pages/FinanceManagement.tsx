@@ -61,7 +61,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import FinanceTaxPanel from "./FinanceTaxPanel";
+import FinanceTaxPanel, { type TaxRequestJson } from "./FinanceTaxPanel";
 
 type FinanceSection = "overview" | "expenses" | "subscriptions" | "vendors" | "payroll" | "tax";
 
@@ -602,6 +602,14 @@ const payrollLineCategories = ["earning", "deduction", "employee_tax", "employer
 const payrollAmountEffects = ["increase", "decrease"] as const;
 const payrollPaymentMethods = ["payroll_provider", "ach", "check", "manual", "other"] as const;
 const payrollPaymentInitialStatuses = ["pending", "sent", "cleared", "failed"] as const;
+
+const legacyTaxRequestJson: TaxRequestJson = async (method, url, body) => {
+  const response = await apiRequest(method, url, body);
+  if (response.status === 204) {
+    return undefined;
+  }
+  return await response.json();
+};
 
 export default function FinanceManagement() {
   const [location] = useLocation();
@@ -1309,7 +1317,13 @@ export default function FinanceManagement() {
         />
       )}
 
-      {isSuperAdmin && selectedSection === "tax" && <FinanceTaxPanel />}
+      {isSuperAdmin && selectedSection === "tax" && (
+        <FinanceTaxPanel
+          apiBase="/api/admin/finance/tax"
+          requestJson={legacyTaxRequestJson}
+          getErrorMessage={getApiErrorMessage}
+        />
+      )}
 
       <VendorDialog
         state={vendorDialog}

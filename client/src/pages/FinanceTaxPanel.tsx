@@ -47,7 +47,20 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, getApiErrorMessage } from "@/lib/queryClient";
+
+export type TaxRequestJson = <T = unknown>(
+  method: string,
+  url: string,
+  body?: unknown,
+) => Promise<T>;
+
+type TaxErrorMessageFormatter = (error: unknown, fallback: string) => string;
+
+type FinanceTaxPanelProps = {
+  apiBase: string;
+  requestJson: TaxRequestJson;
+  getErrorMessage?: TaxErrorMessageFormatter;
+};
 
 type TaxLegalEntity = {
   id: number;
@@ -330,7 +343,6 @@ type TaxMutationRequest = {
   onSuccess?: () => void;
 };
 
-const taxQueryPrefix = "/api/admin/finance/tax";
 const taxAgencyStatuses = ["active", "inactive"] as const;
 const taxRegistrationStatuses = ["pending", "active"] as const;
 const taxJurisdictionTypes = ["federal", "state", "local", "foreign", "other"] as const;
@@ -379,7 +391,16 @@ const taxReconciliationReasons = [
   "other_tax_discrepancy",
 ] as const;
 
-export default function FinanceTaxPanel() {
+function defaultTaxErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+export default function FinanceTaxPanel({
+  apiBase,
+  requestJson,
+  getErrorMessage = defaultTaxErrorMessage,
+}: FinanceTaxPanelProps) {
+  const taxQueryPrefix = apiBase.replace(/\/+$/, "");
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [agencyDialog, setAgencyDialog] = React.useState<TaxAgencyDialogState | null>(null);
@@ -392,46 +413,54 @@ export default function FinanceTaxPanel() {
 
   const overviewQuery = useQuery<TaxOverview>({
     queryKey: [`${taxQueryPrefix}/overview`],
+    queryFn: () => requestJson<TaxOverview>("GET", `${taxQueryPrefix}/overview`),
   });
   const legalEntitiesQuery = useQuery<TaxLegalEntity[]>({
     queryKey: [`${taxQueryPrefix}/legal-entities`],
+    queryFn: () => requestJson<TaxLegalEntity[]>("GET", `${taxQueryPrefix}/legal-entities`),
   });
   const agenciesQuery = useQuery<TaxAgency[]>({
     queryKey: [`${taxQueryPrefix}/agencies?pageSize=100`],
+    queryFn: () => requestJson<TaxAgency[]>("GET", `${taxQueryPrefix}/agencies?pageSize=100`),
   });
   const registrationsQuery = useQuery<TaxRegistration[]>({
     queryKey: [`${taxQueryPrefix}/registrations?pageSize=100`],
+    queryFn: () => requestJson<TaxRegistration[]>("GET", `${taxQueryPrefix}/registrations?pageSize=100`),
   });
   const liabilitiesQuery = useQuery<TaxLiability[]>({
     queryKey: [`${taxQueryPrefix}/liabilities?pageSize=100`],
+    queryFn: () => requestJson<TaxLiability[]>("GET", `${taxQueryPrefix}/liabilities?pageSize=100`),
   });
   const paymentsQuery = useQuery<TaxPayment[]>({
     queryKey: [`${taxQueryPrefix}/payments?pageSize=100`],
+    queryFn: () => requestJson<TaxPayment[]>("GET", `${taxQueryPrefix}/payments?pageSize=100`),
   });
   const allocationsQuery = useQuery<TaxPaymentAllocation[]>({
     queryKey: [`${taxQueryPrefix}/payment-allocations?pageSize=100`],
+    queryFn: () => requestJson<TaxPaymentAllocation[]>("GET", `${taxQueryPrefix}/payment-allocations?pageSize=100`),
   });
   const filingsQuery = useQuery<TaxFiling[]>({
     queryKey: [`${taxQueryPrefix}/filings?pageSize=100`],
+    queryFn: () => requestJson<TaxFiling[]>("GET", `${taxQueryPrefix}/filings?pageSize=100`),
   });
   const reconciliationQuery = useQuery<TaxReconciliationException[]>({
     queryKey: [`${taxQueryPrefix}/reconciliation-exceptions?pageSize=100`],
+    queryFn: () => requestJson<TaxReconciliationException[]>("GET", `${taxQueryPrefix}/reconciliation-exceptions?pageSize=100`),
   });
 
   const taxMutation = useMutation({
     mutationFn: async (request: TaxMutationRequest) => {
-      const response = await apiRequest(request.method, request.url, request.body);
-      return response.json();
+      return requestJson(request.method, request.url, request.body);
     },
     onSuccess: async (_data, request) => {
       request.onSuccess?.();
-      await invalidateTaxQueries(queryClient);
+      await invalidateTaxQueries(queryClient, taxQueryPrefix);
       toast({ title: request.successTitle });
     },
     onError: (error) => {
       toast({
         title: "Tax update failed",
-        description: getApiErrorMessage(error, "The tax record was not updated."),
+        description: getErrorMessage(error, "The tax record was not updated."),
         variant: "destructive",
       });
     },
@@ -2779,7 +2808,7 @@ function compactPayload<T extends Record<string, unknown>>(value: T) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
-async function invalidateTaxQueries(queryClient: QueryClient) {
+async function invalidateTaxQueries(queryClient: QueryClient, taxQueryPrefix: string) {
   await queryClient.invalidateQueries({
     predicate: (query) => {
       const key = query.queryKey[0];

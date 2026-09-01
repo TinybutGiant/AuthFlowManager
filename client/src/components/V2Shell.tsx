@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { BadgeCheck, Home, ReceiptText, Users, WalletCards } from "lucide-react";
+import { BadgeCheck, Home, Landmark, ReceiptText, Users, WalletCards } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +15,7 @@ const moduleIcons: Record<V2ModuleKey, LucideIcon> = {
   staff: Users,
   finance: ReceiptText,
   payroll: WalletCards,
+  tax: Landmark,
   verifier: BadgeCheck,
 };
 

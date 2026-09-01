@@ -7,6 +7,7 @@ export type AdminAccessGroup =
   | 'super_admin'
   | 'admin_operations'
   | 'payroll_admin'
+  | 'tax_admin'
   | 'trainee_offer_portal'
   | 'trainee_workspace'
   | 'document_templates'

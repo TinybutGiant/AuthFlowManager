@@ -7,6 +7,7 @@ export const EXISTING_ADMIN_ACCESS_GROUPS = [
   "super_admin",
   "admin_operations",
   "payroll_admin",
+  "tax_admin",
   "trainee_offer_portal",
   "trainee_workspace",
   "document_templates",
@@ -18,6 +19,7 @@ export const V2_STAFF_ASSIGNABLE_ACCESS_GROUPS = [
   "admin_operations",
   "finance_admin",
   "payroll_admin",
+  "tax_admin",
   "verifier_admin",
 ] as const satisfies readonly AdminAccessGroup[];
 

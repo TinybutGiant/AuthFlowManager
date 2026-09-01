@@ -2,6 +2,7 @@ import { v2RouteModules } from "./routes";
 import { handleFinanceRoute } from "./routes/finance";
 import { handlePayrollRoute } from "./routes/payroll";
 import { handleStaffRoute } from "./routes/staff";
+import { handleTaxRoute } from "./routes/tax";
 import { handleVerifierRoute } from "./routes/verifier";
 import {
   publicStaffAuthFailure,
@@ -120,6 +121,13 @@ export async function handleV2Request(
     url.pathname.startsWith("/api/v2/payroll/")
   ) {
     return await handlePayrollRoute(request, env, ctx);
+  }
+
+  if (
+    url.pathname === "/api/v2/tax" ||
+    url.pathname.startsWith("/api/v2/tax/")
+  ) {
+    return await handleTaxRoute(request, env, ctx);
   }
 
   if (

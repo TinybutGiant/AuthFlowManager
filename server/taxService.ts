@@ -27,10 +27,10 @@ import type {
   Vendor,
 } from "@shared/schema";
 import {
-  FinanceDomainValidationError,
   deriveTaxLiabilityNetAmountCents,
+  TaxDomainValidationError,
   validateTaxFilingAmendment,
-} from "./financeDomainValidation";
+} from "./taxDomainValidation";
 
 export class TaxServiceError extends Error {
   constructor(
@@ -51,7 +51,7 @@ function runFinanceDomainValidation(work: () => void) {
   try {
     work();
   } catch (error) {
-    if (error instanceof FinanceDomainValidationError) {
+    if (error instanceof TaxDomainValidationError) {
       fail(400, error.code, error.message);
     }
     throw error;
@@ -1102,10 +1102,8 @@ async function taxRegistrationResponse(
   today: string,
 ): Promise<TaxRegistrationResponse | null> {
   if (!registration) return null;
-  const [entity, agency] = await Promise.all([
-    repo.getLegalEntity(registration.legalEntityId),
-    repo.getTaxAgency(registration.taxAgencyId),
-  ]);
+  const entity = await repo.getLegalEntity(registration.legalEntityId);
+  const agency = await repo.getTaxAgency(registration.taxAgencyId);
   return {
     id: registration.id,
     legalEntityId: registration.legalEntityId,
@@ -1274,12 +1272,16 @@ async function taxLiabilityResponse(
   today: string,
   includeDetail = false,
 ): Promise<TaxLiabilityResponse> {
-  const [registration, adjustments, allocationRows, externalRefs] = await Promise.all([
-    repo.getTaxRegistration(liability.taxRegistrationId),
-    liability.adjustsTaxLiabilityId ? Promise.resolve([]) : repo.listTaxLiabilityAdjustments(liability.id),
-    liability.adjustsTaxLiabilityId ? Promise.resolve([]) : repo.listTaxPaymentAllocations({ taxLiabilityId: liability.id }),
-    includeDetail ? repo.listExternalRecordRefsForEntity("tax_liabilities", liability.id) : Promise.resolve([]),
-  ]);
+  const registration = await repo.getTaxRegistration(liability.taxRegistrationId);
+  const adjustments = liability.adjustsTaxLiabilityId
+    ? []
+    : await repo.listTaxLiabilityAdjustments(liability.id);
+  const allocationRows = liability.adjustsTaxLiabilityId
+    ? []
+    : await repo.listTaxPaymentAllocations({ taxLiabilityId: liability.id });
+  const externalRefs = includeDetail
+    ? await repo.listExternalRecordRefsForEntity("tax_liabilities", liability.id)
+    : [];
   const paymentsById = await taxPaymentMapForAllocations(repo, allocationRows);
   const settlement = liability.adjustsTaxLiabilityId
     ? {
@@ -1297,9 +1299,13 @@ async function taxLiabilityResponse(
         allocations: allocationRows,
         paymentsById,
       });
-  const childResponses = includeDetail
-    ? await Promise.all(adjustments.map((adjustment) => taxLiabilityResponse(repo, adjustment, today, false)))
-    : undefined;
+  let childResponses: TaxLiabilityResponse[] | undefined;
+  if (includeDetail) {
+    childResponses = [];
+    for (const adjustment of adjustments) {
+      childResponses.push(await taxLiabilityResponse(repo, adjustment, today, false));
+    }
+  }
   return {
     id: liability.id,
     taxRegistrationId: liability.taxRegistrationId,
@@ -1340,10 +1346,10 @@ async function taxFilingResponse(
   today: string,
   includeDetail = false,
 ): Promise<TaxFilingResponse> {
-  const [registration, externalRefs] = await Promise.all([
-    repo.getTaxRegistration(filing.taxRegistrationId),
-    includeDetail ? repo.listExternalRecordRefsForEntity("tax_filings", filing.id) : Promise.resolve([]),
-  ]);
+  const registration = await repo.getTaxRegistration(filing.taxRegistrationId);
+  const externalRefs = includeDetail
+    ? await repo.listExternalRecordRefsForEntity("tax_filings", filing.id)
+    : [];
   return {
     id: filing.id,
     taxRegistrationId: filing.taxRegistrationId,
@@ -1371,11 +1377,11 @@ async function taxAgencyPaymentResponse(
   today: string,
   includeDetail = false,
 ): Promise<TaxAgencyPaymentResponse> {
-  const [registration, allocations, externalRefs] = await Promise.all([
-    repo.getTaxRegistration(payment.taxRegistrationId),
-    repo.listTaxPaymentAllocations({ taxAgencyPaymentId: payment.id }),
-    includeDetail ? repo.listExternalRecordRefsForEntity("tax_agency_payments", payment.id) : Promise.resolve([]),
-  ]);
+  const registration = await repo.getTaxRegistration(payment.taxRegistrationId);
+  const allocations = await repo.listTaxPaymentAllocations({ taxAgencyPaymentId: payment.id });
+  const externalRefs = includeDetail
+    ? await repo.listExternalRecordRefsForEntity("tax_agency_payments", payment.id)
+    : [];
   const allocationSummary = deriveTaxAgencyPaymentAllocationSummary(payment, allocations);
   return {
     id: payment.id,
@@ -2661,11 +2667,17 @@ export async function applyTaxPaymentAllocation(
 
     const payment = assertTaxAgencyPaymentExists(await tx.getTaxAgencyPayment(input.taxAgencyPaymentId), input.taxAgencyPaymentId);
     const liability = assertTaxLiabilityExists(await tx.getTaxLiability(input.taxLiabilityId), input.taxLiabilityId);
-    const [adjustments, paymentAllocations, liabilityAllocations] = await Promise.all([
-      liability.adjustsTaxLiabilityId ? Promise.resolve([]) : tx.listTaxLiabilityAdjustments(liability.id),
-      tx.listTaxPaymentAllocations({ taxAgencyPaymentId: payment.id, status: "active" }),
-      tx.listTaxPaymentAllocations({ taxLiabilityId: liability.id, status: "active" }),
-    ]);
+    const adjustments = liability.adjustsTaxLiabilityId
+      ? []
+      : await tx.listTaxLiabilityAdjustments(liability.id);
+    const paymentAllocations = await tx.listTaxPaymentAllocations({
+      taxAgencyPaymentId: payment.id,
+      status: "active",
+    });
+    const liabilityAllocations = await tx.listTaxPaymentAllocations({
+      taxLiabilityId: liability.id,
+      status: "active",
+    });
     const liabilityAllocationPaymentsById = await taxPaymentMapForAllocations(tx, liabilityAllocations);
     assertTaxPaymentAllocationTarget({
       liability,

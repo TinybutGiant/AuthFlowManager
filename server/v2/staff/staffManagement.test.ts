@@ -170,13 +170,13 @@ test("authorized manager can create, update, activate, and suspend staff", async
     name: "  Jane   Staff  ",
     email: "  JANE.STAFF@EXAMPLE.COM  ",
     role: "admin_verifier",
-    accessGroups: ["verifier_admin", "finance_admin", "verifier_admin"],
+    accessGroups: ["verifier_admin", "finance_admin", "tax_admin", "verifier_admin"],
   });
 
   assert.equal(created.name, "Jane Staff");
   assert.equal(created.email, "jane.staff@example.com");
   assert.equal(created.status, "inactive");
-  assert.deepEqual(created.accessGroups, ["verifier_admin", "finance_admin"]);
+  assert.deepEqual(created.accessGroups, ["verifier_admin", "finance_admin", "tax_admin"]);
 
   const updated = await updateManagedStaff(
     repository,
@@ -291,10 +291,10 @@ test("V2 grant replacement revokes only assignable grants and preserves legacy g
     repository,
     principal(),
     2,
-    ["finance_admin", "payroll_admin"],
+    ["finance_admin", "payroll_admin", "tax_admin"],
   );
 
-  assert.deepEqual(updated.accessGroups, ["support_admin", "finance_admin", "payroll_admin"]);
+  assert.deepEqual(updated.accessGroups, ["support_admin", "finance_admin", "payroll_admin", "tax_admin"]);
 });
 
 test("self-lockout protection blocks self-suspension and removing own management grants", async () => {

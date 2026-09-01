@@ -12,7 +12,7 @@ export type V2AuthMeResponse = {
   staff: StaffPrincipal;
 };
 
-export type V2ModuleKey = "staff" | "finance" | "payroll" | "verifier";
+export type V2ModuleKey = "staff" | "finance" | "payroll" | "tax" | "verifier";
 
 export type V2ModuleDefinition = {
   key: V2ModuleKey;
@@ -39,6 +39,12 @@ export const V2_MODULES: V2ModuleDefinition[] = [
     label: "Payroll",
     path: "/v2/payroll",
     permission: "payroll_admin",
+  },
+  {
+    key: "tax",
+    label: "Tax",
+    path: "/v2/tax",
+    permission: "tax_admin",
   },
   {
     key: "verifier",

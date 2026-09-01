@@ -36,6 +36,7 @@ import TravelerWaitlist from "@/pages/TravelerWaitlist";
 import FeedbackMeetingSlots from "@/pages/FeedbackMeetingSlots";
 import V2FinanceManagement from "@/pages/V2FinanceManagement";
 import V2PayrollManagement from "@/pages/V2PayrollManagement";
+import V2TaxManagement from "@/pages/V2TaxManagement";
 import V2VerifierApplicationDetail from "@/pages/V2VerifierApplicationDetail";
 import V2VerifierManagement from "@/pages/V2VerifierManagement";
 import V2StaffManagement from "@/pages/V2StaffManagement";
@@ -325,6 +326,14 @@ function Router() {
     return (
       <V2Shell>
         <V2PayrollManagement />
+      </V2Shell>
+    );
+  }
+
+  if (location === "/v2/tax" || location.startsWith("/v2/tax/")) {
+    return (
+      <V2Shell>
+        <V2TaxManagement />
       </V2Shell>
     );
   }
