@@ -1,6 +1,7 @@
 import { v2RouteModules } from "./routes";
 import { handleFinanceRoute } from "./routes/finance";
 import { handleStaffRoute } from "./routes/staff";
+import { handleVerifierRoute } from "./routes/verifier";
 import {
   publicStaffAuthFailure,
   resolveStaffPrincipalFromAuthflow,
@@ -149,6 +150,13 @@ export async function handleV2Request(
     url.pathname.startsWith("/api/v2/finance/")
   ) {
     return await handleFinanceRoute(request, env, ctx);
+  }
+
+  if (
+    url.pathname === "/api/v2/verifier" ||
+    url.pathname.startsWith("/api/v2/verifier/")
+  ) {
+    return await handleVerifierRoute(request, env, ctx);
   }
 
   if (url.pathname.startsWith("/api/")) {

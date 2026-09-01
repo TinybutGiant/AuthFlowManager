@@ -34,6 +34,8 @@ import DocumentTemplates from "@/pages/DocumentTemplates";
 import TravelerWaitlist from "@/pages/TravelerWaitlist";
 import FeedbackMeetingSlots from "@/pages/FeedbackMeetingSlots";
 import V2FinanceManagement from "@/pages/V2FinanceManagement";
+import V2VerifierApplicationDetail from "@/pages/V2VerifierApplicationDetail";
+import V2VerifierManagement from "@/pages/V2VerifierManagement";
 import V2StaffManagement from "@/pages/V2StaffManagement";
 import NotFound from "@/pages/not-found";
 
@@ -293,6 +295,14 @@ function Router() {
 
   if (location === "/v2/staff" || location.startsWith("/v2/staff/")) {
     return <V2StaffManagement />;
+  }
+
+  if (location.startsWith("/v2/verifier/applications/")) {
+    return <V2VerifierApplicationDetail />;
+  }
+
+  if (location === "/v2/verifier" || location.startsWith("/v2/verifier/")) {
+    return <V2VerifierManagement />;
   }
 
   return <LegacyRouter />;

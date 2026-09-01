@@ -11,6 +11,11 @@ export type WorkerV2Env = {
   MAIN_DB?: HyperdriveBinding;
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  LOCALGUIDE_API_BASE_URL?: string;
+  STAFF_ASSERTION_PRIVATE_KEY?: string;
+  STAFF_ASSERTION_ISSUER?: string;
+  STAFF_ASSERTION_AUDIENCE?: string;
+  STAFF_ASSERTION_EXPIRES_IN?: string;
 };
 
 export type DatabaseHealthErrorCode =
