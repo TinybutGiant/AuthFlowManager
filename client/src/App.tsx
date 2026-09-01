@@ -33,6 +33,7 @@ import LifecycleJobs from "@/pages/LifecycleJobs";
 import DocumentTemplates from "@/pages/DocumentTemplates";
 import TravelerWaitlist from "@/pages/TravelerWaitlist";
 import FeedbackMeetingSlots from "@/pages/FeedbackMeetingSlots";
+import V2FinanceManagement from "@/pages/V2FinanceManagement";
 import V2StaffManagement from "@/pages/V2StaffManagement";
 import NotFound from "@/pages/not-found";
 
@@ -285,6 +286,10 @@ function LegacyRouter() {
 
 function Router() {
   const [location] = useLocation();
+
+  if (location === "/v2/finance" || location.startsWith("/v2/finance/")) {
+    return <V2FinanceManagement />;
+  }
 
   if (location === "/v2/staff" || location.startsWith("/v2/staff/")) {
     return <V2StaffManagement />;

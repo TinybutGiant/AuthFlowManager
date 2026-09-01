@@ -38,7 +38,7 @@ import {
   type ExpensePaymentSnapshot,
   type VendorBillSnapshot,
   type VendorBillSettlementState,
-} from "./financeDomainValidation";
+} from "./financeApDomainValidation";
 
 export class FinanceExpenseServiceError extends Error {
   constructor(
@@ -200,6 +200,7 @@ const AP_DOCUMENT_ENTITY_TYPES = [
 ] as const satisfies readonly FinanceEntityType[];
 const AP_DOCUMENT_SENSITIVITY_CLASSES = ["ordinary_finance"] as const satisfies readonly DocumentSensitivityClass[];
 
+export const financeIdParamSchema = z.coerce.number().int().positive();
 const positiveIdSchema = z.coerce.number().int().positive();
 const amountCentsSchema = z.coerce.number().int().positive();
 const optionalAmountCentsSchema = z.preprocess(
@@ -1894,11 +1895,9 @@ export async function transitionFinanceBillStatus(
     }
     const status = nextVendorBillStatus(existing, action);
     if (action === "void") {
-      const activeApplications = await Promise.all([
-        tx.listVendorBillApplications({ targetVendorBillId: billId, status: "active" }),
-        tx.listVendorBillApplications({ creditVendorBillId: billId, status: "active" }),
-      ]);
-      if (activeApplications.some(hasActiveApplications)) {
+      const activeTargetApplications = await tx.listVendorBillApplications({ targetVendorBillId: billId, status: "active" });
+      const activeCreditApplications = await tx.listVendorBillApplications({ creditVendorBillId: billId, status: "active" });
+      if ([activeTargetApplications, activeCreditApplications].some(hasActiveApplications)) {
         fail(409, "BILL_VOID_HAS_ACTIVE_APPLICATIONS", "Bills with active applications must have applications reversed before voiding.");
       }
     }
@@ -2065,12 +2064,16 @@ export async function applyFinancePaymentToBill(
     await tx.lockVendorBill(input.targetVendorBillId);
     await tx.lockExpensePayment(input.expensePaymentId);
 
-    const [targetBill, payment, existingTargetBillApplications, existingPaymentApplications] = await Promise.all([
-      tx.getVendorBill(input.targetVendorBillId),
-      tx.getExpensePayment(input.expensePaymentId),
-      tx.listVendorBillApplications({ targetVendorBillId: input.targetVendorBillId, status: "active" }),
-      tx.listVendorBillApplications({ expensePaymentId: input.expensePaymentId, status: "active" }),
-    ]);
+    const targetBill = await tx.getVendorBill(input.targetVendorBillId);
+    const payment = await tx.getExpensePayment(input.expensePaymentId);
+    const existingTargetBillApplications = await tx.listVendorBillApplications({
+      targetVendorBillId: input.targetVendorBillId,
+      status: "active",
+    });
+    const existingPaymentApplications = await tx.listVendorBillApplications({
+      expensePaymentId: input.expensePaymentId,
+      status: "active",
+    });
 
     if (!targetBill) {
       fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
@@ -2121,12 +2124,16 @@ export async function applyFinanceCreditToBill(
       await tx.lockVendorBill(billId);
     }
 
-    const [targetBill, creditBill, existingTargetBillApplications, existingCreditBillApplications] = await Promise.all([
-      tx.getVendorBill(input.targetVendorBillId),
-      tx.getVendorBill(input.creditVendorBillId),
-      tx.listVendorBillApplications({ targetVendorBillId: input.targetVendorBillId, status: "active" }),
-      tx.listVendorBillApplications({ creditVendorBillId: input.creditVendorBillId, status: "active" }),
-    ]);
+    const targetBill = await tx.getVendorBill(input.targetVendorBillId);
+    const creditBill = await tx.getVendorBill(input.creditVendorBillId);
+    const existingTargetBillApplications = await tx.listVendorBillApplications({
+      targetVendorBillId: input.targetVendorBillId,
+      status: "active",
+    });
+    const existingCreditBillApplications = await tx.listVendorBillApplications({
+      creditVendorBillId: input.creditVendorBillId,
+      status: "active",
+    });
 
     if (!targetBill) {
       fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");

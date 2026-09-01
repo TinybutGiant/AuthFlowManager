@@ -1,4 +1,5 @@
 import { v2RouteModules } from "./routes";
+import { handleFinanceRoute } from "./routes/finance";
 import { handleStaffRoute } from "./routes/staff";
 import {
   publicStaffAuthFailure,
@@ -141,6 +142,13 @@ export async function handleV2Request(
     url.pathname.startsWith("/api/v2/staff/")
   ) {
     return await handleStaffRoute(request, env, ctx);
+  }
+
+  if (
+    url.pathname === "/api/v2/finance" ||
+    url.pathname.startsWith("/api/v2/finance/")
+  ) {
+    return await handleFinanceRoute(request, env, ctx);
   }
 
   if (url.pathname.startsWith("/api/")) {
