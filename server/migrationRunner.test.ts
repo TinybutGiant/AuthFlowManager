@@ -3,6 +3,7 @@ import test from "node:test";
 import { createPostgresPool } from "./db-client";
 import {
   canonicalSqlSha256,
+  getMigrationStatus,
   MigrationRunnerError,
   parseMigrationFilename,
   runMigrations,
@@ -131,6 +132,24 @@ async function readPostgresRoleTablePrivileges(pool: MigrationPool, roleName: st
     );
     return result.rows[0];
   });
+}
+
+async function createEmptyPostgresMigrationLedger(client: MigrationDbClient) {
+  await client.query(`
+    CREATE TABLE public."schema_migrations" (
+      "filename" text PRIMARY KEY,
+      "checksum_sha256" text NOT NULL,
+      "applied_at" timestamptz NOT NULL DEFAULT now(),
+      "execution_ms" integer,
+      "application_mode" text NOT NULL,
+      CONSTRAINT "schema_migrations_checksum_sha256_check"
+        CHECK ("checksum_sha256" ~ '^[0-9a-f]{64}$'),
+      CONSTRAINT "schema_migrations_execution_ms_check"
+        CHECK ("execution_ms" IS NULL OR "execution_ms" >= 0),
+      CONSTRAINT "schema_migrations_application_mode_check"
+        CHECK ("application_mode" IN ('applied', 'adopted', 'baseline'))
+    )
+  `);
 }
 
 async function assertRoleCannotReadPostgresLedger(pool: MigrationPool, roleName: string) {
@@ -522,6 +541,26 @@ test(
         `CREATE TABLE public."migration_runner_second" ("id" integer PRIMARY KEY);`,
       );
 
+      await assert.rejects(
+        runMigrations(pool, [first]),
+        (error) => error instanceof MigrationRunnerError && error.code === "MIGRATION_BASELINE_MISSING",
+      );
+      const missingLedgerStatus = await getMigrationStatus(pool, [first, second]);
+      assert.equal(missingLedgerStatus.ledgerPresent, false);
+      assert.deepEqual(missingLedgerStatus.pendingMigrations, [
+        first.filename,
+        second.filename,
+      ]);
+
+      await withMigrationClient(pool, createEmptyPostgresMigrationLedger);
+      const emptyLedgerStatus = await getMigrationStatus(pool, [first, second]);
+      assert.equal(emptyLedgerStatus.ledgerPresent, true);
+      assert.equal(emptyLedgerStatus.ledgeredMigrationCount, 0);
+      assert.deepEqual(emptyLedgerStatus.pendingMigrations, [
+        first.filename,
+        second.filename,
+      ]);
+
       const firstRun = await runMigrations(pool, [first]);
       assert.deepEqual(firstRun.applied, [first.filename]);
 
@@ -554,6 +593,9 @@ test(
       const secondRunWithSameSet = await runMigrations(pool, [first]);
       assert.deepEqual(secondRunWithSameSet.applied, []);
       assert.deepEqual(await readPostgresLedgerRows(pool), rowsAfterFirstRun);
+      const statusAfterFirstRun = await getMigrationStatus(pool, [first, second]);
+      assert.equal(statusAfterFirstRun.latestLedgeredMigration, first.filename);
+      assert.deepEqual(statusAfterFirstRun.pendingMigrations, [second.filename]);
 
       const secondRunWithNewMigration = await runMigrations(pool, [first, second]);
       assert.deepEqual(secondRunWithNewMigration.applied, [second.filename]);
@@ -562,6 +604,9 @@ test(
       assert.equal(rowsAfterSecondRun[1]?.filename, second.filename);
       assert.equal(rowsAfterSecondRun[1]?.checksum_sha256, second.checksumSha256);
       assert.equal(rowsAfterSecondRun[1]?.application_mode, "applied");
+      const statusAfterSecondRun = await getMigrationStatus(pool, [first, second]);
+      assert.equal(statusAfterSecondRun.latestLedgeredMigration, second.filename);
+      assert.deepEqual(statusAfterSecondRun.pendingMigrations, []);
     } finally {
       await withMigrationClient(pool, async (client) => {
         await client.query(`DROP TABLE IF EXISTS public."migration_runner_second"`);

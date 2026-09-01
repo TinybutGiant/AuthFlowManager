@@ -1,4 +1,5 @@
 import { v2RouteModules } from "./routes";
+import { handleStaffRoute } from "./routes/staff";
 import {
   publicStaffAuthFailure,
   resolveStaffPrincipalFromAuthflow,
@@ -133,6 +134,13 @@ export async function handleV2Request(
       status: "ok",
       staff: authResult.principal,
     });
+  }
+
+  if (
+    url.pathname === "/api/v2/staff" ||
+    url.pathname.startsWith("/api/v2/staff/")
+  ) {
+    return await handleStaffRoute(request, env, ctx);
   }
 
   if (url.pathname.startsWith("/api/")) {

@@ -69,7 +69,7 @@ export const adminUsers = pgTable("admin_users", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   email: varchar("email", { length: 255 }).unique().notNull(),
-  passwordHash: text("password_hash").notNull(),
+  passwordHash: text("password_hash"),
   mustChangePassword: boolean("must_change_password").notNull().default(false),
   passwordSetupTokenHash: text("password_setup_token_hash"),
   passwordSetupExpiresAt: timestamp("password_setup_expires_at"),

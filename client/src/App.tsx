@@ -33,6 +33,7 @@ import LifecycleJobs from "@/pages/LifecycleJobs";
 import DocumentTemplates from "@/pages/DocumentTemplates";
 import TravelerWaitlist from "@/pages/TravelerWaitlist";
 import FeedbackMeetingSlots from "@/pages/FeedbackMeetingSlots";
+import V2StaffManagement from "@/pages/V2StaffManagement";
 import NotFound from "@/pages/not-found";
 
 function VerifierApplicationDetailRoute() {
@@ -55,7 +56,7 @@ function WaitlistManagementRoute() {
   );
 }
 
-function Router() {
+function LegacyRouter() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const [location, setLocation] = useLocation();
   const adminUser = (user as any)?.adminUser;
@@ -280,6 +281,16 @@ function Router() {
       <Route component={NotFound} />
     </Switch>
   );
+}
+
+function Router() {
+  const [location] = useLocation();
+
+  if (location === "/v2/staff" || location.startsWith("/v2/staff/")) {
+    return <V2StaffManagement />;
+  }
+
+  return <LegacyRouter />;
 }
 
 function App() {

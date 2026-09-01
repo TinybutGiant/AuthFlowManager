@@ -1,7 +1,10 @@
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
 import type { Express, RequestHandler } from "express";
 import { storage } from "./storage";
+import {
+  comparePassword as comparePasswordHash,
+  hashPassword as hashPasswordValue,
+} from "./passwordHash";
 import type { AdminAccessGroup } from "@shared/schema";
 
 if (!process.env.JWT_SECRET) {
@@ -36,12 +39,14 @@ export const jwtUtils = {
   },
 
   hashPassword: async (password: string): Promise<string> => {
-    const saltRounds = 12;
-    return await bcrypt.hash(password, saltRounds);
+    return await hashPasswordValue(password);
   },
 
-  comparePassword: async (password: string, hash: string): Promise<boolean> => {
-    return await bcrypt.compare(password, hash);
+  comparePassword: async (
+    password: string,
+    hash: string | null | undefined,
+  ): Promise<boolean> => {
+    return await comparePasswordHash(password, hash);
   }
 };
 
