@@ -1,4 +1,4 @@
-import { BadgeCheck, ReceiptText, Users } from "lucide-react";
+import { BadgeCheck, ReceiptText, Users, WalletCards } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -13,6 +13,7 @@ import {
 const moduleIcons: Record<V2ModuleKey, LucideIcon> = {
   staff: Users,
   finance: ReceiptText,
+  payroll: WalletCards,
   verifier: BadgeCheck,
 };
 
@@ -72,4 +73,3 @@ export default function V2Home() {
     </main>
   );
 }
-

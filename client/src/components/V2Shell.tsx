@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { BadgeCheck, Home, ReceiptText, Users } from "lucide-react";
+import { BadgeCheck, Home, ReceiptText, Users, WalletCards } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +14,7 @@ import {
 const moduleIcons: Record<V2ModuleKey, LucideIcon> = {
   staff: Users,
   finance: ReceiptText,
+  payroll: WalletCards,
   verifier: BadgeCheck,
 };
 
@@ -106,4 +107,3 @@ export default function V2Shell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-

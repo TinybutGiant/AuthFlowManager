@@ -122,15 +122,21 @@ export const getQueryFn: <T>(options: {
     return await res.json();
   };
 
+const isV2Surface = import.meta.env?.VITE_AUTHFLOW_SURFACE === "v2";
+const baseQueries = {
+  refetchInterval: false as false,
+  refetchOnWindowFocus: false as false,
+  staleTime: Infinity,
+  retry: false as false,
+};
+const legacyQueries = {
+  ...baseQueries,
+  queryFn: getQueryFn({ on401: "throw" }),
+};
+
 export const queryClient = new QueryClient({
   defaultOptions: {
-    queries: {
-      queryFn: getQueryFn({ on401: "throw" }),
-      refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
-    },
+    queries: isV2Surface ? baseQueries : legacyQueries,
     mutations: {
       retry: false,
     },

@@ -28,7 +28,7 @@ import {
   derivePayrollResultLineTotals,
   validatePayrollCorrectionRun,
   validatePayrollRunWorkerConsistency,
-} from "./financeDomainValidation";
+} from "./payrollDomainValidation";
 
 export class PayrollServiceError extends Error {
   constructor(
@@ -779,10 +779,8 @@ async function employmentSummary(
   employment: Employment | undefined | null,
 ): Promise<PayrollEmploymentSummary | null> {
   if (!employment) return null;
-  const [entity, worker] = await Promise.all([
-    repo.getLegalEntity(employment.legalEntityId),
-    repo.getWorker(employment.workerId),
-  ]);
+  const entity = await repo.getLegalEntity(employment.legalEntityId);
+  const worker = await repo.getWorker(employment.workerId);
   return {
     id: employment.id,
     workerId: employment.workerId,
@@ -1070,11 +1068,9 @@ async function effectivePayrollRunsForTotals(repo: PayrollRepository, historical
 }
 
 async function runListItem(repo: PayrollRepository, run: PayrollRun): Promise<PayrollRunListItem> {
-  const [entity, vendor, workers] = await Promise.all([
-    repo.getLegalEntity(run.legalEntityId),
-    run.sourceVendorId ? repo.getVendor(run.sourceVendorId) : Promise.resolve(undefined),
-    repo.listPayrollRunWorkers(run.id),
-  ]);
+  const entity = await repo.getLegalEntity(run.legalEntityId);
+  const vendor = run.sourceVendorId ? await repo.getVendor(run.sourceVendorId) : undefined;
+  const workers = await repo.listPayrollRunWorkers(run.id);
   const payments = await paymentsByWorkerId(repo, workers.map((worker) => worker.id));
   return {
     id: run.id,
@@ -1103,12 +1099,10 @@ async function runWorkerResponse(
   repo: PayrollRepository,
   workerResult: PayrollRunWorker,
 ): Promise<PayrollRunWorkerResponse> {
-  const [worker, employment, lines, payments] = await Promise.all([
-    repo.getWorker(workerResult.workerId),
-    repo.getEmployment(workerResult.employmentId),
-    repo.listPayrollResultLines(workerResult.id),
-    repo.listPayrollPayments(workerResult.id),
-  ]);
+  const worker = await repo.getWorker(workerResult.workerId);
+  const employment = await repo.getEmployment(workerResult.employmentId);
+  const lines = await repo.listPayrollResultLines(workerResult.id);
+  const payments = await repo.listPayrollPayments(workerResult.id);
   return {
     id: workerResult.id,
     payrollRunId: workerResult.payrollRunId,
@@ -1132,12 +1126,13 @@ async function runWorkerResponse(
 }
 
 async function runDetailResponse(repo: PayrollRepository, run: PayrollRun): Promise<PayrollRunDetailResponse> {
-  const [item, workers, externalRefs] = await Promise.all([
-    runListItem(repo, run),
-    repo.listPayrollRunWorkers(run.id),
-    repo.listExternalRecordRefsForEntity("payroll_runs", run.id),
-  ]);
-  const workerResponses = await Promise.all(workers.map((worker) => runWorkerResponse(repo, worker)));
+  const item = await runListItem(repo, run);
+  const workers = await repo.listPayrollRunWorkers(run.id);
+  const externalRefs = await repo.listExternalRecordRefsForEntity("payroll_runs", run.id);
+  const workerResponses: PayrollRunWorkerResponse[] = [];
+  for (const worker of workers) {
+    workerResponses.push(await runWorkerResponse(repo, worker));
+  }
   return {
     ...item,
     workers: workerResponses,
@@ -1273,10 +1268,8 @@ async function assertPayrollRunWorkerLinks(
   run: PayrollRun,
   payload: Pick<CreatePayrollRunWorkerPayload, "workerId" | "employmentId">,
 ) {
-  const [worker, employment] = await Promise.all([
-    repo.getWorker(payload.workerId),
-    repo.getEmployment(payload.employmentId),
-  ]);
+  const worker = await repo.getWorker(payload.workerId);
+  const employment = await repo.getEmployment(payload.employmentId);
   assertPayrollWorkerIdentity(worker, payload.workerId);
   if (!employment) {
     fail(400, "EMPLOYMENT_NOT_FOUND", `Employment ${payload.employmentId} was not found.`);
@@ -1294,11 +1287,9 @@ async function assertPayrollRunWorkerLinks(
 async function assertRunReadyForFinalization(repo: PayrollRepository, run: PayrollRun) {
   const workerResults = await repo.listPayrollRunWorkers(run.id);
   for (const workerResult of workerResults) {
-    const [worker, employment, lines] = await Promise.all([
-      repo.getWorker(workerResult.workerId),
-      repo.getEmployment(workerResult.employmentId),
-      repo.listPayrollResultLines(workerResult.id),
-    ]);
+    const worker = await repo.getWorker(workerResult.workerId);
+    const employment = await repo.getEmployment(workerResult.employmentId);
+    const lines = await repo.listPayrollResultLines(workerResult.id);
     assertPayrollWorkerIdentity(worker, workerResult.workerId);
     if (!employment) {
       fail(400, "EMPLOYMENT_NOT_FOUND", `Employment ${workerResult.employmentId} was not found.`);
@@ -1420,18 +1411,18 @@ export async function listPayrollEmploymentOptions(
   filters: PayrollEmploymentOptionFilters,
 ): Promise<PayrollEmploymentOption[]> {
   const employments = await repo.listPayrollEmploymentOptions(filters);
-  const options = await Promise.all(
-    employments.map(async (employment) => {
-      const worker = await repo.getWorker(employment.workerId);
-      const employmentItem = await employmentSummary(repo, employment);
-      if (!worker || !employmentItem) return null;
-      return {
+  const options: PayrollEmploymentOption[] = [];
+  for (const employment of employments) {
+    const worker = await repo.getWorker(employment.workerId);
+    const employmentItem = await employmentSummary(repo, employment);
+    if (worker && employmentItem) {
+      options.push({
         employment: employmentItem,
         worker: workerSummary(worker)!,
-      };
-    }),
-  );
-  return options.filter(Boolean) as PayrollEmploymentOption[];
+      });
+    }
+  }
+  return options;
 }
 
 export async function listPayrollRuns(
@@ -1439,19 +1430,25 @@ export async function listPayrollRuns(
   filters: PayrollRunListFilters,
 ): Promise<PayrollRunListItem[]> {
   const runs = await repo.listPayrollRuns(filters);
-  return await Promise.all(runs.map((run) => runListItem(repo, run)));
+  const items: PayrollRunListItem[] = [];
+  for (const run of runs) {
+    items.push(await runListItem(repo, run));
+  }
+  return items;
 }
 
 export async function getPayrollOverview(repo: PayrollRepository): Promise<PayrollOverviewResponse> {
   const recentRunRows = await repo.listPayrollRuns({ pageSize: 25 });
-  const [recentRuns, effectiveRunRows] = await Promise.all([
-    Promise.all(recentRunRows.map((run) => runListItem(repo, run))),
-    effectivePayrollRunsForTotals(repo, recentRunRows),
-  ]);
-  const [effectiveRuns, allRunWorkers] = await Promise.all([
-    Promise.all(effectiveRunRows.map((run) => runListItem(repo, run))),
-    repo.listPayrollRunWorkersForRuns(effectiveRunRows.map((run) => run.id)),
-  ]);
+  const recentRuns: PayrollRunListItem[] = [];
+  for (const run of recentRunRows) {
+    recentRuns.push(await runListItem(repo, run));
+  }
+  const effectiveRunRows = await effectivePayrollRunsForTotals(repo, recentRunRows);
+  const effectiveRuns: PayrollRunListItem[] = [];
+  for (const run of effectiveRunRows) {
+    effectiveRuns.push(await runListItem(repo, run));
+  }
+  const allRunWorkers = await repo.listPayrollRunWorkersForRuns(effectiveRunRows.map((run) => run.id));
   const draftRuns = recentRuns.filter((run) => run.status === "draft" || run.status === "reviewed");
   const allPayments = await paymentsByWorkerId(repo, allRunWorkers.map((worker) => worker.id));
   return {

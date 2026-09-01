@@ -1518,6 +1518,7 @@ export type AdminAccessGroup =
   | 'support_admin'
   | 'super_admin'
   | 'admin_operations'
+  | 'payroll_admin'
   | 'trainee_offer_portal'
   | 'trainee_workspace'
   | 'document_templates'

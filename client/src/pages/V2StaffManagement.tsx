@@ -86,6 +86,7 @@ const ACCESS_GROUP_LABELS: Record<AdminAccessGroup, string> = {
   super_admin: "Super admin",
   admin_operations: "Admin operations",
   finance_admin: "Finance admin",
+  payroll_admin: "Payroll admin",
   verifier_admin: "Verifier admin",
   support_admin: "Support admin",
   document_templates: "Document templates",

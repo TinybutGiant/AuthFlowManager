@@ -291,10 +291,10 @@ test("V2 grant replacement revokes only assignable grants and preserves legacy g
     repository,
     principal(),
     2,
-    ["finance_admin"],
+    ["finance_admin", "payroll_admin"],
   );
 
-  assert.deepEqual(updated.accessGroups, ["support_admin", "finance_admin"]);
+  assert.deepEqual(updated.accessGroups, ["support_admin", "finance_admin", "payroll_admin"]);
 });
 
 test("self-lockout protection blocks self-suspension and removing own management grants", async () => {

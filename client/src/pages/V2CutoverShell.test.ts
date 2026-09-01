@@ -6,6 +6,8 @@ const appSource = readFileSync("client/src/App.tsx", "utf8");
 const shellSource = readFileSync("client/src/components/V2Shell.tsx", "utf8");
 const homeSource = readFileSync("client/src/pages/V2Home.tsx", "utf8");
 const accessSource = readFileSync("client/src/lib/v2StaffAccess.ts", "utf8");
+const queryClientSource = readFileSync("client/src/lib/queryClient.ts", "utf8");
+const v2QueryClientSource = readFileSync("client/src/lib/v2QueryClient.ts", "utf8");
 const financeManagementSource = readFileSync(
   "client/src/pages/FinanceManagement.tsx",
   "utf8",
@@ -28,6 +30,18 @@ test("build target separates legacy Render and Worker V2 entry behavior", () => 
   );
   assert.match(appSource, /<V2Shell>/);
   assert.match(appSource, /<V2Home \/>/);
+  assert.match(
+    appSource,
+    /import \{ queryClient as legacyQueryClient \} from "\.\/lib\/queryClient";/,
+  );
+  assert.match(
+    appSource,
+    /import \{ v2QueryClient \} from "\.\/lib\/v2QueryClient";/,
+  );
+  assert.match(
+    appSource,
+    /const queryClient = isV2Surface \? v2QueryClient : legacyQueryClient;/,
+  );
 
   const legacyGuardIndex = appSource.indexOf("if (!isV2Surface)");
   const v2ShellIndex = appSource.indexOf('if (location === "/" || location === "/v2")');
@@ -47,15 +61,21 @@ test("build target separates legacy Render and Worker V2 entry behavior", () => 
 
   assert.match(
     packageSource,
-    /"build": "cross-env VITE_AUTHFLOW_SURFACE=legacy vite build &&/,
+    /"build": "cross-env NODE_ENV=production VITE_AUTHFLOW_SURFACE=legacy vite build &&/,
   );
   assert.match(
     packageSource,
-    /"build:worker": "cross-env VITE_AUTHFLOW_SURFACE=v2 vite build"/,
+    /"build:worker": "cross-env NODE_ENV=production VITE_AUTHFLOW_SURFACE=v2 vite build"/,
   );
   assert.match(
     wranglerSource,
     /"build": {\s*"command": "npm run build:worker"\s*}/,
+  );
+  assert.match(queryClientSource, /VITE_AUTHFLOW_SURFACE/);
+  assert.match(queryClientSource, /queries: isV2Surface \? baseQueries : legacyQueries/);
+  assert.doesNotMatch(
+    v2QueryClientSource,
+    /localStorage|auth_token|tokenManager|apiRequest|Authorization|Bearer/,
   );
 });
 
@@ -77,16 +97,17 @@ test("legacy surface preserves existing Finance Payroll and Tax entry points", (
 test("V2 navigation exposes only migrated modules from effective permissions", () => {
   assert.match(accessSource, /permission: "admin_operations"/);
   assert.match(accessSource, /permission: "finance_admin"/);
+  assert.match(accessSource, /permission: "payroll_admin"/);
   assert.match(accessSource, /permission: "verifier_admin"/);
   assert.match(accessSource, /permissions\.includes\("super_admin"\)/);
   assert.doesNotMatch(accessSource, /role\s*===|allowedRoles|ROLE_PERMISSIONS/);
 
-  for (const path of ["/v2/staff", "/v2/finance", "/v2/verifier"]) {
+  for (const path of ["/v2/staff", "/v2/finance", "/v2/payroll", "/v2/verifier"]) {
     assert.match(combinedV2ShellSource, new RegExp(path.replace(/\//g, "\\/")));
   }
 
   assert.doesNotMatch(
     `${shellSource}\n${homeSource}\n${accessSource}`,
-    /\/admin-management|\/finance-management|\/verifier-management|payroll|tax|support|documents|lifecycle/i,
+    /\/admin-management|\/finance-management|\/verifier-management|tax|support|documents|lifecycle/i,
   );
 });

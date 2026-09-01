@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { queryClient } from "./lib/queryClient";
+import { queryClient as legacyQueryClient } from "./lib/queryClient";
+import { v2QueryClient } from "./lib/v2QueryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -34,6 +35,7 @@ import DocumentTemplates from "@/pages/DocumentTemplates";
 import TravelerWaitlist from "@/pages/TravelerWaitlist";
 import FeedbackMeetingSlots from "@/pages/FeedbackMeetingSlots";
 import V2FinanceManagement from "@/pages/V2FinanceManagement";
+import V2PayrollManagement from "@/pages/V2PayrollManagement";
 import V2VerifierApplicationDetail from "@/pages/V2VerifierApplicationDetail";
 import V2VerifierManagement from "@/pages/V2VerifierManagement";
 import V2StaffManagement from "@/pages/V2StaffManagement";
@@ -319,6 +321,14 @@ function Router() {
     );
   }
 
+  if (location === "/v2/payroll" || location.startsWith("/v2/payroll/")) {
+    return (
+      <V2Shell>
+        <V2PayrollManagement />
+      </V2Shell>
+    );
+  }
+
   if (location === "/v2/staff" || location.startsWith("/v2/staff/")) {
     return (
       <V2Shell>
@@ -353,6 +363,7 @@ function Router() {
 function App() {
   const [location] = useLocation();
   const { dismiss } = useToast();
+  const queryClient = isV2Surface ? v2QueryClient : legacyQueryClient;
 
   // Route changes shouldn't carry over toasts from previous pages.
   const didMountRef = React.useRef(false);

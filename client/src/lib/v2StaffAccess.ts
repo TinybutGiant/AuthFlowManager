@@ -12,7 +12,7 @@ export type V2AuthMeResponse = {
   staff: StaffPrincipal;
 };
 
-export type V2ModuleKey = "staff" | "finance" | "verifier";
+export type V2ModuleKey = "staff" | "finance" | "payroll" | "verifier";
 
 export type V2ModuleDefinition = {
   key: V2ModuleKey;
@@ -33,6 +33,12 @@ export const V2_MODULES: V2ModuleDefinition[] = [
     label: "AP Billing",
     path: "/v2/finance",
     permission: "finance_admin",
+  },
+  {
+    key: "payroll",
+    label: "Payroll",
+    path: "/v2/payroll",
+    permission: "payroll_admin",
   },
   {
     key: "verifier",
@@ -72,4 +78,3 @@ export function canAccessV2Module(
     permissions.includes(module.permission)
   );
 }
-
