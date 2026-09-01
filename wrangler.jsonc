@@ -4,7 +4,11 @@
   "compatibility_date": "2026-08-31",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "preview_urls": false,
+  "preview_urls": true,
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "replit-localguide-pages.cloudflareaccess.com",
+    "ACCESS_AUD": "916caa0f0611ab0f7dca4261fc3f2ea22c273a47926875d6236b024d131d6268"
+  },
   "assets": {
     "directory": "./dist/public",
     "not_found_handling": "single-page-application",
