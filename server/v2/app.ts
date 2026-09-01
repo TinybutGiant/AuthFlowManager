@@ -7,8 +7,6 @@ import {
   resolveStaffPrincipalFromAuthflow,
 } from "./auth/authorize";
 import type { WorkerV2ExecutionContext } from "./auth/access";
-import { checkAuthflowDatabaseHealth } from "./db/authflow";
-import { checkMainDatabaseHealth } from "./db/main";
 import type { WorkerV2Env } from "./db/types";
 
 type JsonBody = Record<string, unknown> | Record<string, unknown>[];
@@ -77,42 +75,6 @@ export async function handleV2Request(
         routeCount: routeModule.routes.length,
       })),
     });
-  }
-
-  if (url.pathname === "/api/v2/db-health") {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      return methodNotAllowed(["GET", "HEAD"]);
-    }
-
-    const authResult = await resolveStaffPrincipalFromAuthflow(
-      request,
-      env,
-      ctx,
-    );
-
-    if (!authResult.ok) {
-      return json(publicStaffAuthFailure(authResult), {
-        status: authResult.status,
-      });
-    }
-
-    const [authflow, main] = await Promise.all([
-      checkAuthflowDatabaseHealth(env),
-      checkMainDatabaseHealth(env),
-    ]);
-    const ok = authflow.ok && main.ok;
-
-    return json(
-      {
-        status: ok ? "ok" : "error",
-        endpoint: "temporary-internal-db-health",
-        databases: {
-          authflow,
-          main,
-        },
-      },
-      { status: ok ? 200 : 503 },
-    );
   }
 
   if (url.pathname === "/api/v2/auth/me") {

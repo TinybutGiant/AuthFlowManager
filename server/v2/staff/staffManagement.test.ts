@@ -220,6 +220,26 @@ test("role alone does not authorize staff management", async () => {
   );
 });
 
+test("staff list includes the current active admin_staff owner", async () => {
+  const repository = new MemoryStaffManagementRepository();
+  repository.staffById.set(
+    1,
+    staffRecord({
+      id: 1,
+      email: "owner@example.com",
+      role: "super_admin",
+      accessGroups: ["super_admin"],
+    }),
+  );
+
+  const staff = await listManagedStaff(repository, principal({ id: "1" }));
+
+  assert.deepEqual(
+    staff.map((staffMember) => staffMember.id),
+    [1],
+  );
+});
+
 test("duplicate normalized email is rejected", async () => {
   const repository = new MemoryStaffManagementRepository();
   repository.staffById.set(2, staffRecord({ email: "staff@example.com" }));

@@ -37,7 +37,11 @@ import V2FinanceManagement from "@/pages/V2FinanceManagement";
 import V2VerifierApplicationDetail from "@/pages/V2VerifierApplicationDetail";
 import V2VerifierManagement from "@/pages/V2VerifierManagement";
 import V2StaffManagement from "@/pages/V2StaffManagement";
+import V2Home from "@/pages/V2Home";
+import V2Shell from "@/components/V2Shell";
 import NotFound from "@/pages/not-found";
+
+const isV2Surface = import.meta.env.VITE_AUTHFLOW_SURFACE === "v2";
 
 function VerifierApplicationDetailRoute() {
   return (
@@ -287,25 +291,63 @@ function LegacyRouter() {
 }
 
 function Router() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
+
+  React.useEffect(() => {
+    if (isV2Surface && location === "/") {
+      setLocation("/v2");
+    }
+  }, [location, setLocation]);
+
+  if (!isV2Surface) {
+    return <LegacyRouter />;
+  }
+
+  if (location === "/" || location === "/v2") {
+    return (
+      <V2Shell>
+        <V2Home />
+      </V2Shell>
+    );
+  }
 
   if (location === "/v2/finance" || location.startsWith("/v2/finance/")) {
-    return <V2FinanceManagement />;
+    return (
+      <V2Shell>
+        <V2FinanceManagement />
+      </V2Shell>
+    );
   }
 
   if (location === "/v2/staff" || location.startsWith("/v2/staff/")) {
-    return <V2StaffManagement />;
+    return (
+      <V2Shell>
+        <V2StaffManagement />
+      </V2Shell>
+    );
   }
 
   if (location.startsWith("/v2/verifier/applications/")) {
-    return <V2VerifierApplicationDetail />;
+    return (
+      <V2Shell>
+        <V2VerifierApplicationDetail />
+      </V2Shell>
+    );
   }
 
   if (location === "/v2/verifier" || location.startsWith("/v2/verifier/")) {
-    return <V2VerifierManagement />;
+    return (
+      <V2Shell>
+        <V2VerifierManagement />
+      </V2Shell>
+    );
   }
 
-  return <LegacyRouter />;
+  return (
+    <V2Shell>
+      <NotFound />
+    </V2Shell>
+  );
 }
 
 function App() {
