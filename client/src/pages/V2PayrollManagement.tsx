@@ -46,6 +46,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  getInitialLegalEntityId,
+  LegalEntityField,
+  parseRequiredLegalEntityId,
+} from "@/components/finance/LegalEntityField";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -759,6 +764,7 @@ function PayrollRunDialog({
   const update = <K extends keyof PayrollRunFormState>(key: K, value: PayrollRunFormState[K]) => {
     onChange({ ...form, [key]: value });
   };
+  const canSubmit = state.mode !== "create" || legalEntities.length > 0;
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -769,22 +775,13 @@ function PayrollRunDialog({
           </DialogHeader>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <FormField label="Legal entity">
-              <Select
-                value={form.legalEntityId}
-                onValueChange={(value) => update("legalEntityId", value)}
-                disabled={state.mode === "correction"}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select entity" />
-                </SelectTrigger>
-                <SelectContent>
-                  {legalEntities.map((entity) => (
-                    <SelectItem key={entity.id} value={String(entity.id)}>{entity.legalName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
+            <LegalEntityField
+              legalEntities={legalEntities}
+              value={form.legalEntityId}
+              onValueChange={(value) => update("legalEntityId", value)}
+              disabled={state.mode === "correction"}
+              autoSelectSingle={state.mode === "create"}
+            />
             <FormField label="Run kind">
               <Select value={form.runKind} onValueChange={(value) => update("runKind", value)} disabled={state.mode === "correction"}>
                 <SelectTrigger>
@@ -841,7 +838,7 @@ function PayrollRunDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
-            <Button type="submit" disabled={isPending}>
+            <Button type="submit" disabled={isPending || !canSubmit}>
               <Plus className="h-4 w-4" />
               Create
             </Button>
@@ -1117,9 +1114,9 @@ function PayrollPaymentDialog({
   );
 }
 
-function emptyPayrollRunForm(entity?: PayrollLegalEntity, vendor?: PayrollVendor): PayrollRunFormState {
+function emptyPayrollRunForm(legalEntities: PayrollLegalEntity[], vendor?: PayrollVendor): PayrollRunFormState {
   return {
-    legalEntityId: entity ? String(entity.id) : "",
+    legalEntityId: getInitialLegalEntityId(legalEntities),
     periodStart: "",
     periodEnd: "",
     payDate: "",
@@ -1305,6 +1302,8 @@ export default function V2PayrollManagement() {
     vendorsQuery.error ||
     employmentOptionsQuery.error ||
     runDetailQuery.error;
+  const legalEntityConfigurationRequired = !isLoading && !error && legalEntities.length === 0;
+  const canCreatePayrollRun = legalEntities.length > 0;
 
   React.useEffect(() => {
     if (!selectedRunId && runs.length > 0) {
@@ -1319,7 +1318,7 @@ export default function V2PayrollManagement() {
   function openCreateRun() {
     setRunDialog({
       mode: "create",
-      form: emptyPayrollRunForm(legalEntities[0], vendors[0]),
+      form: emptyPayrollRunForm(legalEntities, vendors[0]),
     });
   }
 
@@ -1327,7 +1326,7 @@ export default function V2PayrollManagement() {
     setRunDialog({
       mode: "correction",
       form: {
-        ...emptyPayrollRunForm(legalEntities.find((entity) => entity.id === run.legalEntityId), vendors[0]),
+        ...emptyPayrollRunForm(legalEntities, vendors[0]),
         legalEntityId: String(run.legalEntityId),
         periodStart: run.periodStart?.slice(0, 10) ?? "",
         periodEnd: run.periodEnd?.slice(0, 10) ?? "",
@@ -1344,7 +1343,7 @@ export default function V2PayrollManagement() {
     try {
       const isCorrection = runDialog.mode === "correction";
       const body = compactPayload({
-        legalEntityId: isCorrection ? undefined : Number(runDialog.form.legalEntityId),
+        legalEntityId: isCorrection ? undefined : parseRequiredLegalEntityId(runDialog.form.legalEntityId),
         correctionOfPayrollRunId: isCorrection ? Number(runDialog.form.correctionOfPayrollRunId) : undefined,
         periodStart: runDialog.form.periodStart,
         periodEnd: runDialog.form.periodEnd,
@@ -1503,6 +1502,13 @@ export default function V2PayrollManagement() {
         </div>
       )}
 
+      {legalEntityConfigurationRequired && (
+        <CompactEmptyState
+          title="Legal entity configuration required"
+          description="Add an active company legal entity before creating payroll runs."
+        />
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           title="Open runs"
@@ -1535,7 +1541,7 @@ export default function V2PayrollManagement() {
           title="Payroll runs"
           description="Historical records by pay period."
           icon={Building2}
-          action={<Button size="sm" onClick={openCreateRun} disabled={payrollMutation.isPending}><Plus className="h-4 w-4" />Create run</Button>}
+          action={<Button size="sm" onClick={openCreateRun} disabled={payrollMutation.isPending || !canCreatePayrollRun}><Plus className="h-4 w-4" />Create run</Button>}
         >
           <div className="overflow-x-auto">
             {isLoading ? (
@@ -1544,8 +1550,8 @@ export default function V2PayrollManagement() {
               <CompactEmptyState
                 title="No payroll runs"
                 description="Create a run after payroll has been calculated externally."
-                actionLabel="Create run"
-                onAction={openCreateRun}
+                actionLabel={canCreatePayrollRun ? "Create run" : undefined}
+                onAction={canCreatePayrollRun ? openCreateRun : undefined}
               />
             ) : (
               <Table>

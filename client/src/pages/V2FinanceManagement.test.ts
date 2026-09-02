@@ -50,7 +50,7 @@ test("V2 finance restores AP notes without adding legacy finance coupling", () =
 });
 
 test("V2 finance uses loaded AP labels instead of raw IDs when available", () => {
-  assert.match(source, /function legalEntityLabel\(entity: FinanceLegalEntity\)/);
+  assert.match(source, /LegalEntityField/);
   assert.match(source, /function vendorLabel\(vendor: FinanceVendor\)/);
   assert.match(source, /function billLabel\(bill: FinanceBill\)/);
   assert.match(source, /function subscriptionLabel\(subscription: FinanceSubscription\)/);
@@ -61,6 +61,16 @@ test("V2 finance uses loaded AP labels instead of raw IDs when available", () =>
   assert.match(source, /targetBill \? billLabel\(targetBill\) : `Bill #\$\{application\.targetVendorBillId\}`/);
   assert.match(source, /payment\s*\?\s*paymentLabel\(payment\)/);
   assert.match(source, /credit\s*\?\s*billLabel\(credit\)/);
+});
+
+test("V2 finance handles legal entity configuration explicitly", () => {
+  assert.match(source, /getInitialLegalEntityId\(legalEntities, subscription\?\.legalEntityId\)/);
+  assert.match(source, /getInitialLegalEntityId\(legalEntities, bill\?\.legalEntityId\)/);
+  assert.match(source, /getInitialLegalEntityId\(legalEntities, payment\?\.legalEntityId\)/);
+  assert.match(source, /parseRequiredLegalEntityId\(form\.legalEntityId\)/);
+  assert.match(source, /Legal entity configuration required/);
+  assert.match(source, /disabled=\{!canCreateLegalEntityScopedRecord\}/);
+  assert.doesNotMatch(source, /Number\(form\.legalEntityId\)/);
 });
 
 test("V2 finance has descriptive AP empty states with local actions", () => {

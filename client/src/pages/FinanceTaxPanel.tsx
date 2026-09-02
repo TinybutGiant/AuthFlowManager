@@ -46,6 +46,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  getInitialLegalEntityId,
+  LegalEntityField,
+} from "@/components/finance/LegalEntityField";
 import { useToast } from "@/hooks/use-toast";
 
 export type TaxRequestJson = <T = unknown>(
@@ -495,6 +499,7 @@ export default function FinanceTaxPanel({
     || allocationsQuery.error
     || filingsQuery.error
     || reconciliationQuery.error;
+  const legalEntityConfigurationRequired = !isLoading && !error && legalEntities.length === 0;
 
   function openCreateAgency() {
     setAgencyDialog({ mode: "create", form: emptyAgencyForm() });
@@ -527,7 +532,7 @@ export default function FinanceTaxPanel({
   function openCreateRegistration() {
     setRegistrationDialog({
       mode: "create",
-      form: emptyRegistrationForm(legalEntities[0], agencies[0]),
+      form: emptyRegistrationForm(legalEntities, agencies[0]),
     });
   }
 
@@ -851,6 +856,14 @@ export default function FinanceTaxPanel({
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Tax data unavailable</AlertTitle>
           <AlertDescription>{(error as Error).message}</AlertDescription>
+        </Alert>
+      )}
+
+      {legalEntityConfigurationRequired && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Legal entity configuration required</AlertTitle>
+          <AlertDescription>Add an active company legal entity before creating tax registrations.</AlertDescription>
         </Alert>
       )}
 
@@ -1798,6 +1811,7 @@ function TaxRegistrationDialog({
   const update = <K extends keyof TaxRegistrationFormState>(key: K, value: TaxRegistrationFormState[K]) => {
     onChange({ ...form, [key]: value });
   };
+  const canSubmit = legalEntities.length > 0 && agencies.length > 0;
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -1808,18 +1822,12 @@ function TaxRegistrationDialog({
           </DialogHeader>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <FormField label="Legal entity">
-              <Select value={form.legalEntityId} onValueChange={(value) => update("legalEntityId", value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select entity" />
-                </SelectTrigger>
-                <SelectContent>
-                  {legalEntities.map((entity) => (
-                    <SelectItem key={entity.id} value={String(entity.id)}>{entity.legalName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
+            <LegalEntityField
+              legalEntities={legalEntities}
+              value={form.legalEntityId}
+              onValueChange={(value) => update("legalEntityId", value)}
+              autoSelectSingle={state.mode === "create"}
+            />
             <FormField label="Tax agency">
               <Select value={form.taxAgencyId} onValueChange={(value) => update("taxAgencyId", value)}>
                 <SelectTrigger>
@@ -1890,7 +1898,7 @@ function TaxRegistrationDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
-            <Button type="submit" disabled={isPending}>
+            <Button type="submit" disabled={isPending || !canSubmit}>
               <CheckCircle2 className="h-4 w-4" />
               Save
             </Button>
@@ -2485,9 +2493,9 @@ function agencyFormFromRecord(agency: TaxAgency): TaxAgencyFormState {
   };
 }
 
-function emptyRegistrationForm(entity?: TaxLegalEntity, agency?: TaxAgency): TaxRegistrationFormState {
+function emptyRegistrationForm(legalEntities: TaxLegalEntity[], agency?: TaxAgency): TaxRegistrationFormState {
   return {
-    legalEntityId: entity ? String(entity.id) : "",
+    legalEntityId: getInitialLegalEntityId(legalEntities),
     taxAgencyId: agency ? String(agency.id) : "",
     taxType: "federal_withholding",
     jurisdictionType: agency?.jurisdictionType ?? "federal",

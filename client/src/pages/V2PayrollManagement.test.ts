@@ -36,3 +36,12 @@ test("V2 payroll source does not render legacy AP Billing, Tax, or full Personne
   assert.doesNotMatch(payrollSource, /compensationTerms|workAuthorizations|adminEngagements/);
   assert.match(payrollSource, /employment-options/);
 });
+
+test("V2 payroll handles legal entity configuration explicitly", () => {
+  assert.match(payrollSource, /LegalEntityField/);
+  assert.match(payrollSource, /getInitialLegalEntityId\(legalEntities\)/);
+  assert.match(payrollSource, /parseRequiredLegalEntityId\(runDialog\.form\.legalEntityId\)/);
+  assert.match(payrollSource, /Legal entity configuration required/);
+  assert.match(payrollSource, /disabled=\{payrollMutation\.isPending \|\| !canCreatePayrollRun\}/);
+  assert.doesNotMatch(payrollSource, /Number\(runDialog\.form\.legalEntityId\)/);
+});

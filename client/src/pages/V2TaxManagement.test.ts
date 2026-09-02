@@ -45,3 +45,11 @@ test("V2 tax source does not render AP Billing, Payroll, or full Personnel panes
   assert.doesNotMatch(taxSource, /\/api\/admin\/finance|\/api\/v2\/finance|\/api\/v2\/payroll|\/api\/admin\/personnel/);
   assert.doesNotMatch(panelSource, /PayrollManagement|PersonnelManagement|payrollRuns|vendorBills|expensePayments/);
 });
+
+test("V2 tax handles legal entity configuration through the shared panel", () => {
+  assert.match(panelSource, /LegalEntityField/);
+  assert.match(panelSource, /getInitialLegalEntityId\(legalEntities\)/);
+  assert.match(panelSource, /Legal entity configuration required/);
+  assert.match(panelSource, /disabled=\{isPending \|\| !canSubmit\}/);
+  assert.match(panelSource, /legalEntityId: parsePositiveId\(form\.legalEntityId, "Legal entity"\)/);
+});

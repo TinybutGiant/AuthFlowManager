@@ -18,6 +18,7 @@
     "db:migrate": "tsx scripts/applyMigrations.ts migrate",
     "db:migrate:status": "tsx scripts/applyMigrations.ts status",
     "db:migrate:adopt": "tsx scripts/applyMigrations.ts adopt",
+    "db:provision:legal-entity": "tsx scripts/provisionLegalEntity.ts",
     "worker:dry-run": "wrangler deploy --dry-run",
     "worker:versions:upload": "wrangler versions upload",
     "worker:versions:list": "wrangler versions list",

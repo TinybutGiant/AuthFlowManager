@@ -42,6 +42,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  getInitialLegalEntityId,
+  LegalEntityField,
+  parseRequiredLegalEntityId,
+} from "@/components/finance/LegalEntityField";
 import { useToast } from "@/hooks/use-toast";
 
 type FinanceTab = "bills" | "payments" | "subscriptions" | "vendors" | "reconciliation";
@@ -361,10 +366,6 @@ function formatDate(value?: string | null) {
   return value ? value : "-";
 }
 
-function legalEntityLabel(entity: FinanceLegalEntity) {
-  return entity.legalName || `Legal entity #${entity.id}`;
-}
-
 function vendorLabel(vendor: FinanceVendor) {
   return vendor.name || `Vendor #${vendor.id}`;
 }
@@ -567,7 +568,7 @@ function subscriptionFormFrom(
   subscription?: FinanceSubscription,
 ): SubscriptionForm {
   return {
-    legalEntityId: String(subscription?.legalEntityId ?? legalEntities[0]?.id ?? ""),
+    legalEntityId: getInitialLegalEntityId(legalEntities, subscription?.legalEntityId),
     vendorId: String(subscription?.vendorId ?? vendors[0]?.id ?? ""),
     categoryCode: subscription?.categoryCode ?? "saas",
     cadence: subscription?.cadence ?? "monthly",
@@ -590,7 +591,7 @@ function billFormFrom(
   bill?: FinanceBill,
 ): BillForm {
   return {
-    legalEntityId: String(bill?.legalEntityId ?? legalEntities[0]?.id ?? ""),
+    legalEntityId: getInitialLegalEntityId(legalEntities, bill?.legalEntityId),
     vendorId: String(bill?.vendorId ?? vendors[0]?.id ?? ""),
     recurringExpenseId: bill?.recurringExpenseId == null ? "" : String(bill.recurringExpenseId),
     invoiceNumber: bill?.invoiceNumber ?? "",
@@ -613,7 +614,7 @@ function paymentFormFrom(
   payment?: FinancePayment,
 ): PaymentForm {
   return {
-    legalEntityId: String(payment?.legalEntityId ?? legalEntities[0]?.id ?? ""),
+    legalEntityId: getInitialLegalEntityId(legalEntities, payment?.legalEntityId),
     vendorId: payment?.vendorId == null ? String(vendors[0]?.id ?? "") : String(payment.vendorId),
     amount: centsToMoney(payment?.amountCents ?? 0),
     currency: payment?.currency ?? "USD",
@@ -726,6 +727,8 @@ function SubscriptionDialog({
     if (state) setForm(state.form);
   }, [state]);
 
+  const canSubmit = state?.mode !== "create" || legalEntities.length > 0;
+
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-3xl">
@@ -734,7 +737,7 @@ function SubscriptionDialog({
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => ({ value: String(entity.id), label: legalEntityLabel(entity) }))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
+            <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
             <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
             <SelectField label="Cadence" value={form.cadence} options={cadences} onValueChange={(cadence) => setForm({ ...form, cadence })} />
@@ -769,7 +772,7 @@ function SubscriptionDialog({
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit" disabled={!canSubmit}>Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -800,6 +803,8 @@ function BillDialog({
     if (state) setForm(state.form);
   }, [state]);
 
+  const canSubmit = state?.mode !== "create" || legalEntities.length > 0;
+
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-3xl">
@@ -808,7 +813,7 @@ function BillDialog({
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => ({ value: String(entity.id), label: legalEntityLabel(entity) }))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
+            <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
             <SelectField label="Kind" value={form.billKind} options={billKinds} onValueChange={(billKind) => setForm({ ...form, billKind })} />
             <TextField label="Invoice number" value={form.invoiceNumber} onChange={(invoiceNumber) => setForm({ ...form, invoiceNumber })} />
@@ -833,7 +838,7 @@ function BillDialog({
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit" disabled={!canSubmit}>Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -860,6 +865,8 @@ function PaymentDialog({
     if (state) setForm(state.form);
   }, [state]);
 
+  const canSubmit = state?.mode !== "create" || legalEntities.length > 0;
+
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-3xl">
@@ -868,7 +875,7 @@ function PaymentDialog({
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => ({ value: String(entity.id), label: legalEntityLabel(entity) }))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
+            <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId || "none"} options={["none", ...vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))]} onValueChange={(vendorId) => setForm({ ...form, vendorId: vendorId === "none" ? "" : vendorId })} />
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
             <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
@@ -885,7 +892,7 @@ function PaymentDialog({
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit" disabled={!canSubmit}>Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1062,6 +1069,8 @@ export default function V2FinanceManagement() {
     applicationsQuery,
     reconciliationQuery,
   ].find((query) => query.error)?.error;
+  const legalEntityConfigurationRequired = !isLoading && !error && legalEntities.length === 0;
+  const canCreateLegalEntityScopedRecord = legalEntities.length > 0;
 
   function mutate(method: string, path: string, body?: unknown, onSuccess?: () => void) {
     mutation.mutate(
@@ -1090,7 +1099,6 @@ export default function V2FinanceManagement() {
   function submitSubscription(form: SubscriptionForm) {
     try {
       const body = {
-        legalEntityId: Number(form.legalEntityId),
         vendorId: Number(form.vendorId),
         categoryCode: form.categoryCode.trim(),
         cadence: form.cadence,
@@ -1107,10 +1115,15 @@ export default function V2FinanceManagement() {
       };
       const isEdit = subscriptionDialog?.mode === "edit";
       if (isEdit) {
-        const { legalEntityId: _legalEntityId, vendorId: _vendorId, status: _status, ...updateBody } = body;
+        const { vendorId: _vendorId, status: _status, ...updateBody } = body;
         mutate("PATCH", `${V2_FINANCE_BASE}/subscriptions/${subscriptionDialog?.subscription?.id}`, updateBody, () => setSubscriptionDialog(null));
       } else {
-        mutate("POST", `${V2_FINANCE_BASE}/subscriptions`, body, () => setSubscriptionDialog(null));
+        mutate(
+          "POST",
+          `${V2_FINANCE_BASE}/subscriptions`,
+          { legalEntityId: parseRequiredLegalEntityId(form.legalEntityId), ...body },
+          () => setSubscriptionDialog(null),
+        );
       }
     } catch (error) {
       mutation.reset();
@@ -1120,7 +1133,6 @@ export default function V2FinanceManagement() {
 
   function submitBill(form: BillForm) {
     const body = {
-      legalEntityId: Number(form.legalEntityId),
       vendorId: Number(form.vendorId),
       recurringExpenseId: optionalNullableNumber(form.recurringExpenseId),
       invoiceNumber: optionalNullableText(form.invoiceNumber),
@@ -1138,16 +1150,20 @@ export default function V2FinanceManagement() {
     };
     const isEdit = billDialog?.mode === "edit";
     if (isEdit) {
-      const { legalEntityId: _legalEntityId, vendorId: _vendorId, status: _status, ...updateBody } = body;
+      const { vendorId: _vendorId, status: _status, ...updateBody } = body;
       mutate("PATCH", `${V2_FINANCE_BASE}/bills/${billDialog?.bill?.id}`, updateBody, () => setBillDialog(null));
     } else {
-      mutate("POST", `${V2_FINANCE_BASE}/bills`, body, () => setBillDialog(null));
+      mutate(
+        "POST",
+        `${V2_FINANCE_BASE}/bills`,
+        { legalEntityId: parseRequiredLegalEntityId(form.legalEntityId), ...body },
+        () => setBillDialog(null),
+      );
     }
   }
 
   function submitPayment(form: PaymentForm) {
     const body = {
-      legalEntityId: Number(form.legalEntityId),
       vendorId: optionalNullableNumber(form.vendorId),
       amountCents: moneyToCents(form.amount),
       currency: form.currency.trim().toUpperCase(),
@@ -1162,10 +1178,15 @@ export default function V2FinanceManagement() {
     };
     const isEdit = paymentDialog?.mode === "edit";
     if (isEdit) {
-      const { legalEntityId: _legalEntityId, status: _status, ...updateBody } = body;
+      const { status: _status, ...updateBody } = body;
       mutate("PATCH", `${V2_FINANCE_BASE}/payments/${paymentDialog?.payment?.id}`, updateBody, () => setPaymentDialog(null));
     } else {
-      mutate("POST", `${V2_FINANCE_BASE}/payments`, body, () => setPaymentDialog(null));
+      mutate(
+        "POST",
+        `${V2_FINANCE_BASE}/payments`,
+        { legalEntityId: parseRequiredLegalEntityId(form.legalEntityId), ...body },
+        () => setPaymentDialog(null),
+      );
     }
   }
 
@@ -1247,11 +1268,18 @@ export default function V2FinanceManagement() {
           </div>
         )}
 
+        {legalEntityConfigurationRequired && (
+          <EmptyState
+            title="Legal entity configuration required"
+            description="Add an active company legal entity before creating subscriptions, bills, or payments."
+          />
+        )}
+
         {tab === "bills" && (
           <Section
             title="Bills"
             icon={ReceiptText}
-            action={<Button onClick={() => setBillDialog({ mode: "create", form: billFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add bill</Button>}
+            action={<Button disabled={!canCreateLegalEntityScopedRecord} onClick={() => setBillDialog({ mode: "create", form: billFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add bill</Button>}
           >
             {isLoading ? (
               <EmptyState title="Loading bills" description="Loading vendor bills and settlement details." />
@@ -1259,8 +1287,8 @@ export default function V2FinanceManagement() {
               <EmptyState
                 title="No bills yet"
                 description="Add vendor bills as they arrive so due dates, balances, and receipts stay visible."
-                actionLabel="Add bill"
-                onAction={() => setBillDialog({ mode: "create", form: billFormFrom(legalEntities, activeVendors) })}
+                actionLabel={canCreateLegalEntityScopedRecord ? "Add bill" : undefined}
+                onAction={canCreateLegalEntityScopedRecord ? () => setBillDialog({ mode: "create", form: billFormFrom(legalEntities, activeVendors) }) : undefined}
               />
             ) : (
               <Table>
@@ -1321,7 +1349,7 @@ export default function V2FinanceManagement() {
           <Section
             title="Payments"
             icon={WalletCards}
-            action={<Button onClick={() => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Record payment</Button>}
+            action={<Button disabled={!canCreateLegalEntityScopedRecord} onClick={() => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Record payment</Button>}
           >
             {isLoading ? (
               <EmptyState title="Loading payments" description="Loading payment records and unapplied balances." />
@@ -1329,8 +1357,8 @@ export default function V2FinanceManagement() {
               <EmptyState
                 title="No payments recorded"
                 description="Record an actual payment after money has moved or is in flight."
-                actionLabel="Record payment"
-                onAction={() => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) })}
+                actionLabel={canCreateLegalEntityScopedRecord ? "Record payment" : undefined}
+                onAction={canCreateLegalEntityScopedRecord ? () => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) }) : undefined}
               />
             ) : (
               <Table>
@@ -1384,7 +1412,7 @@ export default function V2FinanceManagement() {
           <Section
             title="Subscriptions"
             icon={Building2}
-            action={<Button onClick={() => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add subscription</Button>}
+            action={<Button disabled={!canCreateLegalEntityScopedRecord} onClick={() => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add subscription</Button>}
           >
             {isLoading ? (
               <EmptyState title="Loading subscriptions" description="Loading expected recurring expenses." />
@@ -1392,8 +1420,8 @@ export default function V2FinanceManagement() {
               <EmptyState
                 title="No subscriptions yet"
                 description="Track SaaS, payroll providers, utilities, and services before invoices arrive."
-                actionLabel="Add subscription"
-                onAction={() => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) })}
+                actionLabel={canCreateLegalEntityScopedRecord ? "Add subscription" : undefined}
+                onAction={canCreateLegalEntityScopedRecord ? () => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) }) : undefined}
               />
             ) : (
               <Table>
