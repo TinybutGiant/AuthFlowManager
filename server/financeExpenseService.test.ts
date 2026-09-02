@@ -161,6 +161,7 @@ test("subscription lifecycle supports create, pause, resume, and cancel without 
       id: 100,
       legalEntityId: 1,
       vendorId: 20,
+      name: "Cloudflare domain renewal",
       categoryCode: "saas",
       cadence: "monthly",
       expectedAmountCents: 2_000,
@@ -185,6 +186,7 @@ test("subscription lifecycle supports create, pause, resume, and cancel without 
         id: 100,
         legalEntityId: 1,
         vendorId: 20,
+        name: values.name ?? "Cloudflare domain renewal",
         categoryCode: values.categoryCode ?? "saas",
         cadence: values.cadence ?? "monthly",
         expectedAmountCents: values.expectedAmountCents ?? 2_000,
@@ -221,6 +223,7 @@ test("subscription lifecycle supports create, pause, resume, and cancel without 
   const created = await createFinanceSubscription(repo, {
     legalEntityId: 1,
     vendorId: 20,
+    name: "Cloudflare domain renewal",
     categoryCode: "saas",
     cadence: "monthly",
     expectedAmountCents: 2_000,
@@ -231,17 +234,20 @@ test("subscription lifecycle supports create, pause, resume, and cancel without 
     actorAdminId: 42,
   });
   assert.equal(created.createdBy, 42);
+  assert.equal(created.name, "Cloudflare domain renewal");
 
   assert.equal((await pauseFinanceSubscription(repo, 100, 42)).status, "paused");
   assert.equal((await resumeFinanceSubscription(repo, 100, 42)).status, "active");
   assert.equal((await updateFinanceSubscription(repo, 100, { expectedAmountCents: 2_500, actorAdminId: 42 })).expectedAmountCents, 2_500);
+  assert.equal((await updateFinanceSubscription(repo, 100, { name: "Workers paid plan", actorAdminId: 42 })).name, "Workers paid plan");
   assert.equal((await cancelFinanceSubscription(repo, 100, { actorAdminId: 42 }, now)).status, "cancelled");
   assert.equal(calls.includes("create-bill"), false);
   assert.equal(calls.includes("create-payment"), false);
-  assert.deepEqual(auditEvents.map((event) => event.action), ["created", "paused", "resumed", "updated", "cancelled"]);
+  assert.deepEqual(auditEvents.map((event) => event.action), ["created", "paused", "resumed", "updated", "updated", "cancelled"]);
   assert.equal(auditEvents.every((event) => event.entityType === "recurring_expense"), true);
   assert.deepEqual(auditEvents[1].changesJson.status, { from: "active", to: "paused" });
   assert.deepEqual(auditEvents[3].changesJson.expectedAmountCents, { from: 2000, to: 2500 });
+  assert.deepEqual(auditEvents[4].changesJson.name, { from: "Cloudflare domain renewal", to: "Workers paid plan" });
 });
 
 test("bill creation validates references, duplicate invoice numbers, and actor attribution", async () => {
@@ -328,6 +334,7 @@ test("subscription-backed bill rejects vendor linkage mismatch", async () => {
       id: 100,
       legalEntityId: 1,
       vendorId: 21,
+      name: "Mismatched vendor plan",
       currency: "USD",
       categoryCode: "saas",
       status: "active",
@@ -504,6 +511,7 @@ test("finance overview separates expected subscriptions from actual bills and pa
       {
         id: 100,
         vendorId: 10,
+        name: "Cloud A monthly infrastructure",
         status: "active",
         cadence: "monthly",
         expectedAmountCents: 2_000,
@@ -516,6 +524,7 @@ test("finance overview separates expected subscriptions from actual bills and pa
       {
         id: 101,
         vendorId: 11,
+        name: "SaaS B annual license",
         status: "active",
         cadence: "annual",
         expectedAmountCents: 12_000,
@@ -528,6 +537,7 @@ test("finance overview separates expected subscriptions from actual bills and pa
       {
         id: 102,
         vendorId: 12,
+        name: "Utility variable plan",
         status: "active",
         cadence: "custom",
         expectedAmountCents: null,
@@ -539,6 +549,7 @@ test("finance overview separates expected subscriptions from actual bills and pa
       {
         id: 104,
         vendorId: 14,
+        name: "CN utility monthly service",
         status: "active",
         cadence: "monthly",
         expectedAmountCents: 5_000,
@@ -551,6 +562,7 @@ test("finance overview separates expected subscriptions from actual bills and pa
       {
         id: 103,
         vendorId: 13,
+        name: "Paused SaaS plan",
         status: "paused",
         cadence: "monthly",
         expectedAmountCents: 900,
@@ -618,27 +630,69 @@ test("monthly recurring spend converts fixed active cadences and excludes variab
   }), null);
 });
 
-test("subscription payload requires expected amount unless variable", () => {
+test("subscription payload requires name and expected amount unless variable", () => {
   assert.throws(() => createRecurringExpensePayloadSchema.parse({
     legalEntityId: 1,
     vendorId: 1,
     categoryCode: "saas",
     cadence: "monthly",
+    expectedAmountCents: 1_000,
     variableAmount: false,
   }));
-  assert.equal(createRecurringExpensePayloadSchema.parse({
+  assert.throws(() => createRecurringExpensePayloadSchema.parse({
     legalEntityId: 1,
     vendorId: 1,
+    name: "   ",
+    categoryCode: "saas",
+    cadence: "monthly",
+    expectedAmountCents: 1_000,
+    variableAmount: false,
+  }));
+  assert.throws(() => createRecurringExpensePayloadSchema.parse({
+    legalEntityId: 1,
+    vendorId: 1,
+    name: "Cloudflare domain renewal",
+    categoryCode: "saas",
+    cadence: "monthly",
+    variableAmount: false,
+  }));
+  assert.deepEqual(createRecurringExpensePayloadSchema.parse({
+    legalEntityId: 1,
+    vendorId: 1,
+    name: "  Cloudflare domain renewal  ",
     categoryCode: "saas",
     cadence: "monthly",
     variableAmount: true,
-  }).expectedAmountCents, undefined);
+    notes: "  Annual domain registration renewal  ",
+  }), {
+    legalEntityId: 1,
+    vendorId: 1,
+    name: "Cloudflare domain renewal",
+    categoryCode: "saas",
+    cadence: "monthly",
+    variableAmount: true,
+    currency: "USD",
+    autoRenew: false,
+    status: "draft",
+    notes: "Annual domain registration renewal",
+  });
 });
 
 test("subscription patch does not treat absent optional fields as updates", () => {
   assert.equal(updateRecurringExpensePayloadSchema.safeParse({}).success, false);
+  assert.equal(updateRecurringExpensePayloadSchema.safeParse({ name: null }).success, false);
+  assert.equal(updateRecurringExpensePayloadSchema.safeParse({ name: "   " }).success, false);
   assert.deepEqual(updateRecurringExpensePayloadSchema.parse({ nextBillingDate: "" }), {
     nextBillingDate: null,
+  });
+  assert.deepEqual(updateRecurringExpensePayloadSchema.parse({
+    name: "  ahhh-yaotu.com domain renewal  ",
+    categoryCode: "domain",
+    notes: "  Annual domain registration renewal.  ",
+  }), {
+    name: "ahhh-yaotu.com domain renewal",
+    categoryCode: "domain",
+    notes: "Annual domain registration renewal.",
   });
 });
 
@@ -777,6 +831,7 @@ test("subscription-backed bill must match subscription scope and category", asyn
       id: 100,
       legalEntityId: 1,
       vendorId: 20,
+      name: "Cloud infrastructure plan",
       currency: "USD",
       categoryCode: "cloud",
       status: "active",

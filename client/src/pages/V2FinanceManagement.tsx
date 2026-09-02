@@ -73,6 +73,7 @@ type FinanceSubscription = {
   legalEntityId: number;
   vendorId: number;
   vendorName?: string | null;
+  name: string;
   categoryCode: string;
   cadence: string;
   expectedAmountCents?: number | null;
@@ -180,6 +181,7 @@ type VendorForm = {
 type SubscriptionForm = {
   legalEntityId: string;
   vendorId: string;
+  name: string;
   categoryCode: string;
   cadence: string;
   expectedAmount: string;
@@ -253,7 +255,7 @@ const V2_FINANCE_BASE = "/api/v2/finance";
 const tabs: Array<{ value: FinanceTab; label: string }> = [
   { value: "bills", label: "Bills" },
   { value: "payments", label: "Payments" },
-  { value: "subscriptions", label: "Subscriptions" },
+  { value: "subscriptions", label: "Recurring Expenses" },
   { value: "vendors", label: "Vendors" },
   { value: "reconciliation", label: "Reconciliation" },
 ];
@@ -378,10 +380,13 @@ function billLabel(bill: FinanceBill) {
 
 function subscriptionLabel(subscription: FinanceSubscription) {
   const vendor = subscription.vendorName || `Vendor #${subscription.vendorId}`;
-  const amount = subscription.variableAmount
-    ? "Variable"
-    : formatMoney(subscription.expectedAmountCents, subscription.currency);
-  return `${vendor} - ${humanize(subscription.categoryCode)} - ${amount}`;
+  return `${vendor} - ${subscription.name}`;
+}
+
+function recurringExpenseSummary(subscription: FinanceSubscription) {
+  const vendor = subscription.vendorName || `Vendor #${subscription.vendorId}`;
+  const amount = subscription.variableAmount ? "Variable" : formatMoney(subscription.expectedAmountCents, subscription.currency);
+  return `${vendor} - ${humanize(subscription.cadence)} - ${amount}`;
 }
 
 function paymentLabel(payment: FinancePayment) {
@@ -511,16 +516,20 @@ function TextField({
   value,
   onChange,
   type = "text",
+  required = false,
+  maxLength,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
+  required?: boolean;
+  maxLength?: number;
 }) {
   return (
     <div className="grid gap-2">
       <Label>{label}</Label>
-      <Input type={type} value={value} onChange={(event) => onChange(event.currentTarget.value)} />
+      <Input type={type} value={value} onChange={(event) => onChange(event.currentTarget.value)} required={required} maxLength={maxLength} />
     </div>
   );
 }
@@ -570,6 +579,7 @@ function subscriptionFormFrom(
   return {
     legalEntityId: getInitialLegalEntityId(legalEntities, subscription?.legalEntityId),
     vendorId: String(subscription?.vendorId ?? vendors[0]?.id ?? ""),
+    name: subscription?.name ?? "",
     categoryCode: subscription?.categoryCode ?? "saas",
     cadence: subscription?.cadence ?? "monthly",
     expectedAmount: centsToMoney(subscription?.expectedAmountCents ?? 0),
@@ -729,19 +739,21 @@ function SubscriptionDialog({
     if (state) setForm(state.form);
   }, [state]);
 
-  const canSubmit = state?.mode !== "create" || legalEntities.length > 0;
+  const billingDayLabel = form.cadence === "monthly" ? "Billing day" : "Billing day (optional)";
+  const canSubmit = form.name.trim().length > 0 && (state?.mode !== "create" || legalEntities.length > 0);
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{state?.mode === "edit" ? "Edit Subscription" : "Add Subscription"}</DialogTitle>
+          <DialogTitle>{state?.mode === "edit" ? "Edit Recurring Expense" : "Add Recurring Expense"}</DialogTitle>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
             <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
           </div>
+          <TextField label="Name" value={form.name} onChange={(name) => setForm({ ...form, name })} required maxLength={200} />
           <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
             <SelectField label="Cadence" value={form.cadence} options={cadences} onValueChange={(cadence) => setForm({ ...form, cadence })} />
@@ -751,8 +763,8 @@ function SubscriptionDialog({
             <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <TextField label="Billing day" type="number" value={form.billingDay} onChange={(billingDay) => setForm({ ...form, billingDay })} />
-            <TextField label="Next bill" type="date" value={form.nextBillingDate} onChange={(nextBillingDate) => setForm({ ...form, nextBillingDate })} />
+            <TextField label={billingDayLabel} type="number" value={form.billingDay} onChange={(billingDay) => setForm({ ...form, billingDay })} />
+            <TextField label="Next bill date" type="date" value={form.nextBillingDate} onChange={(nextBillingDate) => setForm({ ...form, nextBillingDate })} />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Renewal date" type="date" value={form.renewalDate} onChange={(renewalDate) => setForm({ ...form, renewalDate })} />
@@ -846,7 +858,7 @@ function BillDialog({
             <TextField label="Service end" type="date" value={form.servicePeriodEnd} onChange={(servicePeriodEnd) => setForm({ ...form, servicePeriodEnd })} />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Subscription" value={form.recurringExpenseId || "none"} options={["none", ...subscriptions.map((subscription) => ({ value: String(subscription.id), label: subscriptionLabel(subscription) }))]} onValueChange={(recurringExpenseId) => setForm({ ...form, recurringExpenseId: recurringExpenseId === "none" ? "" : recurringExpenseId })} />
+            <SelectField label="Recurring Expense" value={form.recurringExpenseId || "none"} options={["none", ...subscriptions.map((subscription) => ({ value: String(subscription.id), label: subscriptionLabel(subscription) }))]} onValueChange={(recurringExpenseId) => setForm({ ...form, recurringExpenseId: recurringExpenseId === "none" ? "" : recurringExpenseId })} />
             <SelectField label="Credit source" value={form.creditForVendorBillId || "none"} options={["none", ...bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))]} onValueChange={(creditForVendorBillId) => setForm({ ...form, creditForVendorBillId: creditForVendorBillId === "none" ? "" : creditForVendorBillId })} />
           </div>
           <div className="grid gap-2">
@@ -1152,9 +1164,10 @@ export default function V2FinanceManagement() {
     try {
       const body = {
         vendorId: Number(form.vendorId),
+        name: form.name.trim(),
         categoryCode: form.categoryCode.trim(),
         cadence: form.cadence,
-        expectedAmountCents: form.variableAmount ? null : moneyToCents(form.expectedAmount, true),
+        expectedAmountCents: form.variableAmount && !form.expectedAmount.trim() ? null : moneyToCents(form.expectedAmount, true),
         currency: form.currency.trim().toUpperCase(),
         variableAmount: form.variableAmount,
         billingDay: optionalNullableNumber(form.billingDay),
@@ -1294,7 +1307,7 @@ export default function V2FinanceManagement() {
         <div className="grid gap-4 md:grid-cols-4">
           <Metric label="Open bills" value={overviewQuery.data?.metrics?.openBillsCount ?? 0} icon={ReceiptText} />
           <Metric label="Overdue" value={overviewQuery.data?.metrics?.overdueBillsCount ?? 0} icon={AlertCircle} />
-          <Metric label="Recurring" value={overviewQuery.data?.metrics?.activeSubscriptionsCount ?? 0} icon={Building2} />
+          <Metric label="Recurring expenses" value={overviewQuery.data?.metrics?.activeSubscriptionsCount ?? 0} icon={Building2} />
           <Metric
             label="Open total"
             value={(overviewQuery.data?.metrics?.openBillTotalsByCurrency ?? []).map((row) => formatMoney(row.amountCents, row.currency)).join(" / ") || "$0.00"}
@@ -1323,7 +1336,7 @@ export default function V2FinanceManagement() {
         {legalEntityConfigurationRequired && (
           <EmptyState
             title="Legal entity configuration required"
-            description="Add an active company legal entity before creating subscriptions, bills, or payments."
+            description="Add an active company legal entity before creating recurring expenses, bills, or payments."
           />
         )}
 
@@ -1462,28 +1475,28 @@ export default function V2FinanceManagement() {
 
         {tab === "subscriptions" && (
           <Section
-            title="Subscriptions"
+            title="Recurring Expenses"
             icon={Building2}
-            action={<Button disabled={!canCreateLegalEntityScopedRecord} onClick={() => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add subscription</Button>}
+            action={<Button disabled={!canCreateLegalEntityScopedRecord} onClick={() => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add recurring expense</Button>}
           >
             {isLoading ? (
-              <EmptyState title="Loading subscriptions" description="Loading expected recurring expenses." />
+              <EmptyState title="Loading recurring expenses" description="Loading expected recurring obligations." />
             ) : subscriptions.length === 0 ? (
               <EmptyState
-                title="No subscriptions yet"
-                description="Track SaaS, payroll providers, utilities, and services before invoices arrive."
-                actionLabel={canCreateLegalEntityScopedRecord ? "Add subscription" : undefined}
+                title="No recurring expenses yet"
+                description="Track SaaS, payroll providers, utilities, and services before bills arrive."
+                actionLabel={canCreateLegalEntityScopedRecord ? "Add recurring expense" : undefined}
                 onAction={canCreateLegalEntityScopedRecord ? () => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) }) : undefined}
               />
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Vendor</TableHead>
+                    <TableHead>Recurring Expense</TableHead>
                     <TableHead>Cadence</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Expected</TableHead>
-                    <TableHead>Next bill</TableHead>
+                    <TableHead>Next bill date</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1491,7 +1504,8 @@ export default function V2FinanceManagement() {
                   {subscriptions.map((subscription) => (
                     <TableRow key={subscription.id}>
                       <TableCell>
-                        <div>{subscription.vendorName || `Vendor #${subscription.vendorId}`}</div>
+                        <div>{subscription.name}</div>
+                        <div className="text-xs text-muted-foreground">{recurringExpenseSummary(subscription)}</div>
                         <div className="text-xs text-muted-foreground">{humanize(subscription.categoryCode)}</div>
                         {subscription.notes && <div className="mt-1 text-xs text-muted-foreground">{subscription.notes}</div>}
                       </TableCell>
@@ -1532,7 +1546,7 @@ export default function V2FinanceManagement() {
             ) : vendors.length === 0 ? (
               <EmptyState
                 title="No vendors yet"
-                description="Add vendors before creating subscriptions, bills, or payment records."
+                description="Add vendors before creating recurring expenses, bills, or payment records."
                 actionLabel="Add vendor"
                 onAction={() => setVendorDialog({ mode: "create", form: vendorFormFrom() })}
               />

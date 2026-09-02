@@ -55,7 +55,7 @@ test("V2 finance read queries declare explicit V2 query functions", () => {
 
 test("V2 finance restores AP notes without adding legacy finance coupling", () => {
   assert.match(source, /type FinanceVendor = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
-  assert.match(source, /type FinanceSubscription = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
+  assert.match(source, /type FinanceSubscription = \{[\s\S]*?name: string;[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
   assert.match(source, /type FinanceBill = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
 
   assert.match(source, /notes: vendor\?\.notes \?\? ""/);
@@ -73,9 +73,11 @@ test("V2 finance uses loaded AP labels instead of raw IDs when available", () =>
   assert.match(source, /function billLabel\(bill: FinanceBill\)/);
   assert.match(source, /function subscriptionLabel\(subscription: FinanceSubscription\)/);
   assert.match(source, /function paymentLabel\(payment: FinancePayment\)/);
+  assert.match(source, /return `\$\{vendor\} - \$\{subscription\.name\}`;/);
 
   assert.doesNotMatch(source, /options=\{legalEntities\.map\(\(entity\) => String\(entity\.id\)\)\}/);
   assert.doesNotMatch(source, /options=\{vendors\.map\(\(vendor\) => String\(vendor\.id\)\)\}/);
+  assert.doesNotMatch(source, /Cloudflare - saas - \$10\.46/);
   assert.match(source, /targetBill \? billLabel\(targetBill\) : `Bill #\$\{application\.targetVendorBillId\}`/);
   assert.match(source, /payment\s*\?\s*paymentLabel\(payment\)/);
   assert.match(source, /credit\s*\?\s*billLabel\(credit\)/);
@@ -108,16 +110,19 @@ test("V2 AP dialogs preserve legacy field order and explicit row structure", () 
 
   const subscription = sourceBetween("function SubscriptionDialog", "function BillDialog");
   assert.match(subscription, /<DialogContent className="sm:max-w-2xl">/);
+  assert.match(subscription, /Edit Recurring Expense/);
+  assert.match(subscription, /Add Recurring Expense/);
   assertOrdered(subscription, [
     "className=\"space-y-4\"",
     "<LegalEntityField",
     "label=\"Vendor\"",
+    "label=\"Name\"",
     "label=\"Category\"",
     "label=\"Cadence\"",
     "label=\"Expected amount\"",
     "label=\"Currency\"",
-    "label=\"Billing day\"",
-    "label=\"Next bill\"",
+    "label={billingDayLabel}",
+    "label=\"Next bill date\"",
     "label=\"Renewal date\"",
     "label=\"Trial ends\"",
     "label=\"Initial status\"",
@@ -141,7 +146,7 @@ test("V2 AP dialogs preserve legacy field order and explicit row structure", () 
     "label=\"Due date\"",
     "label=\"Service start\"",
     "label=\"Service end\"",
-    "label=\"Subscription\"",
+    "label=\"Recurring Expense\"",
     "label=\"Credit source\"",
     "<Label>Notes</Label>",
   ]);
@@ -181,8 +186,8 @@ test("V2 finance has descriptive AP empty states with local actions", () => {
   for (const text of [
     "Add vendor bills as they arrive so due dates, balances, and receipts stay visible.",
     "Record an actual payment after money has moved or is in flight.",
-    "Track SaaS, payroll providers, utilities, and services before invoices arrive.",
-    "Add vendors before creating subscriptions, bills, or payment records.",
+    "Track SaaS, payroll providers, utilities, and services before bills arrive.",
+    "Add vendors before creating recurring expenses, bills, or payment records.",
     "Open AP exceptions, duplicates, or amount mismatches will appear here.",
     "Payments and credits will appear here after they are applied to bills.",
   ]) {
@@ -190,4 +195,16 @@ test("V2 finance has descriptive AP empty states with local actions", () => {
   }
 
   assert.doesNotMatch(source, /FinancePageHeader|OverviewPanel|financeRolesQueryPrefix/);
+});
+
+test("V2 finance presents recurring expenses as named obligations", () => {
+  assert.match(source, /\{ value: "subscriptions", label: "Recurring Expenses" \}/);
+  assert.match(source, /name: subscription\?\.name \?\? ""/);
+  assert.match(source, /name: form\.name\.trim\(\)/);
+  assert.match(source, /expectedAmountCents: form\.variableAmount && !form\.expectedAmount\.trim\(\) \? null : moneyToCents\(form\.expectedAmount, true\)/);
+  assert.match(source, /form\.name\.trim\(\)\.length > 0/);
+  assert.match(source, /title="Recurring Expenses"/);
+  assert.match(source, /Recurring Expense/);
+  assert.match(source, /No recurring expenses yet/);
+  assert.match(source, /recurringExpenseSummary\(subscription\)/);
 });

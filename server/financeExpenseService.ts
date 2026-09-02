@@ -118,6 +118,7 @@ const FINANCE_AUDIT_ACTIONS = [
 ] as const;
 const VENDOR_AUDIT_FIELDS = ["name", "vendorType", "status"] as const;
 const RECURRING_EXPENSE_AUDIT_FIELDS = [
+  "name",
   "categoryCode",
   "cadence",
   "expectedAmountCents",
@@ -309,6 +310,7 @@ export const updateVendorPayloadSchema = z.object({
 const recurringExpenseWriteFields = {
   legalEntityId: positiveIdSchema,
   vendorId: positiveIdSchema,
+  name: requiredText(200),
   categoryCode: requiredText(80),
   cadence: z.enum(RECURRING_EXPENSE_CADENCES),
   expectedAmountCents: optionalAmountCentsSchema,
@@ -359,6 +361,7 @@ export const createRecurringExpensePayloadSchema = z
 
 export const updateRecurringExpensePayloadSchema = z
   .object({
+    name: recurringExpenseWriteFields.name.optional(),
     categoryCode: recurringExpenseWriteFields.categoryCode.optional(),
     cadence: recurringExpenseWriteFields.cadence.optional(),
     expectedAmountCents: optionalAmountCentsSchema,
@@ -708,6 +711,7 @@ export interface RecurringExpenseListItem {
   legalEntityId: number;
   vendorId: number;
   vendorName?: string | null;
+  name: string;
   categoryCode: string;
   cadence: string;
   expectedAmountCents?: number | null;
@@ -795,6 +799,7 @@ export interface FinanceOverviewSubscriptionRow {
   id: number;
   vendorId: number;
   vendorName?: string | null;
+  name: string;
   status: string;
   cadence: string;
   expectedAmountCents?: number | null;
@@ -930,6 +935,7 @@ export function financeSubscriptionResponse(
     legalEntityId: subscription.legalEntityId,
     vendorId: subscription.vendorId,
     vendorName: "vendorName" in subscription ? subscription.vendorName : undefined,
+    name: subscription.name,
     categoryCode: subscription.categoryCode,
     cadence: subscription.cadence,
     expectedAmountCents: subscription.expectedAmountCents,

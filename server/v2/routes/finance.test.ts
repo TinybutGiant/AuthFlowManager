@@ -61,6 +61,7 @@ function baseSubscription(overrides: Record<string, unknown> = {}) {
     legalEntityId: 1,
     vendorId: 20,
     vendorName: "Vendor A",
+    name: "Vendor A monthly SaaS",
     categoryCode: "saas",
     cadence: "monthly",
     expectedAmountCents: 2_000,
@@ -270,7 +271,7 @@ test("V2 finance vendor route preserves AP response contract and actor mapping",
 test("V2 finance GET responses preserve AP notes fields", async () => {
   const repository = repo({
     vendor: { notes: "Vendor directory note" },
-    subscription: { notes: "Annual domain renewal" },
+    subscription: { name: "ahhh-yaotu.com domain renewal", notes: "Annual domain renewal" },
     bill: { notes: "Invoice reviewed with receipt" },
   });
 
@@ -288,7 +289,9 @@ test("V2 finance GET responses preserve AP notes fields", async () => {
     repository,
   );
   assert.equal(subscriptionsResponse.status, 200);
-  assert.equal(((await subscriptionsResponse.json()) as Array<Record<string, unknown>>)[0].notes, "Annual domain renewal");
+  const subscriptionsPayload = await subscriptionsResponse.json() as Array<Record<string, unknown>>;
+  assert.equal(subscriptionsPayload[0].name, "ahhh-yaotu.com domain renewal");
+  assert.equal(subscriptionsPayload[0].notes, "Annual domain renewal");
 
   const billsResponse = await handleFinanceRouteWithRepository(
     request("/api/v2/finance/bills"),
@@ -328,6 +331,7 @@ test("V2 finance AP mutations return, edit, and clear notes", async () => {
     jsonRequest("/api/v2/finance/subscriptions", "POST", {
       legalEntityId: 1,
       vendorId: 20,
+      name: "ahhh-yaotu.com domain renewal",
       categoryCode: "cloud",
       cadence: "annual",
       expectedAmountCents: 1_200,
@@ -341,15 +345,23 @@ test("V2 finance AP mutations return, edit, and clear notes", async () => {
     repository,
   );
   assert.equal(createdSubscriptionResponse.status, 201);
-  assert.equal((await body(createdSubscriptionResponse)).notes, "Annual domain registration renewal");
+  const createdSubscription = await body(createdSubscriptionResponse);
+  assert.equal(createdSubscription.name, "ahhh-yaotu.com domain renewal");
+  assert.equal(createdSubscription.categoryCode, "cloud");
+  assert.equal(createdSubscription.notes, "Annual domain registration renewal");
 
   const clearedSubscriptionResponse = await handleFinanceRouteWithRepository(
-    jsonRequest("/api/v2/finance/subscriptions/100", "PATCH", { notes: null }),
+    jsonRequest("/api/v2/finance/subscriptions/100", "PATCH", {
+      name: "Cloudflare Workers paid plan",
+      notes: null,
+    }),
     staff,
     repository,
   );
   assert.equal(clearedSubscriptionResponse.status, 200);
-  assert.equal((await body(clearedSubscriptionResponse)).notes, null);
+  const updatedSubscription = await body(clearedSubscriptionResponse);
+  assert.equal(updatedSubscription.name, "Cloudflare Workers paid plan");
+  assert.equal(updatedSubscription.notes, null);
 
   const createdBillResponse = await handleFinanceRouteWithRepository(
     jsonRequest("/api/v2/finance/bills", "POST", {
@@ -392,4 +404,42 @@ test("V2 finance validation errors are bounded JSON errors", async () => {
   const payload = await body(response);
   assert.equal(payload.code, "INVALID_REQUEST");
   assert.equal(payload.message, "Invalid finance request");
+});
+
+test("V2 recurring expense identity rejects missing or whitespace names", async () => {
+  for (const payload of [
+    {
+      legalEntityId: 1,
+      vendorId: 20,
+      categoryCode: "cloud",
+      cadence: "annual",
+      expectedAmountCents: 1_200,
+      variableAmount: false,
+    },
+    {
+      legalEntityId: 1,
+      vendorId: 20,
+      name: "   ",
+      categoryCode: "cloud",
+      cadence: "annual",
+      expectedAmountCents: 1_200,
+      variableAmount: false,
+    },
+  ]) {
+    const response = await handleFinanceRouteWithRepository(
+      jsonRequest("/api/v2/finance/subscriptions", "POST", payload),
+      principal(["finance_admin"]),
+      repo(),
+    );
+    assert.equal(response.status, 400);
+    assert.equal((await body(response)).code, "INVALID_REQUEST");
+  }
+
+  const patchResponse = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/subscriptions/100", "PATCH", { name: "   " }),
+    principal(["finance_admin"]),
+    repo(),
+  );
+  assert.equal(patchResponse.status, 400);
+  assert.equal((await body(patchResponse)).code, "INVALID_REQUEST");
 });

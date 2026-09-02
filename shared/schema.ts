@@ -692,6 +692,7 @@ export const recurringExpenses = pgTable(
     id: serial("id").primaryKey(),
     legalEntityId: integer("legal_entity_id").notNull().references(() => legalEntities.id),
     vendorId: integer("vendor_id").notNull().references(() => vendors.id),
+    name: text("name").notNull(),
     categoryCode: text("category_code").notNull(),
     cadence: text("cadence").notNull(),
     expectedAmountCents: integer("expected_amount_cents"),
