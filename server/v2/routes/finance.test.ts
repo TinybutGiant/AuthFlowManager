@@ -54,34 +54,95 @@ function baseVendor() {
   };
 }
 
-function repo(): FinanceExpenseRepository {
-  const vendor = baseVendor();
+function baseSubscription(overrides: Record<string, unknown> = {}) {
+  const now = new Date("2026-01-01T00:00:00.000Z");
   return {
-    transaction: async (work) => work(repo()),
+    id: 100,
+    legalEntityId: 1,
+    vendorId: 20,
+    vendorName: "Vendor A",
+    categoryCode: "saas",
+    cadence: "monthly",
+    expectedAmountCents: 2_000,
+    currency: "USD",
+    variableAmount: false,
+    billingDay: 1,
+    nextBillingDate: "2026-02-01",
+    renewalDate: null,
+    autoRenew: true,
+    trialEndsOn: null,
+    cancellationDate: null,
+    status: "active",
+    notes: null,
+    createdBy: 42,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function baseBill(overrides: Record<string, unknown> = {}) {
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  return {
+    id: 200,
+    legalEntityId: 1,
+    vendorId: 20,
+    vendorName: "Vendor A",
+    recurringExpenseId: null,
+    invoiceNumber: "INV-200",
+    billKind: "invoice",
+    issueDate: "2026-01-01",
+    dueDate: "2026-01-31",
+    servicePeriodStart: null,
+    servicePeriodEnd: null,
+    amountCents: 2_500,
+    currency: "USD",
+    categoryCode: "saas",
+    status: "draft",
+    creditForVendorBillId: null,
+    notes: null,
+    activeAppliedAmountCents: 0,
+    remainingAmountCents: 2_500,
+    settlementState: "open",
+    documentCount: 0,
+    recurringExpectedAmountCents: null,
+    createdBy: 42,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function repo(overrides: {
+  vendor?: Record<string, unknown>;
+  subscription?: Record<string, unknown>;
+  bill?: Record<string, unknown>;
+} = {}): FinanceExpenseRepository {
+  const vendor = { ...baseVendor(), ...overrides.vendor };
+  const subscription = baseSubscription(overrides.subscription);
+  const bill = baseBill(overrides.bill);
+  return {
+    transaction: async (work) => work(repo(overrides)),
     lockVendor: async () => undefined,
     lockRecurringExpense: async () => undefined,
     lockVendorBill: async () => undefined,
     lockExpensePayment: async () => undefined,
     lockVendorBillApplication: async () => undefined,
     lockReconciliationException: async () => undefined,
-    getLegalEntity: async () => undefined,
+    getLegalEntity: async () => ({ id: 1, status: "active" }),
     listLegalEntities: async () => [],
     getVendor: async () => vendor,
     listVendors: async () => [vendor],
     createVendor: async (values) => ({ ...vendor, ...values, id: 21 }),
     updateVendor: async (_id, values) => ({ ...vendor, ...values }),
-    getRecurringExpense: async () => undefined,
-    listRecurringExpenses: async () => [],
-    createRecurringExpense: async () => {
-      throw new Error("not used");
-    },
-    updateRecurringExpense: async () => undefined,
-    getVendorBill: async () => undefined,
-    listVendorBills: async () => [],
-    createVendorBill: async () => {
-      throw new Error("not used");
-    },
-    updateVendorBill: async () => undefined,
+    getRecurringExpense: async () => subscription,
+    listRecurringExpenses: async () => [subscription],
+    createRecurringExpense: async (values) => ({ ...subscription, ...values, id: 101 }),
+    updateRecurringExpense: async (_id, values) => ({ ...subscription, ...values }),
+    getVendorBill: async () => bill,
+    listVendorBills: async () => [bill],
+    createVendorBill: async (values) => ({ ...bill, ...values, id: 201 }),
+    updateVendorBill: async (_id, values) => ({ ...bill, ...values }),
     findVendorBillInvoiceConflict: async () => undefined,
     getExpensePayment: async () => undefined,
     listExpensePayments: async () => [],
@@ -202,7 +263,119 @@ test("V2 finance vendor route preserves AP response contract and actor mapping",
     status: "active",
     website: null,
     contactEmail: null,
+    notes: null,
   });
+});
+
+test("V2 finance GET responses preserve AP notes fields", async () => {
+  const repository = repo({
+    vendor: { notes: "Vendor directory note" },
+    subscription: { notes: "Annual domain renewal" },
+    bill: { notes: "Invoice reviewed with receipt" },
+  });
+
+  const vendorsResponse = await handleFinanceRouteWithRepository(
+    request("/api/v2/finance/vendors"),
+    principal(["finance_admin"]),
+    repository,
+  );
+  assert.equal(vendorsResponse.status, 200);
+  assert.equal(((await vendorsResponse.json()) as Array<Record<string, unknown>>)[0].notes, "Vendor directory note");
+
+  const subscriptionsResponse = await handleFinanceRouteWithRepository(
+    request("/api/v2/finance/subscriptions"),
+    principal(["finance_admin"]),
+    repository,
+  );
+  assert.equal(subscriptionsResponse.status, 200);
+  assert.equal(((await subscriptionsResponse.json()) as Array<Record<string, unknown>>)[0].notes, "Annual domain renewal");
+
+  const billsResponse = await handleFinanceRouteWithRepository(
+    request("/api/v2/finance/bills"),
+    principal(["finance_admin"]),
+    repository,
+  );
+  assert.equal(billsResponse.status, 200);
+  assert.equal(((await billsResponse.json()) as Array<Record<string, unknown>>)[0].notes, "Invoice reviewed with receipt");
+});
+
+test("V2 finance AP mutations return, edit, and clear notes", async () => {
+  const staff = principal(["finance_admin"]);
+  const repository = repo();
+
+  const createdVendorResponse = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/vendors", "POST", {
+      name: "Cloudflare",
+      vendorType: "cloud",
+      status: "active",
+      notes: "Domain registrar and CDN provider",
+    }),
+    staff,
+    repository,
+  );
+  assert.equal(createdVendorResponse.status, 201);
+  assert.equal((await body(createdVendorResponse)).notes, "Domain registrar and CDN provider");
+
+  const clearedVendorResponse = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/vendors/20", "PATCH", { notes: null }),
+    staff,
+    repository,
+  );
+  assert.equal(clearedVendorResponse.status, 200);
+  assert.equal((await body(clearedVendorResponse)).notes, null);
+
+  const createdSubscriptionResponse = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/subscriptions", "POST", {
+      legalEntityId: 1,
+      vendorId: 20,
+      categoryCode: "cloud",
+      cadence: "annual",
+      expectedAmountCents: 1_200,
+      currency: "USD",
+      variableAmount: false,
+      autoRenew: true,
+      status: "active",
+      notes: "Annual domain registration renewal",
+    }),
+    staff,
+    repository,
+  );
+  assert.equal(createdSubscriptionResponse.status, 201);
+  assert.equal((await body(createdSubscriptionResponse)).notes, "Annual domain registration renewal");
+
+  const clearedSubscriptionResponse = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/subscriptions/100", "PATCH", { notes: null }),
+    staff,
+    repository,
+  );
+  assert.equal(clearedSubscriptionResponse.status, 200);
+  assert.equal((await body(clearedSubscriptionResponse)).notes, null);
+
+  const createdBillResponse = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/bills", "POST", {
+      legalEntityId: 1,
+      vendorId: 20,
+      invoiceNumber: "CF-2026",
+      billKind: "invoice",
+      amountCents: 1_200,
+      currency: "USD",
+      categoryCode: "cloud",
+      status: "draft",
+      notes: "Cloudflare domain renewal invoice",
+    }),
+    staff,
+    repository,
+  );
+  assert.equal(createdBillResponse.status, 201);
+  assert.equal((await body(createdBillResponse)).notes, "Cloudflare domain renewal invoice");
+
+  const clearedBillResponse = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/bills/200", "PATCH", { notes: null }),
+    staff,
+    repository,
+  );
+  assert.equal(clearedBillResponse.status, 200);
+  assert.equal((await body(clearedBillResponse)).notes, null);
 });
 
 test("V2 finance validation errors are bounded JSON errors", async () => {

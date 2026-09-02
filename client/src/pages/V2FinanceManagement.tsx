@@ -60,6 +60,7 @@ type FinanceVendor = {
   status: string;
   website?: string | null;
   contactEmail?: string | null;
+  notes?: string | null;
 };
 
 type FinanceSubscription = {
@@ -79,6 +80,7 @@ type FinanceSubscription = {
   trialEndsOn?: string | null;
   cancellationDate?: string | null;
   status: string;
+  notes?: string | null;
 };
 
 type FinanceBill = {
@@ -103,6 +105,7 @@ type FinanceBill = {
   settlementState?: string;
   documentCount?: number;
   recurringExpectedAmountCents?: number | null;
+  notes?: string | null;
 };
 
 type FinancePayment = {
@@ -239,6 +242,8 @@ type ReconciliationForm = {
   actualAmount: string;
 };
 
+type SelectOption = string | { value: string; label: string };
+
 const V2_FINANCE_BASE = "/api/v2/finance";
 const tabs: Array<{ value: FinanceTab; label: string }> = [
   { value: "bills", label: "Bills" },
@@ -356,6 +361,34 @@ function formatDate(value?: string | null) {
   return value ? value : "-";
 }
 
+function legalEntityLabel(entity: FinanceLegalEntity) {
+  return entity.legalName || `Legal entity #${entity.id}`;
+}
+
+function vendorLabel(vendor: FinanceVendor) {
+  return vendor.name || `Vendor #${vendor.id}`;
+}
+
+function billLabel(bill: FinanceBill) {
+  const vendor = bill.vendorName || `Vendor #${bill.vendorId}`;
+  const reference = bill.invoiceNumber ? `Invoice ${bill.invoiceNumber}` : humanize(bill.categoryCode);
+  return `${vendor} - ${reference} - ${formatMoney(bill.amountCents, bill.currency)}`;
+}
+
+function subscriptionLabel(subscription: FinanceSubscription) {
+  const vendor = subscription.vendorName || `Vendor #${subscription.vendorId}`;
+  const amount = subscription.variableAmount
+    ? "Variable"
+    : formatMoney(subscription.expectedAmountCents, subscription.currency);
+  return `${vendor} - ${humanize(subscription.categoryCode)} - ${amount}`;
+}
+
+function paymentLabel(payment: FinancePayment) {
+  const vendor = payment.vendorName || (payment.vendorId ? `Vendor #${payment.vendorId}` : "Unassigned");
+  const reference = payment.externalConfirmationRef || payment.methodLabel || humanize(payment.methodType);
+  return `${vendor} - ${reference} - ${formatMoney(payment.amountCents, payment.currency)}`;
+}
+
 function statusBadge(status?: string | null) {
   const variant =
     status === "active" || status === "approved" || status === "cleared" || status === "paid"
@@ -392,10 +425,27 @@ function Section({
   );
 }
 
-function EmptyState({ title }: { title: string }) {
+function EmptyState({
+  title,
+  description,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  description?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
   return (
     <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-      {title}
+      <div className="font-medium text-foreground">{title}</div>
+      {description && <div className="mt-1 max-w-xl">{description}</div>}
+      {actionLabel && onAction && (
+        <Button type="button" variant="outline" size="sm" className="mt-4" onClick={onAction}>
+          <Plus className="h-4 w-4" />
+          {actionLabel}
+        </Button>
+      )}
     </div>
   );
 }
@@ -431,7 +481,7 @@ function SelectField({
   label: string;
   value: string;
   onValueChange: (value: string) => void;
-  options: string[];
+  options: SelectOption[];
 }) {
   return (
     <div className="grid gap-2">
@@ -441,11 +491,14 @@ function SelectField({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option} value={option}>
-              {humanize(option)}
-            </SelectItem>
-          ))}
+          {options.map((option) => {
+            const item = typeof option === "string" ? { value: option, label: humanize(option) } : option;
+            return (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
     </div>
@@ -504,7 +557,7 @@ function vendorFormFrom(vendor?: FinanceVendor): VendorForm {
     status: vendor?.status ?? "active",
     website: vendor?.website ?? "",
     contactEmail: vendor?.contactEmail ?? "",
-    notes: "",
+    notes: vendor?.notes ?? "",
   };
 }
 
@@ -526,7 +579,7 @@ function subscriptionFormFrom(
     renewalDate: subscription?.renewalDate ?? "",
     autoRenew: subscription?.autoRenew ?? false,
     trialEndsOn: subscription?.trialEndsOn ?? "",
-    notes: "",
+    notes: subscription?.notes ?? "",
     status: subscription?.status ?? "active",
   };
 }
@@ -550,7 +603,7 @@ function billFormFrom(
     currency: bill?.currency ?? "USD",
     categoryCode: bill?.categoryCode ?? "saas",
     creditForVendorBillId: bill?.creditForVendorBillId == null ? "" : String(bill.creditForVendorBillId),
-    notes: "",
+    notes: bill?.notes ?? "",
   };
 }
 
@@ -635,6 +688,15 @@ function VendorDialog({
           </div>
           <TextField label="Website" value={form.website} onChange={(website) => setForm({ ...form, website })} />
           <TextField label="Contact email" type="email" value={form.contactEmail} onChange={(contactEmail) => setForm({ ...form, contactEmail })} />
+          <div className="grid gap-2">
+            <Label>Notes</Label>
+            <Textarea
+              value={form.notes}
+              onChange={(event) => setForm({ ...form, notes: event.currentTarget.value })}
+              rows={3}
+              maxLength={4000}
+            />
+          </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit">Save</Button>
@@ -672,8 +734,8 @@ function SubscriptionDialog({
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => String(entity.id))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
-            <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => String(vendor.id))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
+            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => ({ value: String(entity.id), label: legalEntityLabel(entity) }))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
+            <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
             <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
             <SelectField label="Cadence" value={form.cadence} options={cadences} onValueChange={(cadence) => setForm({ ...form, cadence })} />
             <TextField label="Expected amount" type="number" value={form.expectedAmount} onChange={(expectedAmount) => setForm({ ...form, expectedAmount })} />
@@ -695,6 +757,15 @@ function SubscriptionDialog({
               <Checkbox checked={form.autoRenew} onCheckedChange={(checked) => setForm({ ...form, autoRenew: checked === true })} />
               Auto renew
             </label>
+          </div>
+          <div className="grid gap-2">
+            <Label>Notes</Label>
+            <Textarea
+              value={form.notes}
+              onChange={(event) => setForm({ ...form, notes: event.currentTarget.value })}
+              rows={3}
+              maxLength={4000}
+            />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
@@ -737,8 +808,8 @@ function BillDialog({
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => String(entity.id))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
-            <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => String(vendor.id))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
+            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => ({ value: String(entity.id), label: legalEntityLabel(entity) }))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
+            <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
             <SelectField label="Kind" value={form.billKind} options={billKinds} onValueChange={(billKind) => setForm({ ...form, billKind })} />
             <TextField label="Invoice number" value={form.invoiceNumber} onChange={(invoiceNumber) => setForm({ ...form, invoiceNumber })} />
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
@@ -748,8 +819,17 @@ function BillDialog({
             <TextField label="Due date" type="date" value={form.dueDate} onChange={(dueDate) => setForm({ ...form, dueDate })} />
             <TextField label="Service start" type="date" value={form.servicePeriodStart} onChange={(servicePeriodStart) => setForm({ ...form, servicePeriodStart })} />
             <TextField label="Service end" type="date" value={form.servicePeriodEnd} onChange={(servicePeriodEnd) => setForm({ ...form, servicePeriodEnd })} />
-            <SelectField label="Subscription" value={form.recurringExpenseId || "none"} options={["none", ...subscriptions.map((subscription) => String(subscription.id))]} onValueChange={(recurringExpenseId) => setForm({ ...form, recurringExpenseId: recurringExpenseId === "none" ? "" : recurringExpenseId })} />
-            <SelectField label="Credit source" value={form.creditForVendorBillId || "none"} options={["none", ...bills.map((bill) => String(bill.id))]} onValueChange={(creditForVendorBillId) => setForm({ ...form, creditForVendorBillId: creditForVendorBillId === "none" ? "" : creditForVendorBillId })} />
+            <SelectField label="Subscription" value={form.recurringExpenseId || "none"} options={["none", ...subscriptions.map((subscription) => ({ value: String(subscription.id), label: subscriptionLabel(subscription) }))]} onValueChange={(recurringExpenseId) => setForm({ ...form, recurringExpenseId: recurringExpenseId === "none" ? "" : recurringExpenseId })} />
+            <SelectField label="Credit source" value={form.creditForVendorBillId || "none"} options={["none", ...bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))]} onValueChange={(creditForVendorBillId) => setForm({ ...form, creditForVendorBillId: creditForVendorBillId === "none" ? "" : creditForVendorBillId })} />
+          </div>
+          <div className="grid gap-2">
+            <Label>Notes</Label>
+            <Textarea
+              value={form.notes}
+              onChange={(event) => setForm({ ...form, notes: event.currentTarget.value })}
+              rows={3}
+              maxLength={4000}
+            />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
@@ -788,8 +868,8 @@ function PaymentDialog({
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => String(entity.id))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
-            <SelectField label="Vendor" value={form.vendorId || "none"} options={["none", ...vendors.map((vendor) => String(vendor.id))]} onValueChange={(vendorId) => setForm({ ...form, vendorId: vendorId === "none" ? "" : vendorId })} />
+            <SelectField label="Legal entity" value={form.legalEntityId} options={legalEntities.map((entity) => ({ value: String(entity.id), label: legalEntityLabel(entity) }))} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} />
+            <SelectField label="Vendor" value={form.vendorId || "none"} options={["none", ...vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))]} onValueChange={(vendorId) => setForm({ ...form, vendorId: vendorId === "none" ? "" : vendorId })} />
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
             <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
             <SelectField label="Direction" value={form.direction} options={["outflow", "refund"]} onValueChange={(direction) => setForm({ ...form, direction })} />
@@ -840,11 +920,11 @@ function ApplicationDialog({
         </DialogHeader>
         <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <SelectField label="Source" value={form.sourceType} options={["payment", "credit"]} onValueChange={(sourceType) => setForm({ ...form, sourceType: sourceType as ApplicationForm["sourceType"] })} />
-          <SelectField label="Target bill" value={form.targetVendorBillId} options={bills.map((bill) => String(bill.id))} onValueChange={(targetVendorBillId) => setForm({ ...form, targetVendorBillId })} />
+          <SelectField label="Target bill" value={form.targetVendorBillId} options={bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))} onValueChange={(targetVendorBillId) => setForm({ ...form, targetVendorBillId })} />
           {form.sourceType === "payment" ? (
-            <SelectField label="Payment" value={form.expensePaymentId} options={payments.map((payment) => String(payment.id))} onValueChange={(expensePaymentId) => setForm({ ...form, expensePaymentId })} />
+            <SelectField label="Payment" value={form.expensePaymentId} options={payments.map((payment) => ({ value: String(payment.id), label: paymentLabel(payment) }))} onValueChange={(expensePaymentId) => setForm({ ...form, expensePaymentId })} />
           ) : (
-            <SelectField label="Credit bill" value={form.creditVendorBillId} options={bills.filter((bill) => bill.billKind === "credit_memo").map((bill) => String(bill.id))} onValueChange={(creditVendorBillId) => setForm({ ...form, creditVendorBillId })} />
+            <SelectField label="Credit bill" value={form.creditVendorBillId} options={bills.filter((bill) => bill.billKind === "credit_memo").map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))} onValueChange={(creditVendorBillId) => setForm({ ...form, creditVendorBillId })} />
           )}
           <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
@@ -960,6 +1040,8 @@ export default function V2FinanceManagement() {
   const payments = paymentsQuery.data ?? [];
   const applications = applicationsQuery.data ?? [];
   const reconciliation = reconciliationQuery.data ?? [];
+  const billById = React.useMemo(() => new Map(bills.map((bill) => [bill.id, bill])), [bills]);
+  const paymentById = React.useMemo(() => new Map(payments.map((payment) => [payment.id, payment])), [payments]);
   const isLoading = [
     overviewQuery,
     legalEntitiesQuery,
@@ -1171,7 +1253,16 @@ export default function V2FinanceManagement() {
             icon={ReceiptText}
             action={<Button onClick={() => setBillDialog({ mode: "create", form: billFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add bill</Button>}
           >
-            {isLoading ? <EmptyState title="Loading bills" /> : bills.length === 0 ? <EmptyState title="No bills" /> : (
+            {isLoading ? (
+              <EmptyState title="Loading bills" description="Loading vendor bills and settlement details." />
+            ) : bills.length === 0 ? (
+              <EmptyState
+                title="No bills yet"
+                description="Add vendor bills as they arrive so due dates, balances, and receipts stay visible."
+                actionLabel="Add bill"
+                onAction={() => setBillDialog({ mode: "create", form: billFormFrom(legalEntities, activeVendors) })}
+              />
+            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1188,7 +1279,10 @@ export default function V2FinanceManagement() {
                   {bills.map((bill) => (
                     <TableRow key={bill.id}>
                       <TableCell>{bill.vendorName || `Vendor #${bill.vendorId}`}</TableCell>
-                      <TableCell>{bill.invoiceNumber || humanize(bill.categoryCode)}</TableCell>
+                      <TableCell>
+                        <div>{bill.invoiceNumber || humanize(bill.categoryCode)}</div>
+                        {bill.notes && <div className="mt-1 text-xs text-muted-foreground">{bill.notes}</div>}
+                      </TableCell>
                       <TableCell>{formatDate(bill.dueDate)}</TableCell>
                       <TableCell><div className="flex flex-wrap gap-2">{statusBadge(bill.status)}{bill.settlementState && statusBadge(bill.settlementState)}</div></TableCell>
                       <TableCell className="text-right">{formatMoney(bill.amountCents, bill.currency)}</TableCell>
@@ -1229,7 +1323,16 @@ export default function V2FinanceManagement() {
             icon={WalletCards}
             action={<Button onClick={() => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Record payment</Button>}
           >
-            {isLoading ? <EmptyState title="Loading payments" /> : payments.length === 0 ? <EmptyState title="No payments" /> : (
+            {isLoading ? (
+              <EmptyState title="Loading payments" description="Loading payment records and unapplied balances." />
+            ) : payments.length === 0 ? (
+              <EmptyState
+                title="No payments recorded"
+                description="Record an actual payment after money has moved or is in flight."
+                actionLabel="Record payment"
+                onAction={() => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) })}
+              />
+            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1283,7 +1386,16 @@ export default function V2FinanceManagement() {
             icon={Building2}
             action={<Button onClick={() => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Add subscription</Button>}
           >
-            {isLoading ? <EmptyState title="Loading subscriptions" /> : subscriptions.length === 0 ? <EmptyState title="No subscriptions" /> : (
+            {isLoading ? (
+              <EmptyState title="Loading subscriptions" description="Loading expected recurring expenses." />
+            ) : subscriptions.length === 0 ? (
+              <EmptyState
+                title="No subscriptions yet"
+                description="Track SaaS, payroll providers, utilities, and services before invoices arrive."
+                actionLabel="Add subscription"
+                onAction={() => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) })}
+              />
+            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1298,7 +1410,11 @@ export default function V2FinanceManagement() {
                 <TableBody>
                   {subscriptions.map((subscription) => (
                     <TableRow key={subscription.id}>
-                      <TableCell>{subscription.vendorName || `Vendor #${subscription.vendorId}`}</TableCell>
+                      <TableCell>
+                        <div>{subscription.vendorName || `Vendor #${subscription.vendorId}`}</div>
+                        <div className="text-xs text-muted-foreground">{humanize(subscription.categoryCode)}</div>
+                        {subscription.notes && <div className="mt-1 text-xs text-muted-foreground">{subscription.notes}</div>}
+                      </TableCell>
                       <TableCell>{humanize(subscription.cadence)}</TableCell>
                       <TableCell>{statusBadge(subscription.status)}</TableCell>
                       <TableCell className="text-right">{subscription.variableAmount ? "Variable" : formatMoney(subscription.expectedAmountCents, subscription.currency)}</TableCell>
@@ -1331,36 +1447,51 @@ export default function V2FinanceManagement() {
             icon={Building2}
             action={<Button onClick={() => setVendorDialog({ mode: "create", form: vendorFormFrom() })}><Plus className="h-4 w-4" />Add vendor</Button>}
           >
-            {isLoading ? <EmptyState title="Loading vendors" /> : vendors.length === 0 ? <EmptyState title="No vendors" /> : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Contact</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {vendors.map((vendor) => (
-                    <TableRow key={vendor.id}>
-                      <TableCell>{vendor.name}</TableCell>
-                      <TableCell>{humanize(vendor.vendorType)}</TableCell>
-                      <TableCell>{statusBadge(vendor.status)}</TableCell>
-                      <TableCell>{vendor.contactEmail || vendor.website || "-"}</TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="outline" onClick={() => setVendorDialog({ mode: "edit", vendor, form: vendorFormFrom(vendor) })}><Edit3 className="h-4 w-4" />Edit</Button>
-                          {vendor.status !== "archived" && (
-                            <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/vendors/${vendor.id}/archive`)}><Archive className="h-4 w-4" />Archive</Button>
-                          )}
-                        </div>
-                      </TableCell>
+            {isLoading ? (
+              <EmptyState title="Loading vendors" description="Loading the vendor directory." />
+            ) : vendors.length === 0 ? (
+              <EmptyState
+                title="No vendors yet"
+                description="Add vendors before creating subscriptions, bills, or payment records."
+                actionLabel="Add vendor"
+                onAction={() => setVendorDialog({ mode: "create", form: vendorFormFrom() })}
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <Table className="min-w-[960px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Contact email</TableHead>
+                      <TableHead>Website</TableHead>
+                      <TableHead>Notes</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {vendors.map((vendor) => (
+                      <TableRow key={vendor.id}>
+                        <TableCell>{vendor.name}</TableCell>
+                        <TableCell>{humanize(vendor.vendorType)}</TableCell>
+                        <TableCell>{statusBadge(vendor.status)}</TableCell>
+                        <TableCell>{vendor.contactEmail || "-"}</TableCell>
+                        <TableCell>{vendor.website || "-"}</TableCell>
+                        <TableCell>{vendor.notes || "-"}</TableCell>
+                        <TableCell>
+                          <div className="flex justify-end gap-2">
+                            <Button size="sm" variant="outline" onClick={() => setVendorDialog({ mode: "edit", vendor, form: vendorFormFrom(vendor) })}><Edit3 className="h-4 w-4" />Edit</Button>
+                            {vendor.status !== "archived" && (
+                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/vendors/${vendor.id}/archive`)}><Archive className="h-4 w-4" />Archive</Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </Section>
         )}
@@ -1371,7 +1502,16 @@ export default function V2FinanceManagement() {
             icon={AlertCircle}
             action={<Button onClick={() => setReconciliationDialog({ form: reconciliationFormFrom() })}><Plus className="h-4 w-4" />Open exception</Button>}
           >
-            {isLoading ? <EmptyState title="Loading reconciliation" /> : reconciliation.length === 0 ? <EmptyState title="No reconciliation exceptions" /> : (
+            {isLoading ? (
+              <EmptyState title="Loading reconciliation" description="Loading AP exceptions, differences, and follow-up states." />
+            ) : reconciliation.length === 0 ? (
+              <EmptyState
+                title="No reconciliation exceptions"
+                description="Open AP exceptions, duplicates, or amount mismatches will appear here."
+                actionLabel="Open exception"
+                onAction={() => setReconciliationDialog({ form: reconciliationFormFrom() })}
+              />
+            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1410,7 +1550,16 @@ export default function V2FinanceManagement() {
         )}
 
         <Section title="Applications" icon={Link2} action={<Button variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom() })}><Plus className="h-4 w-4" />Apply manually</Button>}>
-          {isLoading ? <EmptyState title="Loading applications" /> : applications.length === 0 ? <EmptyState title="No applications" /> : (
+          {isLoading ? (
+            <EmptyState title="Loading applied payments" description="Loading payment and credit applications." />
+          ) : applications.length === 0 ? (
+            <EmptyState
+              title="No applied payments"
+              description="Payments and credits will appear here after they are applied to bills."
+              actionLabel="Apply manually"
+              onAction={() => setApplicationDialog({ form: applicationFormFrom() })}
+            />
+          ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1422,22 +1571,33 @@ export default function V2FinanceManagement() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {applications.map((application) => (
-                  <TableRow key={application.id}>
-                    <TableCell>Bill #{application.targetVendorBillId}</TableCell>
-                    <TableCell>{application.expensePaymentId ? `Payment #${application.expensePaymentId}` : `Credit #${application.creditVendorBillId}`}</TableCell>
-                    <TableCell>{statusBadge(application.status)}</TableCell>
-                    <TableCell className="text-right">{formatMoney(application.amountCents, application.currency)}</TableCell>
-                    <TableCell className="text-right">
-                      {application.status === "active" && (
-                        <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bill-applications/${application.id}/reverse`)}>
-                          <RotateCcw className="h-4 w-4" />
-                          Reverse
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {applications.map((application) => {
+                  const targetBill = billById.get(application.targetVendorBillId);
+                  const payment = application.expensePaymentId ? paymentById.get(application.expensePaymentId) : undefined;
+                  const credit = application.creditVendorBillId ? billById.get(application.creditVendorBillId) : undefined;
+                  return (
+                    <TableRow key={application.id}>
+                      <TableCell>{targetBill ? billLabel(targetBill) : `Bill #${application.targetVendorBillId}`}</TableCell>
+                      <TableCell>
+                        {payment
+                          ? paymentLabel(payment)
+                          : credit
+                            ? billLabel(credit)
+                            : `Credit #${application.creditVendorBillId}`}
+                      </TableCell>
+                      <TableCell>{statusBadge(application.status)}</TableCell>
+                      <TableCell className="text-right">{formatMoney(application.amountCents, application.currency)}</TableCell>
+                      <TableCell className="text-right">
+                        {application.status === "active" && (
+                          <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bill-applications/${application.id}/reverse`)}>
+                            <RotateCcw className="h-4 w-4" />
+                            Reverse
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

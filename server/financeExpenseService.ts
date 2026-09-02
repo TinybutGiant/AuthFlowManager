@@ -649,6 +649,7 @@ export interface FinanceVendorListItem {
   status: string;
   website?: string | null;
   contactEmail?: string | null;
+  notes?: string | null;
 }
 
 export interface FinanceLegalEntityListItem {
@@ -675,6 +676,7 @@ export interface VendorBillListItem {
   categoryCode: string;
   status: string;
   creditForVendorBillId?: number | null;
+  notes?: string | null;
   activeAppliedAmountCents: number;
   remainingAmountCents: number;
   settlementState: VendorBillSettlementState;
@@ -698,6 +700,7 @@ export interface VendorBillMutationResult {
   categoryCode: string;
   status: string;
   creditForVendorBillId?: number | null;
+  notes?: string | null;
 }
 
 export interface RecurringExpenseListItem {
@@ -717,6 +720,7 @@ export interface RecurringExpenseListItem {
   trialEndsOn?: string | Date | null;
   cancellationDate?: string | Date | null;
   status: string;
+  notes?: string | null;
 }
 
 export interface ExpensePaymentListItem {
@@ -914,6 +918,7 @@ export function financeVendorResponse(vendor: Vendor | FinanceVendorListItem): F
     status: vendor.status,
     website: vendor.website,
     contactEmail: vendor.contactEmail,
+    notes: vendor.notes,
   };
 }
 
@@ -937,6 +942,7 @@ export function financeSubscriptionResponse(
     trialEndsOn: subscription.trialEndsOn,
     cancellationDate: subscription.cancellationDate,
     status: subscription.status,
+    notes: subscription.notes,
   };
 }
 
@@ -957,6 +963,7 @@ export function financeBillResponse(bill: VendorBill | VendorBillListItem): Vend
     categoryCode: bill.categoryCode,
     status: bill.status,
     creditForVendorBillId: bill.creditForVendorBillId,
+    notes: bill.notes,
   };
 }
 

@@ -34,3 +34,46 @@ test("V2 finance read queries declare explicit V2 query functions", () => {
     );
   }
 });
+
+test("V2 finance restores AP notes without adding legacy finance coupling", () => {
+  assert.match(source, /type FinanceVendor = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
+  assert.match(source, /type FinanceSubscription = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
+  assert.match(source, /type FinanceBill = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
+
+  assert.match(source, /notes: vendor\?\.notes \?\? ""/);
+  assert.match(source, /notes: subscription\?\.notes \?\? ""/);
+  assert.match(source, /notes: bill\?\.notes \?\? ""/);
+
+  assert.equal((source.match(/<Label>Notes<\/Label>/g) ?? []).length, 3);
+  assert.equal((source.match(/value=\{form\.notes\}/g) ?? []).length, 3);
+  assert.equal((source.match(/notes: optionalNullableText\(form\.notes\)/g) ?? []).length, 3);
+});
+
+test("V2 finance uses loaded AP labels instead of raw IDs when available", () => {
+  assert.match(source, /function legalEntityLabel\(entity: FinanceLegalEntity\)/);
+  assert.match(source, /function vendorLabel\(vendor: FinanceVendor\)/);
+  assert.match(source, /function billLabel\(bill: FinanceBill\)/);
+  assert.match(source, /function subscriptionLabel\(subscription: FinanceSubscription\)/);
+  assert.match(source, /function paymentLabel\(payment: FinancePayment\)/);
+
+  assert.doesNotMatch(source, /options=\{legalEntities\.map\(\(entity\) => String\(entity\.id\)\)\}/);
+  assert.doesNotMatch(source, /options=\{vendors\.map\(\(vendor\) => String\(vendor\.id\)\)\}/);
+  assert.match(source, /targetBill \? billLabel\(targetBill\) : `Bill #\$\{application\.targetVendorBillId\}`/);
+  assert.match(source, /payment\s*\?\s*paymentLabel\(payment\)/);
+  assert.match(source, /credit\s*\?\s*billLabel\(credit\)/);
+});
+
+test("V2 finance has descriptive AP empty states with local actions", () => {
+  for (const text of [
+    "Add vendor bills as they arrive so due dates, balances, and receipts stay visible.",
+    "Record an actual payment after money has moved or is in flight.",
+    "Track SaaS, payroll providers, utilities, and services before invoices arrive.",
+    "Add vendors before creating subscriptions, bills, or payment records.",
+    "Open AP exceptions, duplicates, or amount mismatches will appear here.",
+    "Payments and credits will appear here after they are applied to bills.",
+  ]) {
+    assert.match(source, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+
+  assert.doesNotMatch(source, /FinancePageHeader|OverviewPanel|financeRolesQueryPrefix/);
+});

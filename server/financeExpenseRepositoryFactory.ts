@@ -71,6 +71,7 @@ function mapBillRows(
       categoryCode: string;
       status: string;
       creditForVendorBillId: number | null;
+      notes: string | null;
     };
     vendorName: string | null;
     recurringExpectedAmountCents: number | null;
@@ -97,6 +98,7 @@ function mapBillRows(
       categoryCode: row.bill.categoryCode,
       status: row.bill.status,
       creditForVendorBillId: row.bill.creditForVendorBillId,
+      notes: row.bill.notes,
       vendorName: row.vendorName,
       activeAppliedAmountCents: balance.activeAppliedAmountCents,
       remainingAmountCents: balance.remainingAmountCents,
@@ -266,6 +268,7 @@ export function createFinanceExpenseRepository(database: DrizzleDb): FinanceExpe
           status: vendors.status,
           website: vendors.website,
           contactEmail: vendors.contactEmail,
+          notes: vendors.notes,
         })
         .from(vendors)
         .$dynamic();
@@ -324,6 +327,7 @@ export function createFinanceExpenseRepository(database: DrizzleDb): FinanceExpe
           trialEndsOn: recurringExpenses.trialEndsOn,
           cancellationDate: recurringExpenses.cancellationDate,
           status: recurringExpenses.status,
+          notes: recurringExpenses.notes,
         })
         .from(recurringExpenses)
         .leftJoin(vendors, eq(recurringExpenses.vendorId, vendors.id))
@@ -393,6 +397,7 @@ export function createFinanceExpenseRepository(database: DrizzleDb): FinanceExpe
             categoryCode: vendorBills.categoryCode,
             status: vendorBills.status,
             creditForVendorBillId: vendorBills.creditForVendorBillId,
+            notes: vendorBills.notes,
           },
           vendorName: vendors.name,
           recurringExpectedAmountCents: recurringExpenses.expectedAmountCents,
