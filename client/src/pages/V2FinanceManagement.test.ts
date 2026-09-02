@@ -4,6 +4,24 @@ import test from "node:test";
 
 const source = readFileSync("client/src/pages/V2FinanceManagement.tsx", "utf8");
 
+function sourceBetween(startMarker: string, endMarker: string) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(start, -1, `Missing start marker: ${startMarker}`);
+  assert.notEqual(end, -1, `Missing end marker: ${endMarker}`);
+  return source.slice(start, end);
+}
+
+function assertOrdered(haystack: string, markers: string[]) {
+  let cursor = -1;
+  for (const marker of markers) {
+    const index = haystack.indexOf(marker, cursor + 1);
+    assert.notEqual(index, -1, `Missing ordered marker: ${marker}`);
+    assert.ok(index > cursor, `Marker out of order: ${marker}`);
+    cursor = index;
+  }
+}
+
 test("V2 finance page uses only the Access-backed V2 finance API surface", () => {
   assert.match(source, /const V2_FINANCE_BASE = "\/api\/v2\/finance"/);
   assert.doesNotMatch(source, /\/api\/admin\/finance/);
@@ -71,6 +89,92 @@ test("V2 finance handles legal entity configuration explicitly", () => {
   assert.match(source, /Legal entity configuration required/);
   assert.match(source, /disabled=\{!canCreateLegalEntityScopedRecord\}/);
   assert.doesNotMatch(source, /Number\(form\.legalEntityId\)/);
+});
+
+test("V2 AP dialogs preserve legacy field order and explicit row structure", () => {
+  const vendor = sourceBetween("function VendorDialog", "function SubscriptionDialog");
+  assertOrdered(vendor, [
+    "className=\"space-y-4\"",
+    "label=\"Name\"",
+    "label=\"Type\"",
+    "label=\"Status\"",
+    "label=\"Contact email\"",
+    "label=\"Website\"",
+    "<Label>Notes</Label>",
+    "<DialogFooter>",
+  ]);
+  assert.match(vendor, /<div className="grid gap-4 sm:grid-cols-2">\s*<TextField label="Name"[\s\S]*?<SelectField label="Type"/);
+  assert.match(vendor, /<div className="grid gap-4 sm:grid-cols-2">\s*<SelectField label="Status"[\s\S]*?<TextField label="Contact email"/);
+
+  const subscription = sourceBetween("function SubscriptionDialog", "function BillDialog");
+  assert.match(subscription, /<DialogContent className="sm:max-w-2xl">/);
+  assertOrdered(subscription, [
+    "className=\"space-y-4\"",
+    "<LegalEntityField",
+    "label=\"Vendor\"",
+    "label=\"Category\"",
+    "label=\"Cadence\"",
+    "label=\"Expected amount\"",
+    "label=\"Currency\"",
+    "label=\"Billing day\"",
+    "label=\"Next bill\"",
+    "label=\"Renewal date\"",
+    "label=\"Trial ends\"",
+    "label=\"Initial status\"",
+    "Variable amount",
+    "Auto renew",
+    "<Label>Notes</Label>",
+  ]);
+
+  const bill = sourceBetween("function BillDialog", "function PaymentDialog");
+  assert.match(bill, /<DialogContent className="sm:max-w-3xl">/);
+  assertOrdered(bill, [
+    "className=\"space-y-4\"",
+    "<LegalEntityField",
+    "label=\"Vendor\"",
+    "label=\"Kind\"",
+    "label=\"Invoice number\"",
+    "label=\"Amount\"",
+    "label=\"Currency\"",
+    "label=\"Category\"",
+    "label=\"Issue date\"",
+    "label=\"Due date\"",
+    "label=\"Service start\"",
+    "label=\"Service end\"",
+    "label=\"Subscription\"",
+    "label=\"Credit source\"",
+    "<Label>Notes</Label>",
+  ]);
+
+  const payment = sourceBetween("function PaymentDialog", "function ApplicationDialog");
+  assert.match(payment, /<DialogContent className="sm:max-w-2xl">/);
+  assertOrdered(payment, [
+    "className=\"space-y-4\"",
+    "<LegalEntityField",
+    "label=\"Vendor\"",
+    "label=\"Amount\"",
+    "label=\"Currency\"",
+    "label=\"Direction\"",
+    "label=\"Payment date\"",
+    "label=\"Method\"",
+    "label=\"Initial status\"",
+    "label=\"Method label\"",
+    "label=\"Institution\"",
+    "label=\"Last 4\"",
+    "label=\"Confirmation\"",
+  ]);
+
+  const application = sourceBetween("function ApplicationDialog", "function ReconciliationDialog");
+  assert.match(application, /<DialogContent className="sm:max-w-2xl">/);
+  assertOrdered(application, [
+    "className=\"space-y-4\"",
+    "label=\"Target bill\"",
+    "label=\"Source type\"",
+    "label=\"Payment\"",
+    "label=\"Credit memo\"",
+    "label=\"Amount\"",
+    "label=\"Currency\"",
+  ]);
 });
 
 test("V2 finance has descriptive AP empty states with local actions", () => {

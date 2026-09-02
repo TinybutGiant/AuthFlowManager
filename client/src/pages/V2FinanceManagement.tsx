@@ -673,22 +673,24 @@ function VendorDialog({
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{state?.mode === "edit" ? "Edit vendor" : "Add vendor"}</DialogTitle>
+          <DialogTitle>{state?.mode === "edit" ? "Edit Vendor" : "Add Vendor"}</DialogTitle>
         </DialogHeader>
         <form
-          className="grid gap-4"
+          className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
             onSubmit(form);
           }}
         >
-          <TextField label="Name" value={form.name} onChange={(name) => setForm({ ...form, name })} />
           <div className="grid gap-4 sm:grid-cols-2">
+            <TextField label="Name" value={form.name} onChange={(name) => setForm({ ...form, name })} />
             <SelectField label="Type" value={form.vendorType} options={vendorTypes} onValueChange={(vendorType) => setForm({ ...form, vendorType })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Status" value={form.status} options={vendorStatuses} onValueChange={(status) => setForm({ ...form, status })} />
+            <TextField label="Contact email" type="email" value={form.contactEmail} onChange={(contactEmail) => setForm({ ...form, contactEmail })} />
           </div>
           <TextField label="Website" value={form.website} onChange={(website) => setForm({ ...form, website })} />
-          <TextField label="Contact email" type="email" value={form.contactEmail} onChange={(contactEmail) => setForm({ ...form, contactEmail })} />
           <div className="grid gap-2">
             <Label>Notes</Label>
             <Textarea
@@ -731,25 +733,35 @@ function SubscriptionDialog({
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{state?.mode === "edit" ? "Edit subscription" : "Add subscription"}</DialogTitle>
+          <DialogTitle>{state?.mode === "edit" ? "Edit Subscription" : "Add Subscription"}</DialogTitle>
         </DialogHeader>
-        <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
             <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
             <SelectField label="Cadence" value={form.cadence} options={cadences} onValueChange={(cadence) => setForm({ ...form, cadence })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Expected amount" type="number" value={form.expectedAmount} onChange={(expectedAmount) => setForm({ ...form, expectedAmount })} />
             <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Billing day" type="number" value={form.billingDay} onChange={(billingDay) => setForm({ ...form, billingDay })} />
-            <TextField label="Next billing date" type="date" value={form.nextBillingDate} onChange={(nextBillingDate) => setForm({ ...form, nextBillingDate })} />
+            <TextField label="Next bill" type="date" value={form.nextBillingDate} onChange={(nextBillingDate) => setForm({ ...form, nextBillingDate })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Renewal date" type="date" value={form.renewalDate} onChange={(renewalDate) => setForm({ ...form, renewalDate })} />
             <TextField label="Trial ends" type="date" value={form.trialEndsOn} onChange={(trialEndsOn) => setForm({ ...form, trialEndsOn })} />
           </div>
           {state?.mode === "create" && (
-            <SelectField label="Initial status" value={form.status} options={subscriptionStatuses} onValueChange={(status) => setForm({ ...form, status })} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <SelectField label="Initial status" value={form.status} options={subscriptionStatuses} onValueChange={(status) => setForm({ ...form, status })} />
+            </div>
           )}
           <div className="flex flex-wrap gap-6">
             <label className="flex items-center gap-2 text-sm">
@@ -807,23 +819,33 @@ function BillDialog({
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{state?.mode === "edit" ? "Edit draft bill" : "Add bill"}</DialogTitle>
+          <DialogTitle>{state?.mode === "edit" ? "Edit Draft Bill" : "Add Bill"}</DialogTitle>
         </DialogHeader>
-        <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
             <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Kind" value={form.billKind} options={billKinds} onValueChange={(billKind) => setForm({ ...form, billKind })} />
             <TextField label="Invoice number" value={form.invoiceNumber} onChange={(invoiceNumber) => setForm({ ...form, invoiceNumber })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
             <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
-            <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
+          </div>
+          <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Issue date" type="date" value={form.issueDate} onChange={(issueDate) => setForm({ ...form, issueDate })} />
             <TextField label="Due date" type="date" value={form.dueDate} onChange={(dueDate) => setForm({ ...form, dueDate })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Service start" type="date" value={form.servicePeriodStart} onChange={(servicePeriodStart) => setForm({ ...form, servicePeriodStart })} />
             <TextField label="Service end" type="date" value={form.servicePeriodEnd} onChange={(servicePeriodEnd) => setForm({ ...form, servicePeriodEnd })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Subscription" value={form.recurringExpenseId || "none"} options={["none", ...subscriptions.map((subscription) => ({ value: String(subscription.id), label: subscriptionLabel(subscription) }))]} onValueChange={(recurringExpenseId) => setForm({ ...form, recurringExpenseId: recurringExpenseId === "none" ? "" : recurringExpenseId })} />
             <SelectField label="Credit source" value={form.creditForVendorBillId || "none"} options={["none", ...bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))]} onValueChange={(creditForVendorBillId) => setForm({ ...form, creditForVendorBillId: creditForVendorBillId === "none" ? "" : creditForVendorBillId })} />
           </div>
@@ -869,27 +891,53 @@ function PaymentDialog({
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{state?.mode === "edit" ? "Edit payment" : "Record payment"}</DialogTitle>
+          <DialogTitle>{state?.mode === "edit" ? "Edit Pending Payment" : "Record Payment"}</DialogTitle>
         </DialogHeader>
-        <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
             <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId || "none"} options={["none", ...vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))]} onValueChange={(vendorId) => setForm({ ...form, vendorId: vendorId === "none" ? "" : vendorId })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
             <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Direction" value={form.direction} options={["outflow", "refund"]} onValueChange={(direction) => setForm({ ...form, direction })} />
             <TextField label="Payment date" type="date" value={form.paymentDate} onChange={(paymentDate) => setForm({ ...form, paymentDate })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Method" value={form.methodType} options={paymentMethods} onValueChange={(methodType) => setForm({ ...form, methodType })} />
-            <TextField label="Method label" value={form.methodLabel} onChange={(methodLabel) => setForm({ ...form, methodLabel })} />
-            <TextField label="Institution" value={form.institutionName} onChange={(institutionName) => setForm({ ...form, institutionName })} />
-            <TextField label="Last 4" value={form.maskedLast4} onChange={(maskedLast4) => setForm({ ...form, maskedLast4 })} />
-            <TextField label="Confirmation" value={form.externalConfirmationRef} onChange={(externalConfirmationRef) => setForm({ ...form, externalConfirmationRef })} />
-            {state?.mode === "create" && (
+            {state?.mode === "create" ? (
               <SelectField label="Initial status" value={form.status} options={paymentStatuses} onValueChange={(status) => setForm({ ...form, status })} />
+            ) : (
+              <TextField label="Method label" value={form.methodLabel} onChange={(methodLabel) => setForm({ ...form, methodLabel })} />
             )}
           </div>
+          {state?.mode === "create" ? (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField label="Method label" value={form.methodLabel} onChange={(methodLabel) => setForm({ ...form, methodLabel })} />
+                <TextField label="Institution" value={form.institutionName} onChange={(institutionName) => setForm({ ...form, institutionName })} />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField label="Last 4" value={form.maskedLast4} onChange={(maskedLast4) => setForm({ ...form, maskedLast4 })} />
+                <TextField label="Confirmation" value={form.externalConfirmationRef} onChange={(externalConfirmationRef) => setForm({ ...form, externalConfirmationRef })} />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField label="Institution" value={form.institutionName} onChange={(institutionName) => setForm({ ...form, institutionName })} />
+                <TextField label="Last 4" value={form.maskedLast4} onChange={(maskedLast4) => setForm({ ...form, maskedLast4 })} />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField label="Confirmation" value={form.externalConfirmationRef} onChange={(externalConfirmationRef) => setForm({ ...form, externalConfirmationRef })} />
+              </div>
+            </>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={!canSubmit}>Save</Button>
@@ -921,18 +969,22 @@ function ApplicationDialog({
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Apply to bill</DialogTitle>
+          <DialogTitle>Apply to Bill</DialogTitle>
         </DialogHeader>
-        <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
-          <SelectField label="Source" value={form.sourceType} options={["payment", "credit"]} onValueChange={(sourceType) => setForm({ ...form, sourceType: sourceType as ApplicationForm["sourceType"] })} />
-          <SelectField label="Target bill" value={form.targetVendorBillId} options={bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))} onValueChange={(targetVendorBillId) => setForm({ ...form, targetVendorBillId })} />
-          {form.sourceType === "payment" ? (
-            <SelectField label="Payment" value={form.expensePaymentId} options={payments.map((payment) => ({ value: String(payment.id), label: paymentLabel(payment) }))} onValueChange={(expensePaymentId) => setForm({ ...form, expensePaymentId })} />
-          ) : (
-            <SelectField label="Credit bill" value={form.creditVendorBillId} options={bills.filter((bill) => bill.billKind === "credit_memo").map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))} onValueChange={(creditVendorBillId) => setForm({ ...form, creditVendorBillId })} />
-          )}
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SelectField label="Target bill" value={form.targetVendorBillId} options={bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))} onValueChange={(targetVendorBillId) => setForm({ ...form, targetVendorBillId })} />
+            <SelectField label="Source type" value={form.sourceType} options={[{ value: "payment", label: "Payment" }, { value: "credit", label: "Credit memo" }]} onValueChange={(sourceType) => setForm({ ...form, sourceType: sourceType as ApplicationForm["sourceType"] })} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {form.sourceType === "payment" ? (
+              <SelectField label="Payment" value={form.expensePaymentId} options={payments.map((payment) => ({ value: String(payment.id), label: paymentLabel(payment) }))} onValueChange={(expensePaymentId) => setForm({ ...form, expensePaymentId })} />
+            ) : (
+              <SelectField label="Credit memo" value={form.creditVendorBillId} options={bills.filter((bill) => bill.billKind === "credit_memo").map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))} onValueChange={(creditVendorBillId) => setForm({ ...form, creditVendorBillId })} />
+            )}
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
             <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
