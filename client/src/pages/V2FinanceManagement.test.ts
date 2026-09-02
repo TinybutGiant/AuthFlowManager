@@ -12,3 +12,25 @@ test("V2 finance page uses only the Access-backed V2 finance API surface", () =>
   assert.doesNotMatch(source, /localStorage|auth_token|tokenManager|apiRequest/);
   assert.match(source, /credentials: "same-origin"/);
 });
+
+test("V2 finance read queries declare explicit V2 query functions", () => {
+  const readPaths = [
+    "/overview",
+    "/legal-entities",
+    "/vendors?pageSize=100",
+    "/subscriptions?pageSize=100",
+    "/bills?pageSize=100",
+    "/payments?pageSize=100",
+    "/bill-applications?pageSize=100",
+    "/reconciliation-exceptions?pageSize=100",
+  ];
+
+  for (const path of readPaths) {
+    assert.match(
+      source,
+      new RegExp(
+        `queryKey:\\s*\\[\\\`\\$\\{V2_FINANCE_BASE\\}${path.replace(/[/?]/g, "\\$&")}\\\`\\],[\\s\\S]*?queryFn:\\s*\\(\\)\\s*=>\\s*v2FinanceJson`,
+      ),
+    );
+  }
+});

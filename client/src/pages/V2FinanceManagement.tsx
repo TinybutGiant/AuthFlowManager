@@ -916,14 +916,41 @@ export default function V2FinanceManagement() {
   const [reconciliationDialog, setReconciliationDialog] = React.useState<{ form: ReconciliationForm } | null>(null);
   const mutation = useFinanceMutation();
 
-  const overviewQuery = useQuery<FinanceOverview>({ queryKey: [`${V2_FINANCE_BASE}/overview`] });
-  const legalEntitiesQuery = useQuery<FinanceLegalEntity[]>({ queryKey: [`${V2_FINANCE_BASE}/legal-entities`] });
-  const vendorsQuery = useQuery<FinanceVendor[]>({ queryKey: [`${V2_FINANCE_BASE}/vendors?pageSize=100`] });
-  const subscriptionsQuery = useQuery<FinanceSubscription[]>({ queryKey: [`${V2_FINANCE_BASE}/subscriptions?pageSize=100`] });
-  const billsQuery = useQuery<FinanceBill[]>({ queryKey: [`${V2_FINANCE_BASE}/bills?pageSize=100`] });
-  const paymentsQuery = useQuery<FinancePayment[]>({ queryKey: [`${V2_FINANCE_BASE}/payments?pageSize=100`] });
-  const applicationsQuery = useQuery<FinanceBillApplication[]>({ queryKey: [`${V2_FINANCE_BASE}/bill-applications?pageSize=100`] });
-  const reconciliationQuery = useQuery<FinanceReconciliationException[]>({ queryKey: [`${V2_FINANCE_BASE}/reconciliation-exceptions?pageSize=100`] });
+  const overviewQuery = useQuery<FinanceOverview>({
+    queryKey: [`${V2_FINANCE_BASE}/overview`],
+    queryFn: () => v2FinanceJson<FinanceOverview>(`${V2_FINANCE_BASE}/overview`),
+  });
+  const legalEntitiesQuery = useQuery<FinanceLegalEntity[]>({
+    queryKey: [`${V2_FINANCE_BASE}/legal-entities`],
+    queryFn: () => v2FinanceJson<FinanceLegalEntity[]>(`${V2_FINANCE_BASE}/legal-entities`),
+  });
+  const vendorsQuery = useQuery<FinanceVendor[]>({
+    queryKey: [`${V2_FINANCE_BASE}/vendors?pageSize=100`],
+    queryFn: () => v2FinanceJson<FinanceVendor[]>(`${V2_FINANCE_BASE}/vendors?pageSize=100`),
+  });
+  const subscriptionsQuery = useQuery<FinanceSubscription[]>({
+    queryKey: [`${V2_FINANCE_BASE}/subscriptions?pageSize=100`],
+    queryFn: () => v2FinanceJson<FinanceSubscription[]>(`${V2_FINANCE_BASE}/subscriptions?pageSize=100`),
+  });
+  const billsQuery = useQuery<FinanceBill[]>({
+    queryKey: [`${V2_FINANCE_BASE}/bills?pageSize=100`],
+    queryFn: () => v2FinanceJson<FinanceBill[]>(`${V2_FINANCE_BASE}/bills?pageSize=100`),
+  });
+  const paymentsQuery = useQuery<FinancePayment[]>({
+    queryKey: [`${V2_FINANCE_BASE}/payments?pageSize=100`],
+    queryFn: () => v2FinanceJson<FinancePayment[]>(`${V2_FINANCE_BASE}/payments?pageSize=100`),
+  });
+  const applicationsQuery = useQuery<FinanceBillApplication[]>({
+    queryKey: [`${V2_FINANCE_BASE}/bill-applications?pageSize=100`],
+    queryFn: () => v2FinanceJson<FinanceBillApplication[]>(`${V2_FINANCE_BASE}/bill-applications?pageSize=100`),
+  });
+  const reconciliationQuery = useQuery<FinanceReconciliationException[]>({
+    queryKey: [`${V2_FINANCE_BASE}/reconciliation-exceptions?pageSize=100`],
+    queryFn: () =>
+      v2FinanceJson<FinanceReconciliationException[]>(
+        `${V2_FINANCE_BASE}/reconciliation-exceptions?pageSize=100`,
+      ),
+  });
 
   const legalEntities = legalEntitiesQuery.data ?? [];
   const vendors = vendorsQuery.data ?? [];
