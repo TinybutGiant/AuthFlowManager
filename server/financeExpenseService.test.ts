@@ -21,6 +21,8 @@ import {
   nextExpensePaymentStatus,
   nextVendorBillStatus,
   pauseFinanceSubscription,
+  recordBillPaymentPayloadSchema,
+  recordFinanceBillPayment,
   recordFinancePayment,
   reverseFinanceBillApplication,
   reverseFinancePayment,
@@ -1005,7 +1007,9 @@ type ApFixtureState = {
   reconciliationExceptions: any[];
   auditEvents: any[];
   calls: string[];
+  failNextApplication: boolean;
   failNextAudit: boolean;
+  failAuditAction?: string;
   nextPaymentId: number;
   nextApplicationId: number;
   nextExceptionId: number;
@@ -1054,7 +1058,9 @@ function createApFixture() {
     reconciliationExceptions: [],
     auditEvents: [],
     calls: [],
+    failNextApplication: false,
     failNextAudit: false,
+    failAuditAction: undefined,
     nextPaymentId: 100,
     nextApplicationId: 200,
     nextExceptionId: 300,
@@ -1160,6 +1166,10 @@ function createApFixture() {
       (filters.status === undefined || application.status === filters.status)
     )),
     createVendorBillApplication: async (values: any) => {
+      if (state.failNextApplication) {
+        state.failNextApplication = false;
+        throw new Error("application insert failed");
+      }
       const application = {
         id: state.nextApplicationId++,
         ...values,
@@ -1209,8 +1219,9 @@ function createApFixture() {
       return Boolean(tableByType[entityType]?.some((row) => row.id === entityId));
     },
     createFinanceAuditEvent: async (values: any) => {
-      if (state.failNextAudit) {
+      if (state.failNextAudit || values.action === state.failAuditAction) {
         state.failNextAudit = false;
+        state.failAuditAction = undefined;
         throw new Error("audit insert failed");
       }
       state.auditEvents.push(values);
@@ -1370,6 +1381,139 @@ test("AP application rejects stale over-application and incompatible payment inp
     currency: "USD",
     actorAdminId: 42,
   }), "AP_PAYMENT_STATUS_INVALID");
+});
+
+test("AP bill-first record payment creates payment and application atomically", async () => {
+  const { repo, state, seedBill } = createApFixture();
+  const fullBill = seedBill({
+    id: 60,
+    invoiceNumber: "IN-77096614",
+    amountCents: 10_000,
+    status: "approved",
+  });
+
+  const full = await recordFinanceBillPayment(repo, fullBill.id, {
+    amountCents: 10_000,
+    direction: "outflow",
+    paymentDate: "2026-08-29",
+    methodType: "card",
+    status: "cleared",
+    actorAdminId: 42,
+  });
+
+  assert.equal(full.payment.legalEntityId, fullBill.legalEntityId);
+  assert.equal(full.payment.vendorId, fullBill.vendorId);
+  assert.equal(full.payment.currency, fullBill.currency);
+  assert.equal(full.payment.externalConfirmationRef, null);
+  assert.equal(full.application.targetVendorBillId, fullBill.id);
+  assert.equal(full.application.expensePaymentId, full.payment.id);
+  assert.equal(full.application.amountCents, 10_000);
+  assert.equal(billRemaining(state, fullBill.id), 0);
+  assert.equal(paymentRemaining(state, full.payment.id), 0);
+
+  const partialBill = seedBill({ id: 61, amountCents: 10_000, status: "approved" });
+  const partial = await recordFinanceBillPayment(repo, partialBill.id, {
+    amountCents: 4_000,
+    direction: "outflow",
+    paymentDate: "2026-08-30",
+    methodType: "ach",
+    externalConfirmationRef: "CARD-SETTLEMENT-1",
+    status: "posted",
+    actorAdminId: 42,
+  });
+
+  assert.equal(billRemaining(state, partialBill.id), 6_000);
+  assert.equal(paymentRemaining(state, partial.payment.id), 0);
+  assert.equal(partial.payment.externalConfirmationRef, "CARD-SETTLEMENT-1");
+  assert.deepEqual(
+    state.auditEvents
+      .filter((event) => ["expense_payment", "vendor_bill_application"].includes(event.entityType))
+      .map((event) => `${event.entityType}:${event.action}`),
+    [
+      "expense_payment:created",
+      "vendor_bill_application:applied",
+      "expense_payment:created",
+      "vendor_bill_application:applied",
+    ],
+  );
+});
+
+test("AP bill-first record payment rejects over-application and rolls back partial work", async () => {
+  const { repo, state, seedBill } = createApFixture();
+  const bill = seedBill({ id: 62, amountCents: 5_000, status: "approved" });
+
+  await assertFinanceRejects(() => recordFinanceBillPayment(repo, bill.id, {
+    amountCents: 5_001,
+    direction: "outflow",
+    paymentDate: "2026-08-29",
+    methodType: "card",
+    status: "cleared",
+    actorAdminId: 42,
+  }), "AP_BILL_OVER_APPLIED");
+  assert.equal(state.payments.length, 0);
+  assert.equal(state.applications.length, 0);
+  assert.equal(state.auditEvents.length, 0);
+
+  state.failNextApplication = true;
+  await assert.rejects(() => recordFinanceBillPayment(repo, bill.id, {
+    amountCents: 4_000,
+    direction: "outflow",
+    paymentDate: "2026-08-29",
+    methodType: "card",
+    status: "cleared",
+    actorAdminId: 42,
+  }), /application insert failed/);
+  assert.equal(state.payments.length, 0);
+  assert.equal(state.applications.length, 0);
+  assert.equal(state.auditEvents.length, 0);
+
+  state.failAuditAction = "applied";
+  await assert.rejects(() => recordFinanceBillPayment(repo, bill.id, {
+    amountCents: 4_000,
+    direction: "outflow",
+    paymentDate: "2026-08-29",
+    methodType: "card",
+    status: "cleared",
+    actorAdminId: 42,
+  }), /audit insert failed/);
+  assert.equal(state.payments.length, 0);
+  assert.equal(state.applications.length, 0);
+  assert.equal(state.auditEvents.length, 0);
+});
+
+test("AP bill-first record payment requires payment date and explicit status", () => {
+  assert.equal(recordBillPaymentPayloadSchema.safeParse({
+    amountCents: 1_000,
+    direction: "outflow",
+    methodType: "card",
+    status: "cleared",
+  }).success, false);
+
+  assert.equal(recordBillPaymentPayloadSchema.safeParse({
+    amountCents: 1_000,
+    direction: "outflow",
+    paymentDate: "2026-08-29",
+    methodType: "card",
+  }).success, false);
+
+  assert.equal(recordBillPaymentPayloadSchema.safeParse({
+    amountCents: 1_000,
+    direction: "outflow",
+    paymentDate: "2026-08-29",
+    methodType: "card",
+    status: "cleared",
+  }).success, true);
+
+  assert.equal(recordBillPaymentPayloadSchema.safeParse({
+    legalEntityId: 1,
+    vendorId: 20,
+    currency: "USD",
+    amountCents: 1_000,
+    direction: "outflow",
+    paymentDate: "2026-08-29",
+    methodType: "card",
+    status: "cleared",
+  }).success, false);
 });
 
 test("AP credit applications validate credit source and remaining credit", async () => {

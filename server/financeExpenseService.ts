@@ -497,6 +497,32 @@ export const createExpensePaymentPayloadSchema = z.object({
   status: z.enum(EXPENSE_PAYMENT_STATUSES).default("pending"),
 }).strict();
 
+export const recordBillPaymentPayloadSchema = z.object({
+  amountCents: amountCentsSchema,
+  direction: z.enum(EXPENSE_PAYMENT_DIRECTIONS).default("outflow"),
+  paymentDate: z.preprocess(
+    (value) => value === "" || value === null ? undefined : value,
+    dateOnlySchema,
+  ),
+  methodType: z.enum(EXPENSE_PAYMENT_METHODS),
+  methodLabel: optionalText(120),
+  institutionName: optionalText(160),
+  maskedLast4: z.preprocess(
+    (value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed ? trimmed : null;
+      }
+      return value;
+    },
+    z.string().regex(/^[0-9]{4}$/).nullable().optional(),
+  ),
+  externalConfirmationRef: optionalText(200),
+  status: z.enum(EXPENSE_PAYMENT_STATUSES),
+}).strict();
+
 export const updateExpensePaymentPayloadSchema = z.object({
   vendorId: z.preprocess(
     (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
@@ -630,6 +656,7 @@ export type CancelRecurringExpensePayload = z.infer<typeof cancelRecurringExpens
 export type CreateVendorBillPayload = z.infer<typeof createVendorBillPayloadSchema>;
 export type UpdateDraftVendorBillPayload = z.infer<typeof updateDraftVendorBillPayloadSchema>;
 export type CreateExpensePaymentPayload = z.infer<typeof createExpensePaymentPayloadSchema>;
+export type RecordBillPaymentPayload = z.infer<typeof recordBillPaymentPayloadSchema>;
 export type UpdateExpensePaymentPayload = z.infer<typeof updateExpensePaymentPayloadSchema>;
 export type UpdateExpensePaymentStatusPayload = z.infer<typeof updateExpensePaymentStatusPayloadSchema>;
 export type ApplyExpensePaymentPayload = z.infer<typeof applyExpensePaymentPayloadSchema>;
@@ -1960,6 +1987,84 @@ export async function recordFinancePayment(
       changes: paymentAuditChanges(null, payment),
     });
     return payment;
+  });
+}
+
+export async function recordFinanceBillPayment(
+  repo: FinanceExpenseRepository,
+  billId: number,
+  input: RecordBillPaymentPayload & { actorAdminId: number },
+) {
+  ensureRecordablePaymentStatus(input.status);
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockVendorBill(billId);
+
+    const targetBill = await tx.getVendorBill(billId);
+    if (!targetBill) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+
+    const existingTargetBillApplications = await tx.listVendorBillApplications({
+      targetVendorBillId: billId,
+      status: "active",
+    });
+
+    const payment = await tx.createExpensePayment({
+      legalEntityId: targetBill.legalEntityId,
+      vendorId: targetBill.vendorId,
+      amountCents: input.amountCents,
+      currency: targetBill.currency,
+      direction: input.direction,
+      paymentDate: input.paymentDate,
+      methodType: input.methodType,
+      methodLabel: input.methodLabel,
+      institutionName: input.institutionName,
+      maskedLast4: input.maskedLast4,
+      externalConfirmationRef: input.externalConfirmationRef,
+      status: input.status,
+      createdBy: input.actorAdminId,
+    });
+
+    const existingPaymentApplications = await tx.listVendorBillApplications({
+      expensePaymentId: payment.id,
+      status: "active",
+    });
+
+    runFinanceDomainValidation(() => validateVendorBillPaymentApplicationFromLockedRows({
+      targetBill: billSnapshot(targetBill),
+      payment: paymentSnapshot(payment),
+      amountCents: input.amountCents,
+      currency: targetBill.currency,
+      existingTargetBillApplications: activeAllocationRows(existingTargetBillApplications),
+      existingPaymentApplications: activeAllocationRows(existingPaymentApplications),
+    }));
+
+    const application = await tx.createVendorBillApplication({
+      targetVendorBillId: billId,
+      expensePaymentId: payment.id,
+      creditVendorBillId: null,
+      amountCents: input.amountCents,
+      currency: targetBill.currency,
+      status: "active",
+      createdBy: input.actorAdminId,
+    });
+
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "expense_payment",
+      entityId: payment.id,
+      action: "created",
+      changes: paymentAuditChanges(null, payment),
+    });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId: input.actorAdminId,
+      entityType: "vendor_bill_application",
+      entityId: application.id,
+      action: "applied",
+      changes: activeApplicationAuditChanges(null, application),
+    });
+
+    return { payment, application };
   });
 }
 

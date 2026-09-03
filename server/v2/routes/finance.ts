@@ -35,6 +35,8 @@ import {
   listFinanceSubscriptions,
   listFinanceVendors,
   pauseFinanceSubscription,
+  recordBillPaymentPayloadSchema,
+  recordFinanceBillPayment,
   recordFinancePayment,
   reconciliationExceptionTransitionPayloadSchema,
   resumeFinanceSubscription,
@@ -99,6 +101,7 @@ export const financeRouteModule = {
     "POST /api/v2/finance/bills/:billId/approve",
     "POST /api/v2/finance/bills/:billId/dispute",
     "POST /api/v2/finance/bills/:billId/void",
+    "POST /api/v2/finance/bills/:billId/record-payment",
     "GET /api/v2/finance/payments",
     "POST /api/v2/finance/payments",
     "PATCH /api/v2/finance/payments/:paymentId",
@@ -402,6 +405,28 @@ export async function handleFinanceRouteWithRepository(
         },
       );
       return json(financeBillResponse(bill));
+    }
+
+    if (segments.length === 3 && segments[0] === "bills" && segments[2] === "record-payment") {
+      if (request.method !== "POST") {
+        return methodNotAllowed(["POST"]);
+      }
+      const result = await recordFinanceBillPayment(
+        repository,
+        financeIdParamSchema.parse(segments[1]),
+        {
+          ...(await parsedBody(request, recordBillPaymentPayloadSchema)),
+          actorAdminId,
+        },
+      );
+      return json({
+        payment: financePaymentResponse({
+          ...result.payment,
+          activeAppliedAmountCents: result.application.amountCents,
+          remainingAmountCents: result.payment.amountCents - result.application.amountCents,
+        }),
+        application: financeBillApplicationResponse(result.application),
+      }, { status: 201 });
     }
 
     if (segments.length === 3 && segments[0] === "bills") {

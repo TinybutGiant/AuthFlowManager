@@ -14,6 +14,7 @@ import {
   financeBillResponse,
   listFinanceBills,
   listFinancePayments,
+  recordFinanceBillPayment,
   recordFinancePayment,
   transitionFinanceBillStatus,
   transitionFinanceReconciliationException,
@@ -493,6 +494,123 @@ test(
       clientB.release();
       await pool.end();
     }
+  },
+);
+
+test(
+  "V2 AP bill-first record payment is atomic on disposable PostgreSQL",
+  {
+    skip: POSTGRES_TEST_DATABASE_URL
+      ? false
+      : "Set MIGRATION_RUNNER_TEST_DATABASE_URL to a disposable PostgreSQL database to run.",
+  },
+  async () => {
+    await withApSchema(async (client) => {
+      const repo = repoForClient(client);
+      await client.query(`INSERT INTO "vendors" ("id", "name", "vendor_type", "status") VALUES (20, 'Vendor A', 'saas', 'active')`);
+
+      const fullBill = await createFinanceBill(repo, {
+        legalEntityId: 1,
+        vendorId: 20,
+        invoiceNumber: "INV-FULL",
+        billKind: "invoice",
+        amountCents: 10_000,
+        currency: "USD",
+        categoryCode: "saas",
+        status: "draft",
+        actorAdminId: 42,
+      });
+      await transitionFinanceBillStatus(repo, fullBill.id, "receive", { actorAdminId: 42 });
+      await transitionFinanceBillStatus(repo, fullBill.id, "approve", { actorAdminId: 42 });
+      const full = await recordFinanceBillPayment(repo, fullBill.id, {
+        amountCents: 10_000,
+        direction: "outflow",
+        paymentDate: "2026-08-29",
+        methodType: "card",
+        status: "cleared",
+        actorAdminId: 42,
+      });
+
+      let bills = await listFinanceBills(repo, { pageSize: 100 });
+      let payments = await listFinancePayments(repo, { pageSize: 100 });
+      assert.equal(bills.find((bill) => bill.id === fullBill.id)?.remainingAmountCents, 0);
+      assert.equal(payments.find((payment) => payment.id === full.payment.id)?.remainingAmountCents, 0);
+
+      const partialBill = await createFinanceBill(repo, {
+        legalEntityId: 1,
+        vendorId: 20,
+        invoiceNumber: "INV-PARTIAL",
+        billKind: "invoice",
+        amountCents: 10_000,
+        currency: "USD",
+        categoryCode: "saas",
+        status: "draft",
+        actorAdminId: 42,
+      });
+      await transitionFinanceBillStatus(repo, partialBill.id, "receive", { actorAdminId: 42 });
+      await transitionFinanceBillStatus(repo, partialBill.id, "approve", { actorAdminId: 42 });
+      await recordFinanceBillPayment(repo, partialBill.id, {
+        amountCents: 4_000,
+        direction: "outflow",
+        paymentDate: "2026-08-30",
+        methodType: "ach",
+        status: "posted",
+        actorAdminId: 42,
+      });
+      bills = await listFinanceBills(repo, { pageSize: 100 });
+      assert.equal(bills.find((bill) => bill.id === partialBill.id)?.remainingAmountCents, 6_000);
+
+      const paymentCountBeforeOverApply = await client.query(`SELECT count(*)::int AS "count" FROM "expense_payments"`);
+      await assert.rejects(
+        () => recordFinanceBillPayment(repo, partialBill.id, {
+          amountCents: 6_001,
+          direction: "outflow",
+          paymentDate: "2026-08-31",
+          methodType: "card",
+          status: "cleared",
+          actorAdminId: 42,
+        }),
+        (error) => error instanceof FinanceExpenseServiceError && error.code === "AP_BILL_OVER_APPLIED",
+      );
+      const paymentCountAfterOverApply = await client.query(`SELECT count(*)::int AS "count" FROM "expense_payments"`);
+      assert.equal(paymentCountAfterOverApply.rows[0].count, paymentCountBeforeOverApply.rows[0].count);
+
+      const auditCountBeforeRollback = await client.query(`SELECT count(*)::int AS "count" FROM "finance_audit_events"`);
+      await client.query(`ALTER TABLE "vendor_bill_applications" ADD CONSTRAINT "reject_bill_first_application" CHECK ("amount_cents" < 0) NOT VALID`);
+      const rollbackBill = await createFinanceBill(repo, {
+        legalEntityId: 1,
+        vendorId: 20,
+        invoiceNumber: "INV-ROLLBACK",
+        billKind: "invoice",
+        amountCents: 2_000,
+        currency: "USD",
+        categoryCode: "saas",
+        status: "draft",
+        actorAdminId: 42,
+      });
+      await transitionFinanceBillStatus(repo, rollbackBill.id, "receive", { actorAdminId: 42 });
+      await transitionFinanceBillStatus(repo, rollbackBill.id, "approve", { actorAdminId: 42 });
+      const auditCountAfterBillSetup = await client.query(`SELECT count(*)::int AS "count" FROM "finance_audit_events"`);
+      await assert.rejects(
+        () => recordFinanceBillPayment(repo, rollbackBill.id, {
+          amountCents: 2_000,
+          direction: "outflow",
+          paymentDate: "2026-09-01",
+          methodType: "card",
+          methodLabel: "rollback-marker",
+          status: "cleared",
+          actorAdminId: 42,
+        }),
+        /violates check constraint/,
+      );
+      const rolledBackPayments = await client.query(`SELECT "id" FROM "expense_payments" WHERE "method_label" = 'rollback-marker'`);
+      const rolledBackApplications = await client.query(`SELECT "id" FROM "vendor_bill_applications" WHERE "target_vendor_bill_id" = $1`, [rollbackBill.id]);
+      const auditCountAfterRollback = await client.query(`SELECT count(*)::int AS "count" FROM "finance_audit_events"`);
+      assert.equal(rolledBackPayments.rowCount, 0);
+      assert.equal(rolledBackApplications.rowCount, 0);
+      assert.equal(auditCountAfterRollback.rows[0].count, auditCountAfterBillSetup.rows[0].count);
+      assert.ok(auditCountAfterBillSetup.rows[0].count > auditCountBeforeRollback.rows[0].count);
+    });
   },
 );
 

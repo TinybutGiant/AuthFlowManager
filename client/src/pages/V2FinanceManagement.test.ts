@@ -253,3 +253,56 @@ test("V2 bill dialog asks for recurring expense first and keeps bill snapshots e
   assert.match(submit, /legalEntityId: selectedRecurringExpense\?\.legalEntityId \?\? parseRequiredLegalEntityId\(form\.legalEntityId\)/);
   assert.doesNotMatch(sourceBetween("type FinanceSubscription", "type FinanceBill"), /invoiceNumber/);
 });
+
+test("V2 bill-first record payment keeps payment allocation workflow off the data model", () => {
+  const paymentForm = sourceBetween("function paymentFormFrom", "function applicationFormFrom");
+  const paymentDialog = sourceBetween("function PaymentDialog", "function ApplicationDialog");
+  const submit = sourceBetween("function submitPayment", "function submitApplication");
+  const sourceBillSubmit = sourceBetween("} else if (paymentDialog?.sourceBill) {", "} else {");
+
+  assert.match(source, /type PaymentDialogState = \{[\s\S]*?sourceBill\?: FinanceBill;[\s\S]*?\};/);
+  assert.match(source, /function openBillPaymentDialog\(bill: FinanceBill\)/);
+  assert.match(source, /sourceBill: bill/);
+  assert.match(source, /paymentFormFrom\(legalEntities, activeVendors, undefined, bill\)/);
+  assert.match(source, /<Button size="sm" variant="outline" onClick=\{\(\) => openBillPaymentDialog\(bill\)\}><WalletCards className="h-4 w-4" \/>Record payment<\/Button>/);
+  assert.doesNotMatch(sourceBetween("type FinancePayment", "type FinanceBillApplication"), /billId|vendorBillId|targetVendorBillId/);
+
+  assert.match(paymentForm, /sourceBill\?: FinanceBill/);
+  assert.match(paymentForm, /legalEntityId: sourceBill \? String\(sourceBill\.legalEntityId\) : getInitialLegalEntityId\(legalEntities, payment\?\.legalEntityId\)/);
+  assert.match(paymentForm, /vendorId: sourceBill \? String\(sourceBill\.vendorId\) : payment\?\.vendorId == null/);
+  assert.match(paymentForm, /amount: centsToMoney\(sourceBill \? sourceBill\.remainingAmountCents \?\? sourceBill\.amountCents : payment\?\.amountCents \?\? 0\)/);
+  assert.match(paymentForm, /currency: sourceBill\?\.currency \?\? payment\?\.currency \?\? "USD"/);
+  assert.match(paymentForm, /paymentDate: payment\?\.paymentDate \?\? ""/);
+  assert.match(paymentForm, /status: payment\?\.status \?\? ""/);
+
+  assertOrdered(paymentDialog, [
+    "Bill: {sourceBillPaymentLabel(sourceBill)}",
+    "Remaining:",
+    "label=\"Legal entity\"",
+    "helper=\"From bill\"",
+    "label=\"Vendor\"",
+    "label=\"Amount\"",
+    "label=\"Currency\"",
+    "label=\"Direction\"",
+    "label=\"Payment date\"",
+    "label=\"Method\"",
+    "label=\"Initial status\"",
+  ]);
+  assert.match(paymentDialog, /<ReadOnlyField[\s\S]*label="Legal entity"[\s\S]*helper="From bill"/);
+  assert.match(paymentDialog, /<ReadOnlyField[\s\S]*label="Vendor"[\s\S]*helper="From bill"/);
+  assert.match(paymentDialog, /<ReadOnlyField label="Currency" value=\{sourceBill\.currency\} helper="From bill" \/>/);
+  assert.match(paymentDialog, /<TextField label="Amount" type="number" value=\{form\.amount\}/);
+  assert.match(paymentDialog, /<TextField label="Payment date" type="date"[\s\S]*required \/>/);
+  assert.match(paymentDialog, /const statusOptions = sourceBill \? billFirstPaymentStatuses : paymentStatuses/);
+  assert.match(source, /const billFirstPaymentStatuses = \["posted", "cleared"\]/);
+  assert.match(paymentDialog, /value=\{selectedStatusValue\}/);
+  assert.match(paymentDialog, /status === paymentStatusPlaceholder \? "" : status/);
+  assert.match(paymentDialog, /disabled=\{!canSubmit\}/);
+  assert.match(paymentDialog, /isSubmitting \? "Saving" : "Save"/);
+
+  assert.match(submit, /paymentDate: form\.paymentDate\.trim\(\)/);
+  assert.match(sourceBillSubmit, /POST/);
+  assert.match(sourceBillSubmit, /`\$\{V2_FINANCE_BASE\}\/bills\/\$\{paymentDialog\.sourceBill\.id\}\/record-payment`/);
+  assert.match(sourceBillSubmit, /paymentFacts/);
+  assert.doesNotMatch(sourceBillSubmit, /legalEntityId|vendorId|currency|invoiceNumber/);
+});

@@ -229,6 +229,13 @@ type PaymentForm = {
   status: string;
 };
 
+type PaymentDialogState = {
+  mode: "create" | "edit";
+  payment?: FinancePayment;
+  sourceBill?: FinanceBill;
+  form: PaymentForm;
+};
+
 type ApplicationForm = {
   sourceType: "payment" | "credit";
   targetVendorBillId: string;
@@ -268,6 +275,8 @@ const subscriptionStatuses = ["draft", "trial", "active", "paused", "cancelled",
 const billKinds = ["invoice", "bill", "credit_memo", "statement", "other"];
 const paymentMethods = ["provider", "ach", "check", "card", "wire", "manual", "other"];
 const paymentStatuses = ["pending", "posted", "cleared", "failed", "voided"];
+const billFirstPaymentStatuses = ["posted", "cleared"];
+const paymentStatusPlaceholder = "__select_status";
 const reconciliationReasons = [
   "unmatched_payment",
   "amount_mismatch",
@@ -390,6 +399,15 @@ function billLabel(bill: FinanceBill) {
   const vendor = bill.vendorName || `Vendor #${bill.vendorId}`;
   const reference = bill.invoiceNumber ? `Invoice ${bill.invoiceNumber}` : humanize(bill.categoryCode);
   return `${vendor} - ${reference} - ${formatMoney(bill.amountCents, bill.currency)}`;
+}
+
+function billReferenceLabel(bill: FinanceBill) {
+  return bill.invoiceNumber ? `Invoice ${bill.invoiceNumber}` : humanize(bill.categoryCode);
+}
+
+function sourceBillPaymentLabel(bill: FinanceBill) {
+  const vendor = bill.vendorName || `Vendor #${bill.vendorId}`;
+  return `${billReferenceLabel(bill)} - ${vendor}`;
 }
 
 function subscriptionLabel(subscription: FinanceSubscription) {
@@ -698,12 +716,13 @@ function paymentFormFrom(
   legalEntities: FinanceLegalEntity[],
   vendors: FinanceVendor[],
   payment?: FinancePayment,
+  sourceBill?: FinanceBill,
 ): PaymentForm {
   return {
-    legalEntityId: getInitialLegalEntityId(legalEntities, payment?.legalEntityId),
-    vendorId: payment?.vendorId == null ? String(vendors[0]?.id ?? "") : String(payment.vendorId),
-    amount: centsToMoney(payment?.amountCents ?? 0),
-    currency: payment?.currency ?? "USD",
+    legalEntityId: sourceBill ? String(sourceBill.legalEntityId) : getInitialLegalEntityId(legalEntities, payment?.legalEntityId),
+    vendorId: sourceBill ? String(sourceBill.vendorId) : payment?.vendorId == null ? String(vendors[0]?.id ?? "") : String(payment.vendorId),
+    amount: centsToMoney(sourceBill ? sourceBill.remainingAmountCents ?? sourceBill.amountCents : payment?.amountCents ?? 0),
+    currency: sourceBill?.currency ?? payment?.currency ?? "USD",
     direction: payment?.direction ?? "outflow",
     paymentDate: payment?.paymentDate ?? "",
     methodType: payment?.methodType ?? "ach",
@@ -711,7 +730,7 @@ function paymentFormFrom(
     institutionName: payment?.institutionName ?? "",
     maskedLast4: payment?.maskedLast4 ?? "",
     externalConfirmationRef: payment?.externalConfirmationRef ?? "",
-    status: payment?.status ?? "pending",
+    status: payment?.status ?? "",
   };
 }
 
@@ -1017,12 +1036,14 @@ function PaymentDialog({
   state,
   legalEntities,
   vendors,
+  isSubmitting,
   onClose,
   onSubmit,
 }: {
-  state: { mode: "create" | "edit"; payment?: FinancePayment; form: PaymentForm } | null;
+  state: PaymentDialogState | null;
   legalEntities: FinanceLegalEntity[];
   vendors: FinanceVendor[];
+  isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (form: PaymentForm) => void;
 }) {
@@ -1032,7 +1053,18 @@ function PaymentDialog({
     if (state) setForm(state.form);
   }, [state]);
 
-  const canSubmit = state?.mode !== "create" || legalEntities.length > 0;
+  const sourceBill = state?.sourceBill;
+  const sourceLegalEntity = sourceBill
+    ? legalEntities.find((entity) => entity.id === sourceBill.legalEntityId)
+    : null;
+  const sourceVendor = sourceBill
+    ? vendors.find((vendor) => vendor.id === sourceBill.vendorId)
+    : null;
+  const statusOptions = sourceBill ? billFirstPaymentStatuses : paymentStatuses;
+  const selectedStatusValue = form.status || paymentStatusPlaceholder;
+  const hasRequiredScope = sourceBill ? true : state?.mode !== "create" || legalEntities.length > 0;
+  const hasRequiredPaymentFacts = state?.mode !== "create" || (form.paymentDate.trim().length > 0 && form.status.trim().length > 0);
+  const canSubmit = hasRequiredScope && hasRequiredPaymentFacts && !isSubmitting;
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
@@ -1040,23 +1072,56 @@ function PaymentDialog({
         <DialogHeader>
           <DialogTitle>{state?.mode === "edit" ? "Edit Pending Payment" : "Record Payment"}</DialogTitle>
         </DialogHeader>
-        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(form); }}>
+          {sourceBill && (
+            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+              <div className="font-medium">Bill: {sourceBillPaymentLabel(sourceBill)}</div>
+              <div className="mt-1 text-muted-foreground">
+                Remaining: {formatMoney(sourceBill.remainingAmountCents ?? sourceBill.amountCents, sourceBill.currency)}
+              </div>
+            </div>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
-            <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
-            <SelectField label="Vendor" value={form.vendorId || "none"} options={["none", ...vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))]} onValueChange={(vendorId) => setForm({ ...form, vendorId: vendorId === "none" ? "" : vendorId })} />
+            {sourceBill ? (
+              <ReadOnlyField
+                label="Legal entity"
+                value={sourceLegalEntity ? legalEntityDisplayName(sourceLegalEntity) : `Legal entity #${sourceBill.legalEntityId}`}
+                helper="From bill"
+              />
+            ) : (
+              <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
+            )}
+            {sourceBill ? (
+              <ReadOnlyField
+                label="Vendor"
+                value={sourceVendor ? vendorLabel(sourceVendor) : sourceBill.vendorName || `Vendor #${sourceBill.vendorId}`}
+                helper="From bill"
+              />
+            ) : (
+              <SelectField label="Vendor" value={form.vendorId || "none"} options={["none", ...vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))]} onValueChange={(vendorId) => setForm({ ...form, vendorId: vendorId === "none" ? "" : vendorId })} />
+            )}
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
-            <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
+            {sourceBill ? (
+              <ReadOnlyField label="Currency" value={sourceBill.currency} helper="From bill" />
+            ) : (
+              <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
+            )}
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Direction" value={form.direction} options={["outflow", "refund"]} onValueChange={(direction) => setForm({ ...form, direction })} />
-            <TextField label="Payment date" type="date" value={form.paymentDate} onChange={(paymentDate) => setForm({ ...form, paymentDate })} />
+            <TextField label="Payment date" type="date" value={form.paymentDate} onChange={(paymentDate) => setForm({ ...form, paymentDate })} required />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Method" value={form.methodType} options={paymentMethods} onValueChange={(methodType) => setForm({ ...form, methodType })} />
             {state?.mode === "create" ? (
-              <SelectField label="Initial status" value={form.status} options={paymentStatuses} onValueChange={(status) => setForm({ ...form, status })} />
+              <SelectField
+                label="Initial status"
+                value={selectedStatusValue}
+                options={[{ value: paymentStatusPlaceholder, label: "Select status" }, ...statusOptions]}
+                onValueChange={(status) => setForm({ ...form, status: status === paymentStatusPlaceholder ? "" : status })}
+              />
             ) : (
               <TextField label="Method label" value={form.methodLabel} onChange={(methodLabel) => setForm({ ...form, methodLabel })} />
             )}
@@ -1085,7 +1150,7 @@ function PaymentDialog({
           )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={!canSubmit}>Save</Button>
+            <Button type="submit" disabled={!canSubmit}>{isSubmitting ? "Saving" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1195,7 +1260,7 @@ export default function V2FinanceManagement() {
   const [vendorDialog, setVendorDialog] = React.useState<{ mode: "create" | "edit"; vendor?: FinanceVendor; form: VendorForm } | null>(null);
   const [subscriptionDialog, setSubscriptionDialog] = React.useState<{ mode: "create" | "edit"; subscription?: FinanceSubscription; form: SubscriptionForm } | null>(null);
   const [billDialog, setBillDialog] = React.useState<{ mode: "create" | "edit"; bill?: FinanceBill; form: BillForm } | null>(null);
-  const [paymentDialog, setPaymentDialog] = React.useState<{ mode: "create" | "edit"; payment?: FinancePayment; form: PaymentForm } | null>(null);
+  const [paymentDialog, setPaymentDialog] = React.useState<PaymentDialogState | null>(null);
   const [applicationDialog, setApplicationDialog] = React.useState<{ form: ApplicationForm } | null>(null);
   const [reconciliationDialog, setReconciliationDialog] = React.useState<{ form: ReconciliationForm } | null>(null);
   const mutation = useFinanceMutation();
@@ -1274,6 +1339,14 @@ export default function V2FinanceManagement() {
       { method, path, body },
       { onSuccess },
     );
+  }
+
+  function openBillPaymentDialog(bill: FinanceBill) {
+    setPaymentDialog({
+      mode: "create",
+      sourceBill: bill,
+      form: paymentFormFrom(legalEntities, activeVendors, undefined, bill),
+    });
   }
 
   function submitVendor(form: VendorForm) {
@@ -1362,12 +1435,10 @@ export default function V2FinanceManagement() {
   }
 
   function submitPayment(form: PaymentForm) {
-    const body = {
-      vendorId: optionalNullableNumber(form.vendorId),
+    const paymentFacts = {
       amountCents: moneyToCents(form.amount),
-      currency: form.currency.trim().toUpperCase(),
       direction: form.direction,
-      paymentDate: optionalNullableText(form.paymentDate),
+      paymentDate: form.paymentDate.trim(),
       methodType: form.methodType,
       methodLabel: optionalNullableText(form.methodLabel),
       institutionName: optionalNullableText(form.institutionName),
@@ -1377,9 +1448,26 @@ export default function V2FinanceManagement() {
     };
     const isEdit = paymentDialog?.mode === "edit";
     if (isEdit) {
-      const { status: _status, ...updateBody } = body;
-      mutate("PATCH", `${V2_FINANCE_BASE}/payments/${paymentDialog?.payment?.id}`, updateBody, () => setPaymentDialog(null));
+      const updateBody = {
+        vendorId: optionalNullableNumber(form.vendorId),
+        ...paymentFacts,
+        currency: form.currency.trim().toUpperCase(),
+      };
+      const { status: _status, ...editableBody } = updateBody;
+      mutate("PATCH", `${V2_FINANCE_BASE}/payments/${paymentDialog?.payment?.id}`, editableBody, () => setPaymentDialog(null));
+    } else if (paymentDialog?.sourceBill) {
+      mutate(
+        "POST",
+        `${V2_FINANCE_BASE}/bills/${paymentDialog.sourceBill.id}/record-payment`,
+        paymentFacts,
+        () => setPaymentDialog(null),
+      );
     } else {
+      const body = {
+        vendorId: optionalNullableNumber(form.vendorId),
+        ...paymentFacts,
+        currency: form.currency.trim().toUpperCase(),
+      };
       mutate(
         "POST",
         `${V2_FINANCE_BASE}/payments`,
@@ -1529,7 +1617,10 @@ export default function V2FinanceManagement() {
                             <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/dispute`)}><AlertCircle className="h-4 w-4" />Dispute</Button>
                           )}
                           {bill.billKind !== "credit_memo" && bill.status !== "draft" && bill.status !== "voided" && (bill.remainingAmountCents ?? 0) > 0 && (
-                            <Button size="sm" variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom(bill) })}><Link2 className="h-4 w-4" />Apply</Button>
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => openBillPaymentDialog(bill)}><WalletCards className="h-4 w-4" />Record payment</Button>
+                              <Button size="sm" variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom(bill) })}><Link2 className="h-4 w-4" />Apply</Button>
+                            </>
                           )}
                           {bill.status !== "voided" && (
                             <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/void`)}><XCircle className="h-4 w-4" />Void</Button>
@@ -1835,7 +1926,7 @@ export default function V2FinanceManagement() {
       <VendorDialog state={vendorDialog} onClose={() => setVendorDialog(null)} onSubmit={submitVendor} />
       <SubscriptionDialog state={subscriptionDialog} legalEntities={legalEntities} vendors={activeVendors} onClose={() => setSubscriptionDialog(null)} onSubmit={submitSubscription} />
       <BillDialog state={billDialog} legalEntities={legalEntities} vendors={activeVendors} subscriptions={subscriptions} bills={bills} onClose={() => setBillDialog(null)} onSubmit={submitBill} />
-      <PaymentDialog state={paymentDialog} legalEntities={legalEntities} vendors={activeVendors} onClose={() => setPaymentDialog(null)} onSubmit={submitPayment} />
+      <PaymentDialog state={paymentDialog} legalEntities={legalEntities} vendors={activeVendors} isSubmitting={mutation.isPending} onClose={() => setPaymentDialog(null)} onSubmit={submitPayment} />
       <ApplicationDialog state={applicationDialog} bills={bills} payments={payments} onClose={() => setApplicationDialog(null)} onSubmit={submitApplication} />
       <ReconciliationDialog state={reconciliationDialog} onClose={() => setReconciliationDialog(null)} onSubmit={submitReconciliation} />
     </div>
