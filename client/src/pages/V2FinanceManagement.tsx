@@ -44,6 +44,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   getInitialLegalEntityId,
+  legalEntityDisplayName,
   LegalEntityField,
   parseRequiredLegalEntityId,
 } from "@/components/finance/LegalEntityField";
@@ -368,6 +369,19 @@ function formatDate(value?: string | null) {
   return value ? value : "-";
 }
 
+function formatShortDate(value?: string | null) {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return value;
+  const [, year, month, day] = match;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+}
+
 function vendorLabel(vendor: FinanceVendor) {
   return vendor.name || `Vendor #${vendor.id}`;
 }
@@ -380,13 +394,25 @@ function billLabel(bill: FinanceBill) {
 
 function subscriptionLabel(subscription: FinanceSubscription) {
   const vendor = subscription.vendorName || `Vendor #${subscription.vendorId}`;
-  return `${vendor} - ${subscription.name}`;
+  return `${vendor} — ${subscription.name}`;
 }
 
 function recurringExpenseSummary(subscription: FinanceSubscription) {
   const vendor = subscription.vendorName || `Vendor #${subscription.vendorId}`;
   const amount = subscription.variableAmount ? "Variable" : formatMoney(subscription.expectedAmountCents, subscription.currency);
   return `${vendor} - ${humanize(subscription.cadence)} - ${amount}`;
+}
+
+function recurringExpenseContextSummary(subscription: FinanceSubscription) {
+  const amount = subscription.expectedAmountCents == null
+    ? "Variable amount"
+    : `Expected ${formatMoney(subscription.expectedAmountCents, subscription.currency)} ${subscription.currency}`;
+  const nextBill = formatShortDate(subscription.nextBillingDate);
+  return [
+    humanize(subscription.cadence),
+    amount,
+    nextBill ? `Next bill ${nextBill}` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 function paymentLabel(payment: FinancePayment) {
@@ -511,6 +537,26 @@ function SelectField({
   );
 }
 
+function ReadOnlyField({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper?: string;
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label>{label}</Label>
+      <div className="flex min-h-10 items-center rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <span className="min-w-0 truncate font-medium">{value}</span>
+      </div>
+      {helper && <p className="text-xs text-muted-foreground">{helper}</p>}
+    </div>
+  );
+}
+
 function TextField({
   label,
   value,
@@ -615,6 +661,36 @@ function billFormFrom(
     categoryCode: bill?.categoryCode ?? "saas",
     creditForVendorBillId: bill?.creditForVendorBillId == null ? "" : String(bill.creditForVendorBillId),
     notes: bill?.notes ?? "",
+  };
+}
+
+function selectedRecurringExpenseFromForm(
+  subscriptions: FinanceSubscription[],
+  form: Pick<BillForm, "recurringExpenseId">,
+) {
+  if (!form.recurringExpenseId) return null;
+  return subscriptions.find((subscription) => String(subscription.id) === form.recurringExpenseId) ?? null;
+}
+
+function recurringExpenseOptions(subscriptions: FinanceSubscription[]): SelectOption[] {
+  return [
+    { value: "none", label: "None — One-time bill" },
+    ...subscriptions.map((subscription) => ({
+      value: String(subscription.id),
+      label: subscriptionLabel(subscription),
+    })),
+  ];
+}
+
+function billFormWithRecurringExpense(form: BillForm, subscription: FinanceSubscription): BillForm {
+  return {
+    ...form,
+    recurringExpenseId: String(subscription.id),
+    legalEntityId: String(subscription.legalEntityId),
+    vendorId: String(subscription.vendorId),
+    amount: subscription.expectedAmountCents == null ? form.amount : centsToMoney(subscription.expectedAmountCents),
+    currency: subscription.currency,
+    categoryCode: subscription.categoryCode,
   };
 }
 
@@ -827,7 +903,32 @@ function BillDialog({
     if (state) setForm(state.form);
   }, [state]);
 
+  const availableSubscriptions = React.useMemo(() => {
+    if (state?.mode !== "edit" || !state.bill) return subscriptions;
+    return subscriptions.filter(
+      (subscription) =>
+        subscription.legalEntityId === state.bill?.legalEntityId &&
+        subscription.vendorId === state.bill?.vendorId,
+    );
+  }, [state, subscriptions]);
+  const selectedRecurringExpense = selectedRecurringExpenseFromForm(availableSubscriptions, form);
+  const recurringLegalEntity = selectedRecurringExpense
+    ? legalEntities.find((entity) => entity.id === selectedRecurringExpense.legalEntityId)
+    : null;
+  const recurringVendor = selectedRecurringExpense
+    ? vendors.find((vendor) => vendor.id === selectedRecurringExpense.vendorId)
+    : null;
   const canSubmit = state?.mode !== "create" || legalEntities.length > 0;
+
+  function handleRecurringExpenseChange(recurringExpenseId: string) {
+    if (recurringExpenseId === "none") {
+      setForm({ ...form, recurringExpenseId: "" });
+      return;
+    }
+    const subscription = availableSubscriptions.find((item) => String(item.id) === recurringExpenseId);
+    if (!subscription) return;
+    setForm(billFormWithRecurringExpense(form, subscription));
+  }
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
@@ -836,19 +937,54 @@ function BillDialog({
           <DialogTitle>{state?.mode === "edit" ? "Edit Draft Bill" : "Add Bill"}</DialogTitle>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+          <SelectField
+            label="Recurring Expense (optional)"
+            value={form.recurringExpenseId || "none"}
+            options={recurringExpenseOptions(availableSubscriptions)}
+            onValueChange={handleRecurringExpenseChange}
+          />
+          {selectedRecurringExpense && (
+            <p className="text-xs text-muted-foreground">
+              {recurringExpenseContextSummary(selectedRecurringExpense)}
+            </p>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
-            <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
-            <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
+            {selectedRecurringExpense ? (
+              <ReadOnlyField
+                label="Legal entity"
+                value={recurringLegalEntity ? legalEntityDisplayName(recurringLegalEntity) : `Legal entity #${selectedRecurringExpense.legalEntityId}`}
+                helper="From recurring expense"
+              />
+            ) : (
+              <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
+            )}
+            {selectedRecurringExpense ? (
+              <ReadOnlyField
+                label="Vendor"
+                value={recurringVendor ? vendorLabel(recurringVendor) : `Vendor #${selectedRecurringExpense.vendorId}`}
+                helper="From recurring expense"
+              />
+            ) : (
+              <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
+            )}
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <SelectField label="Kind" value={form.billKind} options={billKinds} onValueChange={(billKind) => setForm({ ...form, billKind })} />
             <TextField label="Invoice number" value={form.invoiceNumber} onChange={(invoiceNumber) => setForm({ ...form, invoiceNumber })} />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <TextField label="Amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
-            <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
+            <TextField label="Actual amount" type="number" value={form.amount} onChange={(amount) => setForm({ ...form, amount })} />
+            {selectedRecurringExpense ? (
+              <ReadOnlyField label="Currency" value={selectedRecurringExpense.currency} helper="From recurring expense" />
+            ) : (
+              <TextField label="Currency" value={form.currency} onChange={(currency) => setForm({ ...form, currency })} />
+            )}
           </div>
-          <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
+          {selectedRecurringExpense ? (
+            <ReadOnlyField label="Category" value={humanize(selectedRecurringExpense.categoryCode)} helper="From recurring expense" />
+          ) : (
+            <TextField label="Category" value={form.categoryCode} onChange={(categoryCode) => setForm({ ...form, categoryCode })} />
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <TextField label="Issue date" type="date" value={form.issueDate} onChange={(issueDate) => setForm({ ...form, issueDate })} />
             <TextField label="Due date" type="date" value={form.dueDate} onChange={(dueDate) => setForm({ ...form, dueDate })} />
@@ -857,10 +993,7 @@ function BillDialog({
             <TextField label="Service start" type="date" value={form.servicePeriodStart} onChange={(servicePeriodStart) => setForm({ ...form, servicePeriodStart })} />
             <TextField label="Service end" type="date" value={form.servicePeriodEnd} onChange={(servicePeriodEnd) => setForm({ ...form, servicePeriodEnd })} />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <SelectField label="Recurring Expense" value={form.recurringExpenseId || "none"} options={["none", ...subscriptions.map((subscription) => ({ value: String(subscription.id), label: subscriptionLabel(subscription) }))]} onValueChange={(recurringExpenseId) => setForm({ ...form, recurringExpenseId: recurringExpenseId === "none" ? "" : recurringExpenseId })} />
-            <SelectField label="Credit source" value={form.creditForVendorBillId || "none"} options={["none", ...bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))]} onValueChange={(creditForVendorBillId) => setForm({ ...form, creditForVendorBillId: creditForVendorBillId === "none" ? "" : creditForVendorBillId })} />
-          </div>
+          <SelectField label="Credit source" value={form.creditForVendorBillId || "none"} options={["none", ...bills.map((bill) => ({ value: String(bill.id), label: billLabel(bill) }))]} onValueChange={(creditForVendorBillId) => setForm({ ...form, creditForVendorBillId: creditForVendorBillId === "none" ? "" : creditForVendorBillId })} />
           <div className="grid gap-2">
             <Label>Notes</Label>
             <Textarea
@@ -1197,9 +1330,10 @@ export default function V2FinanceManagement() {
   }
 
   function submitBill(form: BillForm) {
+    const selectedRecurringExpense = selectedRecurringExpenseFromForm(subscriptions, form);
     const body = {
-      vendorId: Number(form.vendorId),
-      recurringExpenseId: optionalNullableNumber(form.recurringExpenseId),
+      vendorId: selectedRecurringExpense?.vendorId ?? Number(form.vendorId),
+      recurringExpenseId: selectedRecurringExpense?.id ?? optionalNullableNumber(form.recurringExpenseId),
       invoiceNumber: optionalNullableText(form.invoiceNumber),
       billKind: form.billKind,
       issueDate: optionalNullableText(form.issueDate),
@@ -1207,8 +1341,8 @@ export default function V2FinanceManagement() {
       servicePeriodStart: optionalNullableText(form.servicePeriodStart),
       servicePeriodEnd: optionalNullableText(form.servicePeriodEnd),
       amountCents: moneyToCents(form.amount),
-      currency: form.currency.trim().toUpperCase(),
-      categoryCode: form.categoryCode.trim(),
+      currency: (selectedRecurringExpense?.currency ?? form.currency).trim().toUpperCase(),
+      categoryCode: selectedRecurringExpense?.categoryCode ?? form.categoryCode.trim(),
       status: "draft",
       creditForVendorBillId: optionalNullableNumber(form.creditForVendorBillId),
       notes: optionalNullableText(form.notes),
@@ -1221,7 +1355,7 @@ export default function V2FinanceManagement() {
       mutate(
         "POST",
         `${V2_FINANCE_BASE}/bills`,
-        { legalEntityId: parseRequiredLegalEntityId(form.legalEntityId), ...body },
+        { legalEntityId: selectedRecurringExpense?.legalEntityId ?? parseRequiredLegalEntityId(form.legalEntityId), ...body },
         () => setBillDialog(null),
       );
     }

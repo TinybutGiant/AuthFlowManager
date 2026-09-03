@@ -73,7 +73,7 @@ test("V2 finance uses loaded AP labels instead of raw IDs when available", () =>
   assert.match(source, /function billLabel\(bill: FinanceBill\)/);
   assert.match(source, /function subscriptionLabel\(subscription: FinanceSubscription\)/);
   assert.match(source, /function paymentLabel\(payment: FinancePayment\)/);
-  assert.match(source, /return `\$\{vendor\} - \$\{subscription\.name\}`;/);
+  assert.match(source, /return `\$\{vendor\} — \$\{subscription\.name\}`;/);
 
   assert.doesNotMatch(source, /options=\{legalEntities\.map\(\(entity\) => String\(entity\.id\)\)\}/);
   assert.doesNotMatch(source, /options=\{vendors\.map\(\(vendor\) => String\(vendor\.id\)\)\}/);
@@ -135,18 +135,18 @@ test("V2 AP dialogs preserve legacy field order and explicit row structure", () 
   assert.match(bill, /<DialogContent className="sm:max-w-3xl">/);
   assertOrdered(bill, [
     "className=\"space-y-4\"",
-    "<LegalEntityField",
+    "label=\"Recurring Expense (optional)\"",
+    "label=\"Legal entity\"",
     "label=\"Vendor\"",
     "label=\"Kind\"",
     "label=\"Invoice number\"",
-    "label=\"Amount\"",
+    "label=\"Actual amount\"",
     "label=\"Currency\"",
     "label=\"Category\"",
     "label=\"Issue date\"",
     "label=\"Due date\"",
     "label=\"Service start\"",
     "label=\"Service end\"",
-    "label=\"Recurring Expense\"",
     "label=\"Credit source\"",
     "<Label>Notes</Label>",
   ]);
@@ -207,4 +207,49 @@ test("V2 finance presents recurring expenses as named obligations", () => {
   assert.match(source, /Recurring Expense/);
   assert.match(source, /No recurring expenses yet/);
   assert.match(source, /recurringExpenseSummary\(subscription\)/);
+});
+
+test("V2 bill dialog asks for recurring expense first and keeps bill snapshots explicit", () => {
+  const bill = sourceBetween("function BillDialog", "function PaymentDialog");
+  const prefill = sourceBetween("function billFormWithRecurringExpense", "function paymentFormFrom");
+  const submit = sourceBetween("function submitBill", "function submitPayment");
+
+  assert.match(source, /\{ value: "none", label: "None — One-time bill" \}/);
+  assertOrdered(bill, [
+    "label=\"Recurring Expense (optional)\"",
+    "options={recurringExpenseOptions(availableSubscriptions)}",
+    "onValueChange={handleRecurringExpenseChange}",
+    "recurringExpenseContextSummary(selectedRecurringExpense)",
+    "<ReadOnlyField",
+    "helper=\"From recurring expense\"",
+    "<LegalEntityField",
+    "label=\"Vendor\"",
+    "label=\"Actual amount\"",
+  ]);
+
+  assert.match(prefill, /recurringExpenseId: String\(subscription\.id\)/);
+  assert.match(prefill, /legalEntityId: String\(subscription\.legalEntityId\)/);
+  assert.match(prefill, /vendorId: String\(subscription\.vendorId\)/);
+  assert.match(prefill, /amount: subscription\.expectedAmountCents == null \? form\.amount : centsToMoney\(subscription\.expectedAmountCents\)/);
+  assert.match(prefill, /currency: subscription\.currency/);
+  assert.match(prefill, /categoryCode: subscription\.categoryCode/);
+  assert.doesNotMatch(prefill, /issueDate|dueDate|servicePeriodStart|servicePeriodEnd|nextBillingDate|renewalDate/);
+
+  assert.match(bill, /if \(recurringExpenseId === "none"\) \{\s*setForm\(\{ \.\.\.form, recurringExpenseId: "" \}\);/);
+  assert.match(source, /function recurringExpenseContextSummary\(subscription: FinanceSubscription\)/);
+  assert.match(source, /Expected \$\{formatMoney\(subscription\.expectedAmountCents, subscription\.currency\)\} \$\{subscription\.currency\}/);
+  assert.match(source, /nextBill \? `Next bill \$\{nextBill\}` : null/);
+  assert.match(bill, /<ReadOnlyField label="Currency" value=\{selectedRecurringExpense\.currency\} helper="From recurring expense" \/>/);
+  assert.match(bill, /<TextField label="Currency" value=\{form\.currency\}/);
+  assert.match(bill, /<ReadOnlyField label="Category" value=\{humanize\(selectedRecurringExpense\.categoryCode\)\} helper="From recurring expense" \/>/);
+  assert.match(bill, /<TextField label="Category" value=\{form\.categoryCode\}/);
+  assert.match(bill, /<TextField label="Actual amount" type="number" value=\{form\.amount\}/);
+  assert.match(submit, /const selectedRecurringExpense = selectedRecurringExpenseFromForm\(subscriptions, form\);/);
+  assert.match(submit, /vendorId: selectedRecurringExpense\?\.vendorId \?\? Number\(form\.vendorId\)/);
+  assert.match(submit, /recurringExpenseId: selectedRecurringExpense\?\.id \?\? optionalNullableNumber\(form\.recurringExpenseId\)/);
+  assert.match(submit, /amountCents: moneyToCents\(form\.amount\)/);
+  assert.match(submit, /currency: \(selectedRecurringExpense\?\.currency \?\? form\.currency\)\.trim\(\)\.toUpperCase\(\)/);
+  assert.match(submit, /categoryCode: selectedRecurringExpense\?\.categoryCode \?\? form\.categoryCode\.trim\(\)/);
+  assert.match(submit, /legalEntityId: selectedRecurringExpense\?\.legalEntityId \?\? parseRequiredLegalEntityId\(form\.legalEntityId\)/);
+  assert.doesNotMatch(sourceBetween("type FinanceSubscription", "type FinanceBill"), /invoiceNumber/);
 });
