@@ -37,5 +37,51 @@
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
+  },
+  "env": {
+    "local": {
+      "name": "authflowmanager-v2-local",
+      "compatibility_date": "2026-08-31",
+      "compatibility_flags": ["nodejs_compat"],
+      "workers_dev": false,
+      "preview_urls": false,
+      "build": {
+        "command": "npm run build:worker:dev",
+        "watch_dir": ["client", "server", "shared"]
+      },
+      "vars": {
+        "V2_LOCAL_DEV_AUTH": "true",
+        "V2_LOCAL_DEV_STAFF_EMAIL": "local-owner@authflowmanager.test",
+        "ACCESS_TEAM_DOMAIN": "local.cloudflareaccess.invalid",
+        "ACCESS_AUD": "local-dev",
+        "LOCALGUIDE_API_BASE_URL": "http://127.0.0.1:59999",
+        "STAFF_ASSERTION_ISSUER": "yaotu-admin-local",
+        "STAFF_ASSERTION_AUDIENCE": "yaotu-localguide-local"
+      },
+      "assets": {
+        "directory": "./dist/public",
+        "not_found_handling": "single-page-application",
+        "binding": "ASSETS",
+        "run_worker_first": ["/api/*"]
+      },
+      "hyperdrive": [
+        {
+          "binding": "AUTHFLOW_DB",
+          "id": "local-authflow-db",
+          "localConnectionString": "postgresql://postgres:authflowdev@127.0.0.1:55434/authflowmanager_v2_authflow_dev?sslmode=disable"
+        },
+        {
+          "binding": "MAIN_DB",
+          "id": "local-main-db",
+          "localConnectionString": "postgresql://postgres:authflowdev@127.0.0.1:55434/authflowmanager_v2_main_dev?sslmode=disable"
+        }
+      ],
+      "secrets": {
+        "required": []
+      },
+      "observability": {
+        "enabled": false
+      }
+    }
   }
 }

@@ -11,6 +11,8 @@ export type WorkerV2Env = {
   MAIN_DB?: HyperdriveBinding;
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  V2_LOCAL_DEV_AUTH?: string;
+  V2_LOCAL_DEV_STAFF_EMAIL?: string;
   LOCALGUIDE_API_BASE_URL?: string;
   STAFF_ASSERTION_PRIVATE_KEY?: string;
   STAFF_ASSERTION_ISSUER?: string;

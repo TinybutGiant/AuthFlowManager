@@ -22,6 +22,8 @@ export type WorkerV2ExecutionContext = {
 export type WorkerV2AccessJwtConfig = {
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  V2_LOCAL_DEV_AUTH?: string;
+  V2_LOCAL_DEV_STAFF_EMAIL?: string;
 };
 
 export type AccessJwtResolverOptions = {
@@ -50,6 +52,37 @@ export function normalizeAccessEmail(email: string): string {
 
 function hasUsableEmail(email: unknown): email is string {
   return typeof email === "string" && normalizeAccessEmail(email).length > 0;
+}
+
+function isLocalDevHost(request: Request): boolean {
+  try {
+    const { hostname } = new URL(request.url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function getLocalDevEmail(
+  request: Request,
+  env: WorkerV2AccessJwtConfig,
+): AccessEmailResult | null {
+  if (env.V2_LOCAL_DEV_AUTH !== "true" || !isLocalDevHost(request)) {
+    return null;
+  }
+
+  if (!hasUsableEmail(env.V2_LOCAL_DEV_STAFF_EMAIL)) {
+    return {
+      ok: false,
+      status: 403,
+      code: "ACCESS_IDENTITY_UNAVAILABLE",
+    };
+  }
+
+  return {
+    ok: true,
+    email: normalizeAccessEmail(env.V2_LOCAL_DEV_STAFF_EMAIL),
+  };
 }
 
 function normalizeAccessTeamDomain(teamDomain: string | undefined): string | null {
@@ -185,6 +218,11 @@ export async function getVerifiedAccessEmail(
   ctx: WorkerV2ExecutionContext = {},
   options: AccessJwtResolverOptions = {},
 ): Promise<AccessEmailResult> {
+  const localDevEmail = getLocalDevEmail(request, env);
+  if (localDevEmail) {
+    return localDevEmail;
+  }
+
   if (ctx.access) {
     return await getAccessEmailFromContext(ctx);
   }

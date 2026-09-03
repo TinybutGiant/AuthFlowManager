@@ -29,6 +29,10 @@ const TEST_ENV: WorkerV2Env = {
   ACCESS_TEAM_DOMAIN: TEST_ISSUER,
   ACCESS_AUD: TEST_AUDIENCE,
 };
+const LOCAL_DEV_ENV: WorkerV2Env = {
+  V2_LOCAL_DEV_AUTH: "true",
+  V2_LOCAL_DEV_STAFF_EMAIL: " LOCAL-OWNER@AuthFlowManager.Test ",
+};
 
 class MemoryStaffRepository implements StaffPrincipalRepository {
   readonly staffByEmail = new Map<string, StaffUserRecord>();
@@ -71,6 +75,10 @@ function authRequest(token?: string): Request {
   return new Request("https://authflowmanager.example/api/v2/auth/me", {
     headers,
   });
+}
+
+function localDevRequest(): Request {
+  return new Request("http://127.0.0.1:8787/api/v2/auth/me");
 }
 
 function staffRecord(
@@ -161,6 +169,71 @@ test("auth me route denies requests without Cloudflare Access", async () => {
 
   assert.equal(response.status, 401);
   assert.deepEqual(body, { status: "error", code: "ACCESS_REQUIRED" });
+});
+
+test("local dev auth resolves explicit localhost staff without Access JWT", async () => {
+  const repository = new MemoryStaffRepository();
+  repository.staffByEmail.set(
+    "local-owner@authflowmanager.test",
+    staffRecord({
+      id: 101,
+      email: "local-owner@authflowmanager.test",
+      role: "super_admin",
+    }),
+  );
+  repository.grantsByAdminUserId.set(101, [
+    { accessGroup: "super_admin", revokedAt: null },
+    { accessGroup: "finance_admin", revokedAt: null },
+  ]);
+
+  const result = await resolveStaffPrincipalWithRepository(
+    localDevRequest(),
+    LOCAL_DEV_ENV,
+    {},
+    repository,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(repository.lastLookupEmail, "local-owner@authflowmanager.test");
+  assert.deepEqual(result.principal, {
+    id: "101",
+    email: "local-owner@authflowmanager.test",
+    role: "super_admin",
+    permissions: ["super_admin", "finance_admin"],
+  });
+});
+
+test("local dev auth requires explicit flag even on localhost", async () => {
+  const repository = new MemoryStaffRepository();
+  const result = await resolveStaffPrincipalWithRepository(
+    localDevRequest(),
+    {
+      V2_LOCAL_DEV_AUTH: "false",
+      V2_LOCAL_DEV_STAFF_EMAIL: "local-owner@authflowmanager.test",
+    },
+    {},
+    repository,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 401);
+  assert.equal(publicStaffAuthFailure(result).code, "ACCESS_REQUIRED");
+  assert.equal(repository.findCalls, 0);
+});
+
+test("local dev auth is ignored away from localhost", async () => {
+  const repository = new MemoryStaffRepository();
+  const result = await resolveStaffPrincipalWithRepository(
+    authRequest(),
+    LOCAL_DEV_ENV,
+    {},
+    repository,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 401);
+  assert.equal(publicStaffAuthFailure(result).code, "ACCESS_REQUIRED");
+  assert.equal(repository.findCalls, 0);
 });
 
 test("denies missing Access identity without database lookup", async () => {
