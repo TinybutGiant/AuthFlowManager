@@ -197,6 +197,15 @@ test("V2 finance has descriptive AP empty states with local actions", () => {
   assert.doesNotMatch(source, /FinancePageHeader|OverviewPanel|financeRolesQueryPrefix/);
 });
 
+test("V2 AP row actions explain bill and payment lifecycle", () => {
+  assert.match(source, /TooltipTrigger asChild/);
+  assert.match(source, /Move this draft bill into AP\. Receive it before approving, disputing, applying, or recording payment\./);
+  assert.match(source, /Create a payment and apply it to this bill in one transaction\./);
+  assert.match(source, /Apply an existing payment or credit to this bill\./);
+  assert.match(source, /Record a standalone payment\. Apply it to bills later if needed\./);
+  assert.match(source, /Reverse this application without deleting the payment or bill\./);
+});
+
 test("V2 finance presents recurring expenses as named obligations", () => {
   assert.match(source, /\{ value: "subscriptions", label: "Recurring Expenses" \}/);
   assert.match(source, /name: subscription\?\.name \?\? ""/);
@@ -264,7 +273,7 @@ test("V2 bill-first record payment keeps payment allocation workflow off the dat
   assert.match(source, /function openBillPaymentDialog\(bill: FinanceBill\)/);
   assert.match(source, /sourceBill: bill/);
   assert.match(source, /paymentFormFrom\(legalEntities, activeVendors, undefined, bill\)/);
-  assert.match(source, /<Button size="sm" variant="outline" onClick=\{\(\) => openBillPaymentDialog\(bill\)\}><WalletCards className="h-4 w-4" \/>Record payment<\/Button>/);
+  assert.match(source, /<ActionTooltip content="Create a payment and apply it to this bill in one transaction\.">[\s\S]*?<Button size="sm" variant="outline" onClick=\{\(\) => openBillPaymentDialog\(bill\)\}><WalletCards className="h-4 w-4" \/>Record payment<\/Button>[\s\S]*?<\/ActionTooltip>/);
   assert.doesNotMatch(sourceBetween("type FinancePayment", "type FinanceBillApplication"), /billId|vendorBillId|targetVendorBillId/);
 
   assert.match(paymentForm, /sourceBill\?: FinanceBill/);

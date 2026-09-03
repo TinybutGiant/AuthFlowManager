@@ -43,6 +43,11 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   getInitialLegalEntityId,
   legalEntityDisplayName,
   LegalEntityField,
@@ -448,6 +453,23 @@ function statusBadge(status?: string | null) {
         : "secondary";
 
   return <Badge variant={variant}>{humanize(status)}</Badge>;
+}
+
+function ActionTooltip({
+  content,
+  children,
+}: {
+  content: string;
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        <p>{content}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function Section({
@@ -1606,24 +1628,38 @@ export default function V2FinanceManagement() {
                         <div className="flex flex-wrap justify-end gap-2">
                           {bill.status === "draft" && (
                             <>
-                              <Button size="sm" variant="outline" onClick={() => setBillDialog({ mode: "edit", bill, form: billFormFrom(legalEntities, activeVendors, bill) })}><Edit3 className="h-4 w-4" />Edit</Button>
-                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/receive`)}><ReceiptText className="h-4 w-4" />Receive</Button>
+                              <ActionTooltip content="Edit draft bill details before it is received.">
+                                <Button size="sm" variant="outline" onClick={() => setBillDialog({ mode: "edit", bill, form: billFormFrom(legalEntities, activeVendors, bill) })}><Edit3 className="h-4 w-4" />Edit</Button>
+                              </ActionTooltip>
+                              <ActionTooltip content="Move this draft bill into AP. Receive it before approving, disputing, applying, or recording payment.">
+                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/receive`)}><ReceiptText className="h-4 w-4" />Receive</Button>
+                              </ActionTooltip>
                             </>
                           )}
                           {["received", "disputed"].includes(bill.status) && (
-                            <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/approve`)}><CheckCircle2 className="h-4 w-4" />Approve</Button>
+                            <ActionTooltip content="Mark this received or disputed bill as reviewed and approved.">
+                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/approve`)}><CheckCircle2 className="h-4 w-4" />Approve</Button>
+                            </ActionTooltip>
                           )}
                           {["received", "approved"].includes(bill.status) && (
-                            <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/dispute`)}><AlertCircle className="h-4 w-4" />Dispute</Button>
+                            <ActionTooltip content="Mark this bill disputed while the amount or vendor issue is unresolved.">
+                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/dispute`)}><AlertCircle className="h-4 w-4" />Dispute</Button>
+                            </ActionTooltip>
                           )}
                           {bill.billKind !== "credit_memo" && bill.status !== "draft" && bill.status !== "voided" && (bill.remainingAmountCents ?? 0) > 0 && (
                             <>
-                              <Button size="sm" variant="outline" onClick={() => openBillPaymentDialog(bill)}><WalletCards className="h-4 w-4" />Record payment</Button>
-                              <Button size="sm" variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom(bill) })}><Link2 className="h-4 w-4" />Apply</Button>
+                              <ActionTooltip content="Create a payment and apply it to this bill in one transaction.">
+                                <Button size="sm" variant="outline" onClick={() => openBillPaymentDialog(bill)}><WalletCards className="h-4 w-4" />Record payment</Button>
+                              </ActionTooltip>
+                              <ActionTooltip content="Apply an existing payment or credit to this bill.">
+                                <Button size="sm" variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom(bill) })}><Link2 className="h-4 w-4" />Apply</Button>
+                              </ActionTooltip>
                             </>
                           )}
                           {bill.status !== "voided" && (
-                            <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/void`)}><XCircle className="h-4 w-4" />Void</Button>
+                            <ActionTooltip content="Void this bill and remove it from the active AP workflow.">
+                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/void`)}><XCircle className="h-4 w-4" />Void</Button>
+                            </ActionTooltip>
                           )}
                         </div>
                       </TableCell>
@@ -1639,7 +1675,11 @@ export default function V2FinanceManagement() {
           <Section
             title="Payments"
             icon={WalletCards}
-            action={<Button disabled={!canCreateLegalEntityScopedRecord} onClick={() => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Record payment</Button>}
+            action={(
+              <ActionTooltip content="Record a standalone payment. Apply it to bills later if needed.">
+                <Button disabled={!canCreateLegalEntityScopedRecord} onClick={() => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) })}><Plus className="h-4 w-4" />Record payment</Button>
+              </ActionTooltip>
+            )}
           >
             {isLoading ? (
               <EmptyState title="Loading payments" description="Loading payment records and unapplied balances." />
@@ -1676,17 +1716,29 @@ export default function V2FinanceManagement() {
                         <div className="flex flex-wrap justify-end gap-2">
                           {payment.status === "pending" && (
                             <>
-                              <Button size="sm" variant="outline" onClick={() => setPaymentDialog({ mode: "edit", payment, form: paymentFormFrom(legalEntities, activeVendors, payment) })}><Edit3 className="h-4 w-4" />Edit</Button>
-                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/post`)}><CheckCircle2 className="h-4 w-4" />Post</Button>
-                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/fail`)}><XCircle className="h-4 w-4" />Fail</Button>
-                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/void`)}><Archive className="h-4 w-4" />Void</Button>
+                              <ActionTooltip content="Edit pending payment details before posting or clearing.">
+                                <Button size="sm" variant="outline" onClick={() => setPaymentDialog({ mode: "edit", payment, form: paymentFormFrom(legalEntities, activeVendors, payment) })}><Edit3 className="h-4 w-4" />Edit</Button>
+                              </ActionTooltip>
+                              <ActionTooltip content="Mark this pending payment as sent or posted.">
+                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/post`)}><CheckCircle2 className="h-4 w-4" />Post</Button>
+                              </ActionTooltip>
+                              <ActionTooltip content="Mark this pending payment as failed.">
+                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/fail`)}><XCircle className="h-4 w-4" />Fail</Button>
+                              </ActionTooltip>
+                              <ActionTooltip content="Void this pending payment before it posts.">
+                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/void`)}><Archive className="h-4 w-4" />Void</Button>
+                              </ActionTooltip>
                             </>
                           )}
                           {payment.status === "posted" && (
-                            <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/clear`)}><CheckCircle2 className="h-4 w-4" />Clear</Button>
+                            <ActionTooltip content="Mark this posted payment as cleared.">
+                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/clear`)}><CheckCircle2 className="h-4 w-4" />Clear</Button>
+                            </ActionTooltip>
                           )}
                           {["posted", "cleared"].includes(payment.status) && (
-                            <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/reverse`)}><RotateCcw className="h-4 w-4" />Reverse</Button>
+                            <ActionTooltip content="Reverse this posted or cleared payment and its active applications.">
+                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/reverse`)}><RotateCcw className="h-4 w-4" />Reverse</Button>
+                            </ActionTooltip>
                           )}
                         </div>
                       </TableCell>
@@ -1868,7 +1920,15 @@ export default function V2FinanceManagement() {
           </Section>
         )}
 
-        <Section title="Applications" icon={Link2} action={<Button variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom() })}><Plus className="h-4 w-4" />Apply manually</Button>}>
+        <Section
+          title="Applications"
+          icon={Link2}
+          action={(
+            <ActionTooltip content="Apply an existing payment or credit to an open bill.">
+              <Button variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom() })}><Plus className="h-4 w-4" />Apply manually</Button>
+            </ActionTooltip>
+          )}
+        >
           {isLoading ? (
             <EmptyState title="Loading applied payments" description="Loading payment and credit applications." />
           ) : applications.length === 0 ? (
@@ -1908,10 +1968,12 @@ export default function V2FinanceManagement() {
                       <TableCell className="text-right">{formatMoney(application.amountCents, application.currency)}</TableCell>
                       <TableCell className="text-right">
                         {application.status === "active" && (
-                          <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bill-applications/${application.id}/reverse`)}>
-                            <RotateCcw className="h-4 w-4" />
-                            Reverse
-                          </Button>
+                          <ActionTooltip content="Reverse this application without deleting the payment or bill.">
+                            <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bill-applications/${application.id}/reverse`)}>
+                              <RotateCcw className="h-4 w-4" />
+                              Reverse
+                            </Button>
+                          </ActionTooltip>
                         )}
                       </TableCell>
                     </TableRow>
