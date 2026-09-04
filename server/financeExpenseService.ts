@@ -885,9 +885,19 @@ export interface FinanceOverviewExceptionRow {
   domain: string;
 }
 
+export interface FinanceOverviewPaymentRow {
+  id: number;
+  amountCents: number;
+  currency: string;
+  direction: string;
+  paymentDate?: string | Date | null;
+  status: string;
+}
+
 export interface FinanceOverviewInput {
   bills: readonly FinanceOverviewBillRow[];
   subscriptions: readonly FinanceOverviewSubscriptionRow[];
+  payments: readonly FinanceOverviewPaymentRow[];
   reconciliationExceptions: readonly FinanceOverviewExceptionRow[];
   today?: string;
 }
@@ -901,6 +911,11 @@ export interface FinanceOverview {
     billsDueThisMonthCount: number;
     billsDueThisMonthByCurrency: CurrencyAmount[];
     monthlyRecurringSpendByCurrency: CurrencyAmount[];
+    paidThisMonthByCurrency: CurrencyAmount[];
+    paidYtdByCurrency: CurrencyAmount[];
+    openBillsCount: number;
+    overdueBillsCount: number;
+    openBillTotalsByCurrency: CurrencyAmount[];
     variableOrUnknownRecurringCount: number;
     activeSubscriptionsCount: number;
     openReconciliationIssuesCount: number;
@@ -1222,11 +1237,47 @@ function isOpenPayableBill(bill: Pick<FinanceOverviewBillRow, "billKind" | "stat
   return remainingBillAmountCents(bill) > 0;
 }
 
+function startOfUtcMonth(date: string) {
+  return `${date.slice(0, 7)}-01`;
+}
+
+function startOfUtcYear(date: string) {
+  return `${date.slice(0, 4)}-01-01`;
+}
+
+function isCompletedOutflowPayment(
+  payment: Pick<FinanceOverviewPaymentRow, "direction" | "paymentDate" | "status">,
+) {
+  return payment.status === "cleared" && payment.direction === "outflow" && Boolean(normalizeDate(payment.paymentDate));
+}
+
+function paidByCurrency(
+  rows: readonly FinanceOverviewPaymentRow[],
+  startDate: string,
+  endDate: string,
+) {
+  const values = new Map<string, number>();
+  for (const row of rows) {
+    const paymentDate = normalizeDate(row.paymentDate);
+    if (!paymentDate || !isCompletedOutflowPayment(row) || paymentDate < startDate || paymentDate > endDate) {
+      continue;
+    }
+    addCurrencyAmount(values, row.currency, row.amountCents);
+  }
+  return mapToCurrencyAmounts(values);
+}
+
 export function deriveFinanceOverviewFromRows(input: FinanceOverviewInput): FinanceOverview {
   const today = input.today ?? dateOnly();
+  const monthStart = startOfUtcMonth(today);
+  const yearStart = startOfUtcYear(today);
   const weekEnd = addUtcDays(today, 7);
   const monthEnd = endOfUtcMonth(today);
   const openBills = input.bills.filter(isOpenPayableBill);
+  const overdueBills = openBills.filter((bill) => {
+    const dueDate = normalizeDate(bill.dueDate);
+    return Boolean(dueDate && dueDate < today);
+  });
   const dueThisWeek = openBills.filter((bill) => {
     const dueDate = normalizeDate(bill.dueDate);
     return Boolean(dueDate && dueDate >= today && dueDate <= weekEnd);
@@ -1296,6 +1347,11 @@ export function deriveFinanceOverviewFromRows(input: FinanceOverviewInput): Fina
       billsDueThisMonthCount: dueThisMonth.length,
       billsDueThisMonthByCurrency: amountByCurrency(dueThisMonth, remainingBillAmountCents),
       monthlyRecurringSpendByCurrency: mapToCurrencyAmounts(monthlyRecurringSpendByCurrency),
+      paidThisMonthByCurrency: paidByCurrency(input.payments, monthStart, today),
+      paidYtdByCurrency: paidByCurrency(input.payments, yearStart, today),
+      openBillsCount: openBills.length,
+      overdueBillsCount: overdueBills.length,
+      openBillTotalsByCurrency: amountByCurrency(openBills, remainingBillAmountCents),
       variableOrUnknownRecurringCount,
       activeSubscriptionsCount: activeSubscriptions.length,
       openReconciliationIssuesCount: input.reconciliationExceptions.filter((row) => (

@@ -53,6 +53,54 @@ test("V2 finance read queries declare explicit V2 query functions", () => {
   }
 });
 
+test("V2 finance shows payment-sourced spend metrics and payment details", () => {
+  const overview = sourceBetween("type FinanceOverview", "type VendorForm");
+  assert.match(overview, /paidThisMonthByCurrency: CurrencyAmount\[\];/);
+  assert.match(overview, /paidYtdByCurrency: CurrencyAmount\[\];/);
+
+  const metrics = sourceBetween("<div className=\"grid gap-4 md:grid-cols-3 xl:grid-cols-6\">", "<div className=\"flex flex-wrap gap-2\">");
+  assertOrdered(metrics, [
+    "Open bills",
+    "Overdue",
+    "Recurring expenses",
+    "Open total",
+    "Paid this month",
+    "Paid YTD",
+  ]);
+  assert.match(metrics, /formatMoneyBreakdown\(overviewQuery\.data\?\.metrics\?\.paidThisMonthByCurrency\)/);
+  assert.match(metrics, /formatMoneyBreakdown\(overviewQuery\.data\?\.metrics\?\.paidYtdByCurrency\)/);
+
+  const paymentsTable = sourceBetween("{tab === \"payments\" && (", "{tab === \"subscriptions\" && (");
+  assert.match(paymentsTable, /View stored payment method details and active bill applications\./);
+  assert.match(paymentsTable, /setPaymentDetail\(payment\)/);
+  assert.match(paymentsTable, /<Eye className="h-4 w-4" \/>View details/);
+
+  const detailDialog = sourceBetween("function PaymentDetailDialog", "function ApplicationDialog");
+  assert.match(detailDialog, /<DialogTitle>Payment Details<\/DialogTitle>/);
+  assert.match(detailDialog, /activeApplicationsForPayment\(payment, applications\)/);
+  assertOrdered(detailDialog, [
+    "Vendor",
+    "Legal entity",
+    "Amount",
+    "Payment date",
+    "Direction",
+    "Status",
+    "Method",
+    "Method label",
+    "Institution",
+    "Last 4",
+    "Confirmation",
+    "Applied Bills",
+  ]);
+  assert.match(detailDialog, /displayValue\(payment\.methodLabel\)/);
+  assert.match(detailDialog, /displayValue\(payment\.institutionName\)/);
+  assert.match(detailDialog, /displayValue\(payment\.maskedLast4\)/);
+  assert.match(detailDialog, /displayValue\(payment\.externalConfirmationRef\)/);
+  assert.match(detailDialog, /Bill #\$\{application\.targetVendorBillId\}/);
+  assert.match(detailDialog, /No active bill applications\./);
+  assert.doesNotMatch(detailDialog, /accountNumber|cardNumber|fullCard|fullAccount/i);
+});
+
 test("V2 finance restores AP notes without adding legacy finance coupling", () => {
   assert.match(source, /type FinanceVendor = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
   assert.match(source, /type FinanceSubscription = \{[\s\S]*?name: string;[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);

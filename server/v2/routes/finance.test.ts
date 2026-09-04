@@ -176,6 +176,7 @@ function repo(overrides: {
       today,
       bills: [],
       subscriptions: [],
+      payments: [],
       reconciliationExceptions: [],
     }),
   } as FinanceExpenseRepository;

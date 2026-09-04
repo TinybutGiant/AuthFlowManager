@@ -12,6 +12,7 @@ import {
   createFinanceReconciliationException,
   createFinanceVendor,
   financeBillResponse,
+  getFinanceOverview,
   listFinanceBills,
   listFinancePayments,
   recordPaidFinanceBill,
@@ -719,6 +720,58 @@ test(
           "vendor_bill_application:applied",
         ],
       );
+    });
+  },
+);
+
+test(
+  "V2 AP overview spend uses cleared outflow payments once on disposable PostgreSQL",
+  {
+    skip: POSTGRES_TEST_DATABASE_URL
+      ? false
+      : "Set MIGRATION_RUNNER_TEST_DATABASE_URL to a disposable PostgreSQL database to run.",
+  },
+  async () => {
+    await withApSchema(async (client) => {
+      const repo = repoForClient(client);
+      await client.query(`INSERT INTO "vendors" ("id", "name", "vendor_type", "status") VALUES (20, 'Cloudflare', 'cloud', 'active')`);
+      await client.query(`
+        INSERT INTO "vendor_bills"
+          ("id", "legal_entity_id", "vendor_id", "invoice_number", "bill_kind", "due_date", "amount_cents", "currency", "category_code", "status")
+        VALUES
+          (100, 1, 20, 'IN-A', 'invoice', '2026-09-10', 1000, 'USD', 'cloud', 'approved'),
+          (101, 1, 20, 'IN-B', 'invoice', '2026-09-11', 1000, 'USD', 'cloud', 'approved')
+      `);
+      await client.query(`
+        INSERT INTO "expense_payments"
+          ("id", "legal_entity_id", "vendor_id", "amount_cents", "currency", "direction", "payment_date", "method_type", "status")
+        VALUES
+          (200, 1, 20, 1000, 'USD', 'outflow', '2026-09-02', 'card', 'cleared'),
+          (201, 1, 20, 2000, 'USD', 'outflow', '2026-01-15', 'card', 'cleared'),
+          (202, 1, 20, 3000, 'USD', 'refund', '2026-09-03', 'card', 'cleared'),
+          (203, 1, 20, 4000, 'USD', 'outflow', '2026-09-03', 'card', 'pending'),
+          (204, 1, 20, 5000, 'USD', 'outflow', '2026-09-03', 'card', 'failed'),
+          (205, 1, 20, 6000, 'USD', 'outflow', '2026-09-03', 'card', 'voided'),
+          (206, 1, 20, 7000, 'USD', 'outflow', '2026-09-03', 'card', 'reversed'),
+          (207, 1, 20, 8000, 'USD', 'outflow', '2025-12-31', 'card', 'cleared'),
+          (208, 1, 20, 9000, 'USD', 'outflow', '2026-10-01', 'card', 'cleared')
+      `);
+      await client.query(`
+        INSERT INTO "vendor_bill_applications"
+          ("target_vendor_bill_id", "expense_payment_id", "amount_cents", "currency", "status")
+        VALUES
+          (100, 200, 400, 'USD', 'active'),
+          (101, 200, 600, 'USD', 'active')
+      `);
+
+      const overview = await getFinanceOverview(repo, "2026-09-04");
+
+      assert.deepEqual(overview.metrics.paidThisMonthByCurrency, [
+        { currency: "USD", amountCents: 1000 },
+      ]);
+      assert.deepEqual(overview.metrics.paidYtdByCurrency, [
+        { currency: "USD", amountCents: 3000 },
+      ]);
     });
   },
 );

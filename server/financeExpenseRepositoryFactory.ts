@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import {
   documentLinks,
   documents,
@@ -631,6 +631,7 @@ export function createFinanceExpenseRepository(database: DrizzleDb): FinanceExpe
     },
 
     getFinanceOverviewRows: async (today) => {
+      const yearStart = `${today.slice(0, 4)}-01-01`;
       const billRows = await database
         .select({
           bill: {
@@ -697,6 +698,27 @@ export function createFinanceExpenseRepository(database: DrizzleDb): FinanceExpe
           ),
         )
         .limit(1000);
+      const paymentRows = await database
+        .select({
+          payment: {
+            id: expensePayments.id,
+            amountCents: expensePayments.amountCents,
+            currency: expensePayments.currency,
+            direction: expensePayments.direction,
+            paymentDate: expensePayments.paymentDate,
+            status: expensePayments.status,
+          },
+        })
+        .from(expensePayments)
+        .where(
+          and(
+            eq(expensePayments.status, "cleared"),
+            eq(expensePayments.direction, "outflow"),
+            gte(expensePayments.paymentDate, yearStart),
+            lte(expensePayments.paymentDate, today),
+          ),
+        )
+        .limit(1000);
 
       const bills = mapBillRows(billRows, applications, documentCounts);
       return {
@@ -717,6 +739,7 @@ export function createFinanceExpenseRepository(database: DrizzleDb): FinanceExpe
           documentCount: bill.documentCount,
         })),
         subscriptions: subscriptionRows,
+        payments: paymentRows.map((row: any) => row.payment),
         reconciliationExceptions: exceptionRows,
       } satisfies FinanceOverviewInput;
     },

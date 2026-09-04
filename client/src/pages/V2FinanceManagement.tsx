@@ -6,6 +6,7 @@ import {
   Building2,
   CheckCircle2,
   Edit3,
+  Eye,
   Link2,
   Plus,
   ReceiptText,
@@ -166,13 +167,20 @@ type FinanceReconciliationException = {
   status: string;
 };
 
+type CurrencyAmount = {
+  currency: string;
+  amountCents: number;
+};
+
 type FinanceOverview = {
   metrics?: {
     openBillsCount: number;
     overdueBillsCount: number;
     openReconciliationIssuesCount: number;
     activeSubscriptionsCount: number;
-    openBillTotalsByCurrency: Array<{ currency: string; amountCents: number }>;
+    openBillTotalsByCurrency: CurrencyAmount[];
+    paidThisMonthByCurrency: CurrencyAmount[];
+    paidYtdByCurrency: CurrencyAmount[];
   };
 };
 
@@ -389,8 +397,17 @@ function formatMoney(amountCents?: number | null, currency = "USD") {
   }).format(amountCents / 100);
 }
 
+function formatMoneyBreakdown(rows?: CurrencyAmount[]) {
+  return rows?.map((row) => formatMoney(row.amountCents, row.currency)).join(" / ") || "$0.00";
+}
+
 function formatDate(value?: string | null) {
   return value ? value : "-";
+}
+
+function displayValue(value?: string | number | null) {
+  if (value === null || value === undefined || value === "") return "-";
+  return String(value);
 }
 
 function formatShortDate(value?: string | null) {
@@ -484,6 +501,10 @@ function paymentLabel(payment: FinancePayment) {
   const vendor = payment.vendorName || (payment.vendorId ? `Vendor #${payment.vendorId}` : "Unassigned");
   const reference = payment.externalConfirmationRef || payment.methodLabel || humanize(payment.methodType);
   return `${vendor} - ${reference} - ${formatMoney(payment.amountCents, payment.currency)}`;
+}
+
+function activeApplicationsForPayment(payment: FinancePayment, applications: FinanceBillApplication[]) {
+  return applications.filter((application) => application.expensePaymentId === payment.id && application.status === "active");
 }
 
 function statusBadge(status?: string | null) {
@@ -1319,6 +1340,102 @@ function PaymentDialog({
   );
 }
 
+function DetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="grid gap-1">
+      <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
+      <div className="min-h-6 text-sm font-medium text-foreground">{value}</div>
+    </div>
+  );
+}
+
+function PaymentDetailDialog({
+  payment,
+  legalEntities,
+  bills,
+  applications,
+  onClose,
+}: {
+  payment: FinancePayment | null;
+  legalEntities: FinanceLegalEntity[];
+  bills: FinanceBill[];
+  applications: FinanceBillApplication[];
+  onClose: () => void;
+}) {
+  const legalEntity = payment?.legalEntityId
+    ? legalEntities.find((entity) => entity.id === payment.legalEntityId)
+    : null;
+  const appliedApplications = payment ? activeApplicationsForPayment(payment, applications) : [];
+  const billById = React.useMemo(() => new Map(bills.map((bill) => [bill.id, bill])), [bills]);
+
+  return (
+    <Dialog open={Boolean(payment)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Payment Details</DialogTitle>
+        </DialogHeader>
+        {payment && (
+          <div className="space-y-5">
+            <div className="grid gap-4 rounded-md border p-4 sm:grid-cols-2">
+              <DetailField label="Vendor" value={payment.vendorName || (payment.vendorId ? `Vendor #${payment.vendorId}` : "-")} />
+              <DetailField label="Legal entity" value={legalEntity ? legalEntityDisplayName(legalEntity) : payment.legalEntityId ? `Legal entity #${payment.legalEntityId}` : "-"} />
+              <DetailField label="Amount" value={`${formatMoney(payment.amountCents, payment.currency)} ${payment.currency}`} />
+              <DetailField label="Payment date" value={formatDate(payment.paymentDate)} />
+              <DetailField label="Direction" value={humanize(payment.direction)} />
+              <DetailField label="Status" value={statusBadge(payment.status)} />
+            </div>
+
+            <div className="grid gap-4 rounded-md border p-4 sm:grid-cols-2">
+              <DetailField label="Method" value={humanize(payment.methodType)} />
+              <DetailField label="Method label" value={displayValue(payment.methodLabel)} />
+              <DetailField label="Institution" value={displayValue(payment.institutionName)} />
+              <DetailField label="Last 4" value={displayValue(payment.maskedLast4)} />
+              <DetailField label="Confirmation" value={displayValue(payment.externalConfirmationRef)} />
+            </div>
+
+            <div className="rounded-md border p-4">
+              <div className="mb-3 text-sm font-medium">Applied Bills</div>
+              {appliedApplications.length === 0 ? (
+                <div className="text-sm text-muted-foreground">No active bill applications.</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Bill</TableHead>
+                      <TableHead className="text-right">Applied</TableHead>
+                      <TableHead className="text-right">Current balance</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {appliedApplications.map((application) => {
+                      const bill = billById.get(application.targetVendorBillId);
+                      return (
+                        <TableRow key={application.id}>
+                          <TableCell>{bill ? billLabel(bill) : `Bill #${application.targetVendorBillId}`}</TableCell>
+                          <TableCell className="text-right">{formatMoney(application.amountCents, application.currency)}</TableCell>
+                          <TableCell className="text-right">{bill ? formatMoney(bill.remainingAmountCents ?? bill.amountCents, bill.currency) : "-"}</TableCell>
+                          <TableCell>{bill ? billStatusBadges(bill) : statusBadge(application.status)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ApplicationDialog({
   state,
   bills,
@@ -1422,6 +1539,7 @@ export default function V2FinanceManagement() {
   const [subscriptionDialog, setSubscriptionDialog] = React.useState<{ mode: "create" | "edit"; subscription?: FinanceSubscription; form: SubscriptionForm } | null>(null);
   const [billDialog, setBillDialog] = React.useState<{ mode: "create" | "edit"; bill?: FinanceBill; form: BillForm } | null>(null);
   const [paymentDialog, setPaymentDialog] = React.useState<PaymentDialogState | null>(null);
+  const [paymentDetail, setPaymentDetail] = React.useState<FinancePayment | null>(null);
   const [applicationDialog, setApplicationDialog] = React.useState<{ form: ApplicationForm } | null>(null);
   const [reconciliationDialog, setReconciliationDialog] = React.useState<{ form: ReconciliationForm } | null>(null);
   const mutation = useFinanceMutation();
@@ -1705,13 +1823,23 @@ export default function V2FinanceManagement() {
           </Button>
         </header>
 
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
           <Metric label="Open bills" value={overviewQuery.data?.metrics?.openBillsCount ?? 0} icon={ReceiptText} />
           <Metric label="Overdue" value={overviewQuery.data?.metrics?.overdueBillsCount ?? 0} icon={AlertCircle} />
           <Metric label="Recurring expenses" value={overviewQuery.data?.metrics?.activeSubscriptionsCount ?? 0} icon={Building2} />
           <Metric
             label="Open total"
-            value={(overviewQuery.data?.metrics?.openBillTotalsByCurrency ?? []).map((row) => formatMoney(row.amountCents, row.currency)).join(" / ") || "$0.00"}
+            value={formatMoneyBreakdown(overviewQuery.data?.metrics?.openBillTotalsByCurrency)}
+            icon={WalletCards}
+          />
+          <Metric
+            label="Paid this month"
+            value={formatMoneyBreakdown(overviewQuery.data?.metrics?.paidThisMonthByCurrency)}
+            icon={WalletCards}
+          />
+          <Metric
+            label="Paid YTD"
+            value={formatMoneyBreakdown(overviewQuery.data?.metrics?.paidYtdByCurrency)}
             icon={WalletCards}
           />
         </div>
@@ -1878,6 +2006,9 @@ export default function V2FinanceManagement() {
                       <TableCell className="text-right">{formatMoney(payment.remainingAmountCents ?? payment.amountCents, payment.currency)}</TableCell>
                       <TableCell>
                         <div className="flex flex-wrap justify-end gap-2">
+                          <ActionTooltip content="View stored payment method details and active bill applications.">
+                            <Button size="sm" variant="outline" onClick={() => setPaymentDetail(payment)}><Eye className="h-4 w-4" />View details</Button>
+                          </ActionTooltip>
                           {payment.status === "pending" && (
                             <>
                               <ActionTooltip content="Edit pending payment details before posting or clearing.">
@@ -2153,6 +2284,7 @@ export default function V2FinanceManagement() {
       <SubscriptionDialog state={subscriptionDialog} legalEntities={legalEntities} vendors={activeVendors} onClose={() => setSubscriptionDialog(null)} onSubmit={submitSubscription} />
       <BillDialog state={billDialog} legalEntities={legalEntities} vendors={activeVendors} subscriptions={subscriptions} bills={bills} isSubmitting={mutation.isPending} onClose={() => setBillDialog(null)} onSubmit={submitBill} />
       <PaymentDialog state={paymentDialog} legalEntities={legalEntities} vendors={activeVendors} isSubmitting={mutation.isPending} onClose={() => setPaymentDialog(null)} onSubmit={submitPayment} />
+      <PaymentDetailDialog payment={paymentDetail} legalEntities={legalEntities} bills={bills} applications={applications} onClose={() => setPaymentDetail(null)} />
       <ApplicationDialog state={applicationDialog} bills={bills} payments={payments} onClose={() => setApplicationDialog(null)} onSubmit={submitApplication} />
       <ReconciliationDialog state={reconciliationDialog} onClose={() => setReconciliationDialog(null)} onSubmit={submitReconciliation} />
     </div>

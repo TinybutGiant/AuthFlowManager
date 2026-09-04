@@ -574,6 +574,72 @@ test("finance overview separates expected subscriptions from actual bills and pa
         autoRenew: false,
       },
     ],
+    payments: [
+      {
+        id: 200,
+        amountCents: 1_046,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2026-08-29",
+        status: "cleared",
+      },
+      {
+        id: 201,
+        amountCents: 5_000,
+        currency: "CNY",
+        direction: "outflow",
+        paymentDate: "2026-01-15",
+        status: "cleared",
+      },
+      {
+        id: 202,
+        amountCents: 2_000,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2026-08-28",
+        status: "pending",
+      },
+      {
+        id: 203,
+        amountCents: 3_000,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2026-08-28",
+        status: "failed",
+      },
+      {
+        id: 204,
+        amountCents: 4_000,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2026-08-28",
+        status: "voided",
+      },
+      {
+        id: 205,
+        amountCents: 5_000,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2026-08-28",
+        status: "reversed",
+      },
+      {
+        id: 206,
+        amountCents: 6_000,
+        currency: "USD",
+        direction: "refund",
+        paymentDate: "2026-08-28",
+        status: "cleared",
+      },
+      {
+        id: 207,
+        amountCents: 7_000,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2025-12-31",
+        status: "cleared",
+      },
+    ],
     reconciliationExceptions: [
       { id: 1, domain: "ap", status: "open" },
       { id: 2, domain: "ap", status: "resolved" },
@@ -596,6 +662,19 @@ test("finance overview separates expected subscriptions from actual bills and pa
   assert.deepEqual(overview.metrics.monthlyRecurringSpendByCurrency, [
     { currency: "CNY", amountCents: 5_000 },
     { currency: "USD", amountCents: 3_000 },
+  ]);
+  assert.deepEqual(overview.metrics.paidThisMonthByCurrency, [
+    { currency: "USD", amountCents: 1_046 },
+  ]);
+  assert.deepEqual(overview.metrics.paidYtdByCurrency, [
+    { currency: "CNY", amountCents: 5_000 },
+    { currency: "USD", amountCents: 1_046 },
+  ]);
+  assert.equal(overview.metrics.openBillsCount, 3);
+  assert.equal(overview.metrics.overdueBillsCount, 0);
+  assert.deepEqual(overview.metrics.openBillTotalsByCurrency, [
+    { currency: "CNY", amountCents: 4_000 },
+    { currency: "USD", amountCents: 4_500 },
   ]);
   assert.equal(overview.metrics.variableOrUnknownRecurringCount, 1);
   assert.equal(overview.metrics.activeSubscriptionsCount, 4);
