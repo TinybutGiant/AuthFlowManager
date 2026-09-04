@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -206,6 +207,7 @@ type BillForm = {
   legalEntityId: string;
   vendorId: string;
   recurringExpenseId: string;
+  paymentState: "unpaid" | "already_paid";
   invoiceNumber: string;
   billKind: string;
   issueDate: string;
@@ -217,6 +219,12 @@ type BillForm = {
   categoryCode: string;
   creditForVendorBillId: string;
   notes: string;
+  paymentDate: string;
+  paymentMethodType: string;
+  paymentMethodLabel: string;
+  paymentInstitutionName: string;
+  paymentMaskedLast4: string;
+  paymentExternalConfirmationRef: string;
 };
 
 type PaymentForm = {
@@ -238,6 +246,7 @@ type PaymentDialogState = {
   mode: "create" | "edit";
   payment?: FinancePayment;
   sourceBill?: FinanceBill;
+  approveBillFirst?: boolean;
   form: PaymentForm;
 };
 
@@ -282,6 +291,7 @@ const paymentMethods = ["provider", "ach", "check", "card", "wire", "manual", "o
 const paymentStatuses = ["pending", "posted", "cleared", "failed", "voided"];
 const billFirstPaymentStatuses = ["posted", "cleared"];
 const paymentStatusPlaceholder = "__select_status";
+const paymentMethodPlaceholder = "__select_payment_method";
 const reconciliationReasons = [
   "unmatched_payment",
   "amount_mismatch",
@@ -415,6 +425,38 @@ function sourceBillPaymentLabel(bill: FinanceBill) {
   return `${billReferenceLabel(bill)} - ${vendor}`;
 }
 
+function billRemainingAmountCents(bill: FinanceBill) {
+  return bill.remainingAmountCents ?? bill.amountCents;
+}
+
+function billHasActiveApplications(bill: FinanceBill) {
+  return (bill.activeAppliedAmountCents ?? 0) > 0;
+}
+
+function billHasOpenBalance(bill: FinanceBill) {
+  return billRemainingAmountCents(bill) > 0;
+}
+
+function canVoidBillDirectly(bill: FinanceBill) {
+  return bill.status !== "voided" &&
+    bill.settlementState !== "paid" &&
+    bill.settlementState !== "partially_paid" &&
+    bill.settlementState !== "overpaid" &&
+    !billHasActiveApplications(bill);
+}
+
+function canRecordBillPayment(bill: FinanceBill) {
+  return bill.billKind !== "credit_memo" && bill.status === "approved" && billHasOpenBalance(bill);
+}
+
+function canApproveAndRecordBillPayment(bill: FinanceBill) {
+  return bill.billKind !== "credit_memo" && bill.status === "received" && billHasOpenBalance(bill);
+}
+
+function canManuallyApplyToBill(bill: FinanceBill) {
+  return bill.billKind !== "credit_memo" && bill.status === "approved" && billHasOpenBalance(bill);
+}
+
 function subscriptionLabel(subscription: FinanceSubscription) {
   const vendor = subscription.vendorName || `Vendor #${subscription.vendorId}`;
   return `${vendor} — ${subscription.name}`;
@@ -453,6 +495,21 @@ function statusBadge(status?: string | null) {
         : "secondary";
 
   return <Badge variant={variant}>{humanize(status)}</Badge>;
+}
+
+function billStatusBadges(bill: FinanceBill) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {bill.status === "received" ? (
+        <ActionTooltip content="Invoice received, pending approval.">
+          {statusBadge(bill.status)}
+        </ActionTooltip>
+      ) : (
+        statusBadge(bill.status)
+      )}
+      {bill.settlementState && statusBadge(bill.settlementState)}
+    </div>
+  );
 }
 
 function ActionTooltip({
@@ -690,6 +747,7 @@ function billFormFrom(
     legalEntityId: getInitialLegalEntityId(legalEntities, bill?.legalEntityId),
     vendorId: String(bill?.vendorId ?? vendors[0]?.id ?? ""),
     recurringExpenseId: bill?.recurringExpenseId == null ? "" : String(bill.recurringExpenseId),
+    paymentState: "unpaid",
     invoiceNumber: bill?.invoiceNumber ?? "",
     billKind: bill?.billKind ?? "invoice",
     issueDate: bill?.issueDate ?? "",
@@ -701,6 +759,12 @@ function billFormFrom(
     categoryCode: bill?.categoryCode ?? "saas",
     creditForVendorBillId: bill?.creditForVendorBillId == null ? "" : String(bill.creditForVendorBillId),
     notes: bill?.notes ?? "",
+    paymentDate: "",
+    paymentMethodType: paymentMethodPlaceholder,
+    paymentMethodLabel: "",
+    paymentInstitutionName: "",
+    paymentMaskedLast4: "",
+    paymentExternalConfirmationRef: "",
   };
 }
 
@@ -865,7 +929,7 @@ function SubscriptionDialog({
         <DialogHeader>
           <DialogTitle>{state?.mode === "edit" ? "Edit Recurring Expense" : "Add Recurring Expense"}</DialogTitle>
         </DialogHeader>
-        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(form); }}>
           <div className="grid gap-4 sm:grid-cols-2">
             <LegalEntityField legalEntities={legalEntities} value={form.legalEntityId} onValueChange={(legalEntityId) => setForm({ ...form, legalEntityId })} autoSelectSingle={state?.mode === "create"} />
             <SelectField label="Vendor" value={form.vendorId} options={vendors.map((vendor) => ({ value: String(vendor.id), label: vendorLabel(vendor) }))} onValueChange={(vendorId) => setForm({ ...form, vendorId })} />
@@ -927,6 +991,7 @@ function BillDialog({
   vendors,
   subscriptions,
   bills,
+  isSubmitting,
   onClose,
   onSubmit,
 }: {
@@ -935,6 +1000,7 @@ function BillDialog({
   vendors: FinanceVendor[];
   subscriptions: FinanceSubscription[];
   bills: FinanceBill[];
+  isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (form: BillForm) => void;
 }) {
@@ -959,7 +1025,13 @@ function BillDialog({
   const recurringVendor = selectedRecurringExpense
     ? vendors.find((vendor) => vendor.id === selectedRecurringExpense.vendorId)
     : null;
-  const canSubmit = state?.mode !== "create" || legalEntities.length > 0;
+  const isCreate = state?.mode === "create";
+  const isAlreadyPaid = isCreate && form.paymentState === "already_paid";
+  const hasRequiredPaymentFacts = !isAlreadyPaid || (
+    form.paymentDate.trim().length > 0 &&
+    form.paymentMethodType !== paymentMethodPlaceholder
+  );
+  const canSubmit = (state?.mode !== "create" || legalEntities.length > 0) && hasRequiredPaymentFacts && !isSubmitting;
 
   function handleRecurringExpenseChange(recurringExpenseId: string) {
     if (recurringExpenseId === "none") {
@@ -977,7 +1049,7 @@ function BillDialog({
         <DialogHeader>
           <DialogTitle>{state?.mode === "edit" ? "Edit Draft Bill" : "Add Bill"}</DialogTitle>
         </DialogHeader>
-        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(form); }}>
           <SelectField
             label="Recurring Expense (optional)"
             value={form.recurringExpenseId || "none"}
@@ -988,6 +1060,34 @@ function BillDialog({
             <p className="text-xs text-muted-foreground">
               {recurringExpenseContextSummary(selectedRecurringExpense)}
             </p>
+          )}
+          {isCreate && (
+            <div className="grid gap-2">
+              <Label>Payment state</Label>
+              <RadioGroup
+                value={form.paymentState}
+                onValueChange={(paymentState) => setForm({
+                  ...form,
+                  paymentState: paymentState as BillForm["paymentState"],
+                })}
+                className="grid gap-3 sm:grid-cols-2"
+              >
+                <label className="flex min-h-12 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm">
+                  <RadioGroupItem value="unpaid" />
+                  <span>
+                    <span className="block font-medium">Unpaid / pay later</span>
+                    <span className="block text-xs text-muted-foreground">Use the normal received and approval workflow.</span>
+                  </span>
+                </label>
+                <label className="flex min-h-12 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm">
+                  <RadioGroupItem value="already_paid" />
+                  <span>
+                    <span className="block font-medium">Already paid</span>
+                    <span className="block text-xs text-muted-foreground">Create the bill, cleared payment, and application together.</span>
+                  </span>
+                </label>
+              </RadioGroup>
+            </div>
           )}
           <div className="grid gap-4 sm:grid-cols-2">
             {selectedRecurringExpense ? (
@@ -1044,9 +1144,42 @@ function BillDialog({
               maxLength={4000}
             />
           </div>
+          {isAlreadyPaid && (
+            <div className="space-y-4 rounded-md border bg-muted/20 p-4">
+              <div>
+                <div className="text-sm font-medium">Payment details</div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Used only for already-settled bills. The invoice number stays on the bill; confirmation is for a separate payment reference.
+                </p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField
+                  label="Payment date"
+                  type="date"
+                  value={form.paymentDate}
+                  onChange={(paymentDate) => setForm({ ...form, paymentDate })}
+                  required
+                />
+                <SelectField
+                  label="Method"
+                  value={form.paymentMethodType}
+                  options={[{ value: paymentMethodPlaceholder, label: "Select method" }, ...paymentMethods]}
+                  onValueChange={(paymentMethodType) => setForm({ ...form, paymentMethodType })}
+                />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField label="Method label" value={form.paymentMethodLabel} onChange={(paymentMethodLabel) => setForm({ ...form, paymentMethodLabel })} />
+                <TextField label="Institution" value={form.paymentInstitutionName} onChange={(paymentInstitutionName) => setForm({ ...form, paymentInstitutionName })} />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField label="Last 4" value={form.paymentMaskedLast4} onChange={(paymentMaskedLast4) => setForm({ ...form, paymentMaskedLast4 })} maxLength={4} />
+                <TextField label="Confirmation" value={form.paymentExternalConfirmationRef} onChange={(paymentExternalConfirmationRef) => setForm({ ...form, paymentExternalConfirmationRef })} />
+              </div>
+            </div>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={!canSubmit}>Save</Button>
+            <Button type="submit" disabled={!canSubmit}>{isSubmitting ? "Saving" : "Save"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -1092,7 +1225,13 @@ function PaymentDialog({
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{state?.mode === "edit" ? "Edit Pending Payment" : "Record Payment"}</DialogTitle>
+          <DialogTitle>
+            {state?.mode === "edit"
+              ? "Edit Pending Payment"
+              : state?.approveBillFirst
+                ? "Approve & Record Payment"
+                : "Record Payment"}
+          </DialogTitle>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(form); }}>
           {sourceBill && (
@@ -1363,10 +1502,11 @@ export default function V2FinanceManagement() {
     );
   }
 
-  function openBillPaymentDialog(bill: FinanceBill) {
+  function openBillPaymentDialog(bill: FinanceBill, approveBillFirst = false) {
     setPaymentDialog({
       mode: "create",
       sourceBill: bill,
+      approveBillFirst,
       form: paymentFormFrom(legalEntities, activeVendors, undefined, bill),
     });
   }
@@ -1446,6 +1586,23 @@ export default function V2FinanceManagement() {
     if (isEdit) {
       const { vendorId: _vendorId, status: _status, ...updateBody } = body;
       mutate("PATCH", `${V2_FINANCE_BASE}/bills/${billDialog?.bill?.id}`, updateBody, () => setBillDialog(null));
+    } else if (form.paymentState === "already_paid") {
+      const { status: _status, ...recordPaidBody } = body;
+      mutate(
+        "POST",
+        `${V2_FINANCE_BASE}/bills/record-paid`,
+        {
+          legalEntityId: selectedRecurringExpense?.legalEntityId ?? parseRequiredLegalEntityId(form.legalEntityId),
+          ...recordPaidBody,
+          paymentDate: form.paymentDate.trim(),
+          methodType: form.paymentMethodType,
+          methodLabel: optionalNullableText(form.paymentMethodLabel),
+          institutionName: optionalNullableText(form.paymentInstitutionName),
+          maskedLast4: optionalText(form.paymentMaskedLast4),
+          externalConfirmationRef: optionalNullableText(form.paymentExternalConfirmationRef),
+        },
+        () => setBillDialog(null),
+      );
     } else {
       mutate(
         "POST",
@@ -1480,7 +1637,7 @@ export default function V2FinanceManagement() {
     } else if (paymentDialog?.sourceBill) {
       mutate(
         "POST",
-        `${V2_FINANCE_BASE}/bills/${paymentDialog.sourceBill.id}/record-payment`,
+        `${V2_FINANCE_BASE}/bills/${paymentDialog.sourceBill.id}/${paymentDialog.approveBillFirst ? "approve-and-record-payment" : "record-payment"}`,
         paymentFacts,
         () => setPaymentDialog(null),
       );
@@ -1621,7 +1778,7 @@ export default function V2FinanceManagement() {
                         {bill.notes && <div className="mt-1 text-xs text-muted-foreground">{bill.notes}</div>}
                       </TableCell>
                       <TableCell>{formatDate(bill.dueDate)}</TableCell>
-                      <TableCell><div className="flex flex-wrap gap-2">{statusBadge(bill.status)}{bill.settlementState && statusBadge(bill.settlementState)}</div></TableCell>
+                      <TableCell>{billStatusBadges(bill)}</TableCell>
                       <TableCell className="text-right">{formatMoney(bill.amountCents, bill.currency)}</TableCell>
                       <TableCell className="text-right">{formatMoney(bill.remainingAmountCents ?? bill.amountCents, bill.currency)}</TableCell>
                       <TableCell>
@@ -1636,30 +1793,37 @@ export default function V2FinanceManagement() {
                               </ActionTooltip>
                             </>
                           )}
-                          {["received", "disputed"].includes(bill.status) && (
-                            <ActionTooltip content="Mark this received or disputed bill as reviewed and approved.">
+                          {["received", "disputed"].includes(bill.status) && billHasOpenBalance(bill) && (
+                            <ActionTooltip content="Confirm this bill is valid and ready to pay.">
                               <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/approve`)}><CheckCircle2 className="h-4 w-4" />Approve</Button>
                             </ActionTooltip>
                           )}
-                          {["received", "approved"].includes(bill.status) && (
-                            <ActionTooltip content="Mark this bill disputed while the amount or vendor issue is unresolved.">
+                          {bill.status === "received" && billHasOpenBalance(bill) && (
+                            <ActionTooltip content="Mark this bill as under dispute. It should not be paid until resolved.">
                               <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/dispute`)}><AlertCircle className="h-4 w-4" />Dispute</Button>
                             </ActionTooltip>
                           )}
-                          {bill.billKind !== "credit_memo" && bill.status !== "draft" && bill.status !== "voided" && (bill.remainingAmountCents ?? 0) > 0 && (
+                          {canApproveAndRecordBillPayment(bill) && (
+                            <ActionTooltip content="Approve this bill, record an actual payment, and apply it in one transaction.">
+                              <Button size="sm" variant="outline" onClick={() => openBillPaymentDialog(bill, true)}><WalletCards className="h-4 w-4" />Approve & pay</Button>
+                            </ActionTooltip>
+                          )}
+                          {canRecordBillPayment(bill) && (
+                            <ActionTooltip content="Record an actual payment and apply it to this bill.">
+                              <Button size="sm" variant="outline" onClick={() => openBillPaymentDialog(bill)}><WalletCards className="h-4 w-4" />Record payment</Button>
+                            </ActionTooltip>
+                          )}
+                          {canManuallyApplyToBill(bill) && (
+                            <ActionTooltip content="Manually link an existing payment or credit to this bill.">
+                              <Button size="sm" variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom(bill) })}><Link2 className="h-4 w-4" />Apply</Button>
+                            </ActionTooltip>
+                          )}
+                          {canVoidBillDirectly(bill) && (
                             <>
-                              <ActionTooltip content="Create a payment and apply it to this bill in one transaction.">
-                                <Button size="sm" variant="outline" onClick={() => openBillPaymentDialog(bill)}><WalletCards className="h-4 w-4" />Record payment</Button>
-                              </ActionTooltip>
-                              <ActionTooltip content="Apply an existing payment or credit to this bill.">
-                                <Button size="sm" variant="outline" onClick={() => setApplicationDialog({ form: applicationFormFrom(bill) })}><Link2 className="h-4 w-4" />Apply</Button>
+                              <ActionTooltip content="Cancel this bill without recording payment.">
+                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/void`)}><XCircle className="h-4 w-4" />Void</Button>
                               </ActionTooltip>
                             </>
-                          )}
-                          {bill.status !== "voided" && (
-                            <ActionTooltip content="Void this bill and remove it from the active AP workflow.">
-                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/bills/${bill.id}/void`)}><XCircle className="h-4 w-4" />Void</Button>
-                            </ActionTooltip>
                           )}
                         </div>
                       </TableCell>
@@ -1987,7 +2151,7 @@ export default function V2FinanceManagement() {
 
       <VendorDialog state={vendorDialog} onClose={() => setVendorDialog(null)} onSubmit={submitVendor} />
       <SubscriptionDialog state={subscriptionDialog} legalEntities={legalEntities} vendors={activeVendors} onClose={() => setSubscriptionDialog(null)} onSubmit={submitSubscription} />
-      <BillDialog state={billDialog} legalEntities={legalEntities} vendors={activeVendors} subscriptions={subscriptions} bills={bills} onClose={() => setBillDialog(null)} onSubmit={submitBill} />
+      <BillDialog state={billDialog} legalEntities={legalEntities} vendors={activeVendors} subscriptions={subscriptions} bills={bills} isSubmitting={mutation.isPending} onClose={() => setBillDialog(null)} onSubmit={submitBill} />
       <PaymentDialog state={paymentDialog} legalEntities={legalEntities} vendors={activeVendors} isSubmitting={mutation.isPending} onClose={() => setPaymentDialog(null)} onSubmit={submitPayment} />
       <ApplicationDialog state={applicationDialog} bills={bills} payments={payments} onClose={() => setApplicationDialog(null)} onSubmit={submitApplication} />
       <ReconciliationDialog state={reconciliationDialog} onClose={() => setReconciliationDialog(null)} onSubmit={submitReconciliation} />

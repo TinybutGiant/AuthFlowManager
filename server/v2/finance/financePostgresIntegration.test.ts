@@ -14,6 +14,8 @@ import {
   financeBillResponse,
   listFinanceBills,
   listFinancePayments,
+  recordPaidFinanceBill,
+  approveAndRecordFinanceBillPayment,
   recordFinanceBillPayment,
   recordFinancePayment,
   transitionFinanceBillStatus,
@@ -611,6 +613,187 @@ test(
       assert.equal(auditCountAfterRollback.rows[0].count, auditCountAfterBillSetup.rows[0].count);
       assert.ok(auditCountAfterBillSetup.rows[0].count > auditCountBeforeRollback.rows[0].count);
     });
+  },
+);
+
+test(
+  "V2 AP already-paid bill intake creates approved paid bill atomically on disposable PostgreSQL",
+  {
+    skip: POSTGRES_TEST_DATABASE_URL
+      ? false
+      : "Set MIGRATION_RUNNER_TEST_DATABASE_URL to a disposable PostgreSQL database to run.",
+  },
+  async () => {
+    await withApSchema(async (client) => {
+      const repo = repoForClient(client);
+      await client.query(`INSERT INTO "vendors" ("id", "name", "vendor_type", "status") VALUES (20, 'Vendor A', 'saas', 'active')`);
+
+      const result = await recordPaidFinanceBill(repo, {
+        legalEntityId: 1,
+        vendorId: 20,
+        invoiceNumber: "IN-ALREADY-PAID",
+        billKind: "invoice",
+        issueDate: "2026-08-29",
+        dueDate: "2026-08-29",
+        amountCents: 1_046,
+        currency: "USD",
+        categoryCode: "saas",
+        paymentDate: "2026-08-29",
+        methodType: "card",
+        methodLabel: "Apple Card",
+        maskedLast4: "3231",
+        actorAdminId: 42,
+      });
+
+      assert.equal(result.bill.status, "approved");
+      assert.equal(result.payment.status, "cleared");
+      assert.equal(result.payment.direction, "outflow");
+      assert.equal(result.application.targetVendorBillId, result.bill.id);
+      assert.equal(result.application.expensePaymentId, result.payment.id);
+      assert.equal(result.application.amountCents, 1_046);
+
+      const bills = await listFinanceBills(repo, { pageSize: 100 });
+      const payments = await listFinancePayments(repo, { pageSize: 100 });
+      assert.equal(bills.find((bill) => bill.id === result.bill.id)?.status, "approved");
+      assert.equal(bills.find((bill) => bill.id === result.bill.id)?.settlementState, "paid");
+      assert.equal(bills.find((bill) => bill.id === result.bill.id)?.remainingAmountCents, 0);
+      assert.equal(payments.find((payment) => payment.id === result.payment.id)?.status, "cleared");
+      assert.equal(payments.find((payment) => payment.id === result.payment.id)?.remainingAmountCents, 0);
+
+      const applicationRows = await client.query(
+        `
+          SELECT "target_vendor_bill_id", "expense_payment_id", "amount_cents", "currency", "status"
+          FROM "vendor_bill_applications"
+          WHERE "target_vendor_bill_id" = $1
+        `,
+        [result.bill.id],
+      );
+      assert.deepEqual(applicationRows.rows, [{
+        target_vendor_bill_id: result.bill.id,
+        expense_payment_id: result.payment.id,
+        amount_cents: 1_046,
+        currency: "USD",
+        status: "active",
+      }]);
+
+      const receivedBill = await createFinanceBill(repo, {
+        legalEntityId: 1,
+        vendorId: 20,
+        invoiceNumber: "IN-APPROVE-AND-PAY",
+        billKind: "invoice",
+        amountCents: 2_000,
+        currency: "USD",
+        categoryCode: "saas",
+        status: "draft",
+        actorAdminId: 42,
+      });
+      await transitionFinanceBillStatus(repo, receivedBill.id, "receive", { actorAdminId: 42 });
+      const approvedPayment = await approveAndRecordFinanceBillPayment(repo, receivedBill.id, {
+        amountCents: 2_000,
+        direction: "outflow",
+        paymentDate: "2026-08-30",
+        methodType: "card",
+        status: "cleared",
+        actorAdminId: 42,
+      });
+      assert.equal(approvedPayment.bill.status, "approved");
+      const updatedBills = await listFinanceBills(repo, { pageSize: 100 });
+      assert.equal(updatedBills.find((bill) => bill.id === receivedBill.id)?.settlementState, "paid");
+      assert.equal(updatedBills.find((bill) => bill.id === receivedBill.id)?.remainingAmountCents, 0);
+
+      const auditEvents = await client.query<{ entity_type: string; action: string }>(
+        `SELECT "entity_type", "action" FROM "finance_audit_events" ORDER BY "id"`,
+      );
+      assert.deepEqual(
+        auditEvents.rows.map((row) => `${row.entity_type}:${row.action}`),
+        [
+          "vendor_bill:created",
+          "vendor_bill:received",
+          "vendor_bill:approved",
+          "expense_payment:created",
+          "vendor_bill_application:applied",
+          "vendor_bill:created",
+          "vendor_bill:received",
+          "vendor_bill:approved",
+          "expense_payment:created",
+          "vendor_bill_application:applied",
+        ],
+      );
+    });
+  },
+);
+
+test(
+  "V2 AP already-paid bill intake rolls back bill, payment, application, and audit rows on disposable PostgreSQL",
+  {
+    skip: POSTGRES_TEST_DATABASE_URL
+      ? false
+      : "Set MIGRATION_RUNNER_TEST_DATABASE_URL to a disposable PostgreSQL database to run.",
+  },
+  async () => {
+    const cases = [
+      {
+        label: "payment",
+        invoiceNumber: "IN-PAYMENT-ROLLBACK",
+        methodLabel: "payment-rollback-marker",
+        setup: async (client: PoolClient) => {
+          await client.query(`ALTER TABLE "expense_payments" ADD CONSTRAINT "reject_payment_marker" CHECK ("method_label" <> 'payment-rollback-marker')`);
+        },
+        expected: /violates check constraint/,
+      },
+      {
+        label: "application",
+        invoiceNumber: "IN-APPLICATION-ROLLBACK",
+        methodLabel: "application-rollback-marker",
+        setup: async (client: PoolClient) => {
+          await client.query(`ALTER TABLE "vendor_bill_applications" ADD CONSTRAINT "reject_already_paid_application" CHECK ("amount_cents" < 0) NOT VALID`);
+        },
+        expected: /violates check constraint/,
+      },
+      {
+        label: "audit",
+        invoiceNumber: "IN-AUDIT-ROLLBACK",
+        methodLabel: "audit-rollback-marker",
+        setup: async (client: PoolClient) => {
+          await client.query(`ALTER TABLE "finance_audit_events" ADD CONSTRAINT "reject_created_audit" CHECK ("action" <> 'created')`);
+        },
+        expected: /violates check constraint/,
+      },
+    ];
+
+    for (const failureCase of cases) {
+      await withApSchema(async (client) => {
+        const repo = repoForClient(client);
+        await client.query(`INSERT INTO "vendors" ("id", "name", "vendor_type", "status") VALUES (20, 'Vendor A', 'saas', 'active')`);
+        await failureCase.setup(client);
+
+        await assert.rejects(
+          () => recordPaidFinanceBill(repo, {
+            legalEntityId: 1,
+            vendorId: 20,
+            invoiceNumber: failureCase.invoiceNumber,
+            billKind: "invoice",
+            amountCents: 1_046,
+            currency: "USD",
+            categoryCode: "saas",
+            paymentDate: "2026-08-29",
+            methodType: "card",
+            methodLabel: failureCase.methodLabel,
+            actorAdminId: 42,
+          }),
+          failureCase.expected,
+        );
+
+        const billRows = await client.query(`SELECT "id" FROM "vendor_bills" WHERE "invoice_number" = $1`, [failureCase.invoiceNumber]);
+        const paymentRows = await client.query(`SELECT "id" FROM "expense_payments" WHERE "method_label" = $1`, [failureCase.methodLabel]);
+        const applicationRows = await client.query(`SELECT "id" FROM "vendor_bill_applications"`);
+        const auditRows = await client.query(`SELECT "id" FROM "finance_audit_events"`);
+        assert.equal(billRows.rowCount, 0, `${failureCase.label} failure left a bill row`);
+        assert.equal(paymentRows.rowCount, 0, `${failureCase.label} failure left a payment row`);
+        assert.equal(applicationRows.rowCount, 0, `${failureCase.label} failure left an application row`);
+        assert.equal(auditRows.rowCount, 0, `${failureCase.label} failure left an audit row`);
+      });
+    }
   },
 );
 

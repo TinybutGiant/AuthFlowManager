@@ -185,7 +185,9 @@ test("V2 finance route manifest is AP-only", () => {
   assert.equal(financeRouteModule.basePath, "/api/v2/finance");
   assert.equal(financeRouteModule.routes.some((route) => route.includes("payroll")), false);
   assert.equal(financeRouteModule.routes.some((route) => route.includes("tax")), false);
+  assert.ok(financeRouteModule.routes.includes("POST /api/v2/finance/bills/record-paid"));
   assert.ok(financeRouteModule.routes.includes("POST /api/v2/finance/bills/:billId/record-payment"));
+  assert.ok(financeRouteModule.routes.includes("POST /api/v2/finance/bills/:billId/approve-and-record-payment"));
   assert.ok(financeRouteModule.routes.includes("POST /api/v2/finance/bill-applications/payment"));
   assert.ok(financeRouteModule.routes.includes("POST /api/v2/finance/reconciliation-exceptions/:exceptionId/resolve"));
 });
@@ -469,6 +471,218 @@ test("V2 finance bill-first payment route derives scope from the bill", async ()
   );
   assert.equal(rejected.status, 400);
   assert.equal((await body(rejected)).code, "INVALID_REQUEST");
+});
+
+test("V2 finance already-paid bill route creates approved bill, cleared payment, and application", async () => {
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  let currentBill = baseBill({ id: 201, status: "draft", amountCents: 1_046, currency: "USD" });
+  const auditActions: string[] = [];
+  const repository = repo();
+  repository.transaction = async (work) => work(repository);
+  repository.createVendorBill = async (values) => {
+    currentBill = {
+      ...currentBill,
+      ...values,
+      id: 201,
+      status: values.status ?? "draft",
+      createdAt: now,
+      updatedAt: now,
+    };
+    return currentBill as any;
+  };
+  repository.updateVendorBill = async (_id, values) => {
+    currentBill = {
+      ...currentBill,
+      ...values,
+      updatedAt: now,
+    };
+    return currentBill as any;
+  };
+  repository.createExpensePayment = async (values) => ({
+    id: 301,
+    legalEntityId: values.legalEntityId,
+    vendorId: values.vendorId ?? null,
+    amountCents: values.amountCents,
+    currency: values.currency ?? "USD",
+    direction: values.direction ?? "outflow",
+    paymentDate: values.paymentDate ?? null,
+    methodType: values.methodType,
+    methodLabel: values.methodLabel ?? null,
+    institutionName: values.institutionName ?? null,
+    maskedLast4: values.maskedLast4 ?? null,
+    externalConfirmationRef: values.externalConfirmationRef ?? null,
+    status: values.status ?? "pending",
+    createdBy: values.createdBy ?? null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  repository.createVendorBillApplication = async (values) => ({
+    id: 401,
+    targetVendorBillId: values.targetVendorBillId,
+    expensePaymentId: values.expensePaymentId ?? null,
+    creditVendorBillId: values.creditVendorBillId ?? null,
+    amountCents: values.amountCents,
+    currency: values.currency ?? "USD",
+    status: values.status ?? "active",
+    reversedAt: null,
+    reversedBy: null,
+    createdBy: values.createdBy ?? null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  repository.createFinanceAuditEvent = async (values) => {
+    auditActions.push(`${values.entityType}:${values.action}`);
+    return {
+      id: auditActions.length,
+      ...values,
+      createdAt: now,
+    };
+  };
+
+  const response = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/bills/record-paid", "POST", {
+      legalEntityId: 1,
+      vendorId: 20,
+      invoiceNumber: "IN-77096614",
+      billKind: "invoice",
+      issueDate: "2026-08-29",
+      amountCents: 1_046,
+      currency: "USD",
+      categoryCode: "saas",
+      paymentDate: "2026-08-29",
+      methodType: "card",
+      methodLabel: "Apple Card",
+      maskedLast4: "3231",
+    }),
+    principal(["finance_admin"]),
+    repository,
+  );
+
+  assert.equal(response.status, 201);
+  const payload = await body(response) as {
+    bill: Record<string, unknown>;
+    payment: Record<string, unknown>;
+    application: Record<string, unknown>;
+  };
+  assert.equal(payload.bill.status, "approved");
+  assert.equal(payload.bill.invoiceNumber, "IN-77096614");
+  assert.equal(payload.payment.status, "cleared");
+  assert.equal(payload.payment.direction, "outflow");
+  assert.equal(payload.payment.methodLabel, "Apple Card");
+  assert.equal(payload.payment.maskedLast4, "3231");
+  assert.equal(payload.payment.externalConfirmationRef, null);
+  assert.equal(payload.payment.remainingAmountCents, 0);
+  assert.equal(payload.application.targetVendorBillId, 201);
+  assert.equal(payload.application.expensePaymentId, 301);
+  assert.equal(payload.application.amountCents, 1_046);
+  assert.deepEqual(auditActions, [
+    "vendor_bill:created",
+    "vendor_bill:received",
+    "vendor_bill:approved",
+    "expense_payment:created",
+    "vendor_bill_application:applied",
+  ]);
+
+  const rejected = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/bills/record-paid", "POST", {
+      legalEntityId: 1,
+      vendorId: 20,
+      invoiceNumber: "IN-77096614",
+      billKind: "invoice",
+      amountCents: 1_046,
+      currency: "USD",
+      categoryCode: "saas",
+      methodType: "card",
+    }),
+    principal(["finance_admin"]),
+    repository,
+  );
+  assert.equal(rejected.status, 400);
+  assert.equal((await body(rejected)).code, "INVALID_REQUEST");
+});
+
+test("V2 finance approve-and-record-payment approves in the payment transaction", async () => {
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  let currentBill = baseBill({ status: "received", amountCents: 1_200, currency: "USD" });
+  const auditActions: string[] = [];
+  const repository = repo({ bill: currentBill });
+  repository.transaction = async (work) => work(repository);
+  repository.getVendorBill = async () => currentBill as any;
+  repository.updateVendorBill = async (_id, values) => {
+    currentBill = {
+      ...currentBill,
+      ...values,
+      updatedAt: now,
+    };
+    return currentBill as any;
+  };
+  repository.createExpensePayment = async (values) => ({
+    id: 302,
+    legalEntityId: values.legalEntityId,
+    vendorId: values.vendorId ?? null,
+    amountCents: values.amountCents,
+    currency: values.currency ?? "USD",
+    direction: values.direction ?? "outflow",
+    paymentDate: values.paymentDate ?? null,
+    methodType: values.methodType,
+    methodLabel: values.methodLabel ?? null,
+    institutionName: values.institutionName ?? null,
+    maskedLast4: values.maskedLast4 ?? null,
+    externalConfirmationRef: values.externalConfirmationRef ?? null,
+    status: values.status ?? "pending",
+    createdBy: values.createdBy ?? null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  repository.createVendorBillApplication = async (values) => ({
+    id: 402,
+    targetVendorBillId: values.targetVendorBillId,
+    expensePaymentId: values.expensePaymentId ?? null,
+    creditVendorBillId: values.creditVendorBillId ?? null,
+    amountCents: values.amountCents,
+    currency: values.currency ?? "USD",
+    status: values.status ?? "active",
+    reversedAt: null,
+    reversedBy: null,
+    createdBy: values.createdBy ?? null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  repository.createFinanceAuditEvent = async (values) => {
+    auditActions.push(`${values.entityType}:${values.action}`);
+    return {
+      id: auditActions.length,
+      ...values,
+      createdAt: now,
+    };
+  };
+
+  const response = await handleFinanceRouteWithRepository(
+    jsonRequest("/api/v2/finance/bills/200/approve-and-record-payment", "POST", {
+      amountCents: 1_200,
+      direction: "outflow",
+      paymentDate: "2026-08-29",
+      methodType: "card",
+      status: "cleared",
+    }),
+    principal(["finance_admin"]),
+    repository,
+  );
+
+  assert.equal(response.status, 201);
+  const payload = await body(response) as {
+    bill: Record<string, unknown>;
+    payment: Record<string, unknown>;
+    application: Record<string, unknown>;
+  };
+  assert.equal(payload.bill.status, "approved");
+  assert.equal(payload.payment.status, "cleared");
+  assert.equal(payload.application.targetVendorBillId, 200);
+  assert.deepEqual(auditActions, [
+    "vendor_bill:approved",
+    "expense_payment:created",
+    "vendor_bill_application:applied",
+  ]);
 });
 
 test("V2 finance validation errors are bounded JSON errors", async () => {

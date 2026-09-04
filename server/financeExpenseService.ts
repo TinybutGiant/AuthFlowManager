@@ -523,6 +523,46 @@ export const recordBillPaymentPayloadSchema = z.object({
   status: z.enum(EXPENSE_PAYMENT_STATUSES),
 }).strict();
 
+export const recordPaidVendorBillPayloadSchema = z
+  .object({
+    legalEntityId: vendorBillWriteFields.legalEntityId,
+    vendorId: vendorBillWriteFields.vendorId,
+    recurringExpenseId: vendorBillWriteFields.recurringExpenseId,
+    invoiceNumber: vendorBillWriteFields.invoiceNumber,
+    billKind: z.enum(VENDOR_BILL_KINDS).default("invoice"),
+    issueDate: vendorBillWriteFields.issueDate,
+    dueDate: vendorBillWriteFields.dueDate,
+    servicePeriodStart: vendorBillWriteFields.servicePeriodStart,
+    servicePeriodEnd: vendorBillWriteFields.servicePeriodEnd,
+    amountCents: vendorBillWriteFields.amountCents,
+    currency: vendorBillWriteFields.currency,
+    categoryCode: vendorBillWriteFields.categoryCode,
+    creditForVendorBillId: vendorBillWriteFields.creditForVendorBillId,
+    notes: vendorBillWriteFields.notes,
+    paymentDate: z.preprocess(
+      (value) => value === "" || value === null ? undefined : value,
+      dateOnlySchema,
+    ),
+    methodType: z.enum(EXPENSE_PAYMENT_METHODS),
+    methodLabel: optionalText(120),
+    institutionName: optionalText(160),
+    maskedLast4: z.preprocess(
+      (value) => {
+        if (value === undefined) return undefined;
+        if (value === null) return null;
+        if (typeof value === "string") {
+          const trimmed = value.trim();
+          return trimmed ? trimmed : null;
+        }
+        return value;
+      },
+      z.string().regex(/^[0-9]{4}$/).nullable().optional(),
+    ),
+    externalConfirmationRef: optionalText(200),
+  })
+  .strict()
+  .superRefine(refineVendorBillPayload);
+
 export const updateExpensePaymentPayloadSchema = z.object({
   vendorId: z.preprocess(
     (value) => value === undefined ? undefined : value === "" || value === null ? null : value,
@@ -657,6 +697,7 @@ export type CreateVendorBillPayload = z.infer<typeof createVendorBillPayloadSche
 export type UpdateDraftVendorBillPayload = z.infer<typeof updateDraftVendorBillPayloadSchema>;
 export type CreateExpensePaymentPayload = z.infer<typeof createExpensePaymentPayloadSchema>;
 export type RecordBillPaymentPayload = z.infer<typeof recordBillPaymentPayloadSchema>;
+export type RecordPaidVendorBillPayload = z.infer<typeof recordPaidVendorBillPayloadSchema>;
 export type UpdateExpensePaymentPayload = z.infer<typeof updateExpensePaymentPayloadSchema>;
 export type UpdateExpensePaymentStatusPayload = z.infer<typeof updateExpensePaymentStatusPayloadSchema>;
 export type ApplyExpensePaymentPayload = z.infer<typeof applyExpensePaymentPayloadSchema>;
@@ -2004,67 +2045,201 @@ export async function recordFinanceBillPayment(
       fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
     }
 
-    const existingTargetBillApplications = await tx.listVendorBillApplications({
-      targetVendorBillId: billId,
-      status: "active",
-    });
+    return createPaymentAndApplyToLockedBill(tx, targetBill, input);
+  });
+}
 
-    const payment = await tx.createExpensePayment({
-      legalEntityId: targetBill.legalEntityId,
-      vendorId: targetBill.vendorId,
-      amountCents: input.amountCents,
-      currency: targetBill.currency,
-      direction: input.direction,
-      paymentDate: input.paymentDate,
-      methodType: input.methodType,
-      methodLabel: input.methodLabel,
-      institutionName: input.institutionName,
-      maskedLast4: input.maskedLast4,
-      externalConfirmationRef: input.externalConfirmationRef,
-      status: input.status,
-      createdBy: input.actorAdminId,
-    });
+async function createPaymentAndApplyToLockedBill(
+  tx: FinanceExpenseRepository,
+  targetBill: VendorBill,
+  input: RecordBillPaymentPayload & { actorAdminId: number },
+) {
+  const existingTargetBillApplications = await tx.listVendorBillApplications({
+    targetVendorBillId: targetBill.id,
+    status: "active",
+  });
 
-    const existingPaymentApplications = await tx.listVendorBillApplications({
-      expensePaymentId: payment.id,
-      status: "active",
-    });
+  const payment = await tx.createExpensePayment({
+    legalEntityId: targetBill.legalEntityId,
+    vendorId: targetBill.vendorId,
+    amountCents: input.amountCents,
+    currency: targetBill.currency,
+    direction: input.direction,
+    paymentDate: input.paymentDate,
+    methodType: input.methodType,
+    methodLabel: input.methodLabel,
+    institutionName: input.institutionName,
+    maskedLast4: input.maskedLast4,
+    externalConfirmationRef: input.externalConfirmationRef,
+    status: input.status,
+    createdBy: input.actorAdminId,
+  });
 
-    runFinanceDomainValidation(() => validateVendorBillPaymentApplicationFromLockedRows({
-      targetBill: billSnapshot(targetBill),
-      payment: paymentSnapshot(payment),
-      amountCents: input.amountCents,
-      currency: targetBill.currency,
-      existingTargetBillApplications: activeAllocationRows(existingTargetBillApplications),
-      existingPaymentApplications: activeAllocationRows(existingPaymentApplications),
-    }));
+  const existingPaymentApplications = await tx.listVendorBillApplications({
+    expensePaymentId: payment.id,
+    status: "active",
+  });
 
-    const application = await tx.createVendorBillApplication({
-      targetVendorBillId: billId,
-      expensePaymentId: payment.id,
-      creditVendorBillId: null,
-      amountCents: input.amountCents,
-      currency: targetBill.currency,
-      status: "active",
-      createdBy: input.actorAdminId,
-    });
+  runFinanceDomainValidation(() => validateVendorBillPaymentApplicationFromLockedRows({
+    targetBill: billSnapshot(targetBill),
+    payment: paymentSnapshot(payment),
+    amountCents: input.amountCents,
+    currency: targetBill.currency,
+    existingTargetBillApplications: activeAllocationRows(existingTargetBillApplications),
+    existingPaymentApplications: activeAllocationRows(existingPaymentApplications),
+  }));
 
+  const application = await tx.createVendorBillApplication({
+    targetVendorBillId: targetBill.id,
+    expensePaymentId: payment.id,
+    creditVendorBillId: null,
+    amountCents: input.amountCents,
+    currency: targetBill.currency,
+    status: "active",
+    createdBy: input.actorAdminId,
+  });
+
+  await writeFinanceAuditEvent(tx, {
+    actorAdminId: input.actorAdminId,
+    entityType: "expense_payment",
+    entityId: payment.id,
+    action: "created",
+    changes: paymentAuditChanges(null, payment),
+  });
+  await writeFinanceAuditEvent(tx, {
+    actorAdminId: input.actorAdminId,
+    entityType: "vendor_bill_application",
+    entityId: application.id,
+    action: "applied",
+    changes: activeApplicationAuditChanges(null, application),
+  });
+
+  return { payment, application };
+}
+
+export async function approveAndRecordFinanceBillPayment(
+  repo: FinanceExpenseRepository,
+  billId: number,
+  input: RecordBillPaymentPayload & { actorAdminId: number },
+) {
+  ensureRecordablePaymentStatus(input.status);
+  return runFinanceTransaction(repo, async (tx) => {
+    await tx.lockVendorBill(billId);
+    const existing = await tx.getVendorBill(billId);
+    if (!existing) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+    const status = nextVendorBillStatus(existing, "approve");
+    const approved = await tx.updateVendorBill(billId, {
+      status,
+      updatedAt: new Date(),
+    } as Partial<InsertVendorBill>);
+    if (!approved) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
     await writeFinanceAuditEvent(tx, {
       actorAdminId: input.actorAdminId,
-      entityType: "expense_payment",
-      entityId: payment.id,
+      entityType: "vendor_bill",
+      entityId: approved.id,
+      action: "approved",
+      changes: auditChanges(existing, approved, VENDOR_BILL_AUDIT_FIELDS),
+    });
+
+    const paymentResult = await createPaymentAndApplyToLockedBill(tx, approved, input);
+    return { bill: approved, ...paymentResult };
+  });
+}
+
+export async function recordPaidFinanceBill(
+  repo: FinanceExpenseRepository,
+  input: RecordPaidVendorBillPayload & { actorAdminId: number },
+) {
+  const {
+    paymentDate,
+    methodType,
+    methodLabel,
+    institutionName,
+    maskedLast4,
+    externalConfirmationRef,
+    actorAdminId,
+    ...billPayload
+  } = input;
+
+  return runFinanceTransaction(repo, async (tx) => {
+    await assertLegalEntityExists(tx, billPayload.legalEntityId);
+    await assertVendorUsable(tx, billPayload.vendorId);
+    await assertRecurringExpenseMatchesBill(tx, billPayload);
+    await assertCreditSourceMatchesBill(tx, billPayload);
+    await assertInvoiceNumberAvailable(tx, billPayload);
+
+    const draftBill = await tx.createVendorBill({
+      ...billPayload,
+      status: "draft",
+      createdBy: actorAdminId,
+    });
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor_bill",
+      entityId: draftBill.id,
       action: "created",
-      changes: paymentAuditChanges(null, payment),
-    });
-    await writeFinanceAuditEvent(tx, {
-      actorAdminId: input.actorAdminId,
-      entityType: "vendor_bill_application",
-      entityId: application.id,
-      action: "applied",
-      changes: activeApplicationAuditChanges(null, application),
+      changes: auditChanges(null, draftBill, VENDOR_BILL_AUDIT_FIELDS),
     });
 
-    return { payment, application };
+    const received = await tx.updateVendorBill(draftBill.id, {
+      status: nextVendorBillStatus(draftBill, "receive"),
+      updatedAt: new Date(),
+    } as Partial<InsertVendorBill>);
+    if (!received) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor_bill",
+      entityId: received.id,
+      action: "received",
+      changes: auditChanges(draftBill, received, VENDOR_BILL_AUDIT_FIELDS),
+    });
+
+    const approved = await tx.updateVendorBill(received.id, {
+      status: nextVendorBillStatus(received, "approve"),
+      updatedAt: new Date(),
+    } as Partial<InsertVendorBill>);
+    if (!approved) {
+      fail(404, "BILL_NOT_FOUND", "Vendor bill not found.");
+    }
+    await writeFinanceAuditEvent(tx, {
+      actorAdminId,
+      entityType: "vendor_bill",
+      entityId: approved.id,
+      action: "approved",
+      changes: auditChanges(received, approved, VENDOR_BILL_AUDIT_FIELDS),
+    });
+
+    const paymentResult = await createPaymentAndApplyToLockedBill(tx, approved, {
+      amountCents: approved.amountCents,
+      direction: "outflow",
+      paymentDate,
+      methodType,
+      methodLabel,
+      institutionName,
+      maskedLast4,
+      externalConfirmationRef,
+      status: "cleared",
+      actorAdminId,
+    });
+
+    const settlementState = deriveVendorBillSettlementState(
+      billSnapshot(approved),
+      activeAllocationRows([paymentResult.application]),
+    );
+    if (settlementState !== "paid") {
+      fail(500, "ALREADY_PAID_BILL_SETTLEMENT_INVALID", "Already-paid bill intake did not fully settle the bill.");
+    }
+    if (paymentResult.payment.amountCents !== paymentResult.application.amountCents) {
+      fail(500, "ALREADY_PAID_PAYMENT_APPLICATION_INVALID", "Already-paid bill intake left unapplied payment balance.");
+    }
+
+    return { bill: approved, ...paymentResult };
   });
 }
 

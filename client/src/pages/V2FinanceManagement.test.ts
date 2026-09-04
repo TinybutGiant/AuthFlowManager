@@ -136,6 +136,7 @@ test("V2 AP dialogs preserve legacy field order and explicit row structure", () 
   assertOrdered(bill, [
     "className=\"space-y-4\"",
     "label=\"Recurring Expense (optional)\"",
+    "<Label>Payment state</Label>",
     "label=\"Legal entity\"",
     "label=\"Vendor\"",
     "label=\"Kind\"",
@@ -200,8 +201,13 @@ test("V2 finance has descriptive AP empty states with local actions", () => {
 test("V2 AP row actions explain bill and payment lifecycle", () => {
   assert.match(source, /TooltipTrigger asChild/);
   assert.match(source, /Move this draft bill into AP\. Receive it before approving, disputing, applying, or recording payment\./);
-  assert.match(source, /Create a payment and apply it to this bill in one transaction\./);
-  assert.match(source, /Apply an existing payment or credit to this bill\./);
+  assert.match(source, /Invoice received, pending approval\./);
+  assert.match(source, /Confirm this bill is valid and ready to pay\./);
+  assert.match(source, /Mark this bill as under dispute\. It should not be paid until resolved\./);
+  assert.match(source, /Approve this bill, record an actual payment, and apply it in one transaction\./);
+  assert.match(source, /Record an actual payment and apply it to this bill\./);
+  assert.match(source, /Manually link an existing payment or credit to this bill\./);
+  assert.match(source, /Cancel this bill without recording payment\./);
   assert.match(source, /Record a standalone payment\. Apply it to bills later if needed\./);
   assert.match(source, /Reverse this application without deleting the payment or bill\./);
 });
@@ -263,17 +269,82 @@ test("V2 bill dialog asks for recurring expense first and keeps bill snapshots e
   assert.doesNotMatch(sourceBetween("type FinanceSubscription", "type FinanceBill"), /invoiceNumber/);
 });
 
+test("V2 already-paid bill intake is a single atomic create command", () => {
+  const billForm = sourceBetween("type BillForm", "type PaymentForm");
+  const billDialog = sourceBetween("function BillDialog", "function PaymentDialog");
+  const submit = sourceBetween("function submitBill", "function submitPayment");
+
+  assert.match(billForm, /paymentState: "unpaid" \| "already_paid";/);
+  assert.match(billForm, /paymentDate: string;/);
+  assert.match(billForm, /paymentMethodType: string;/);
+  assert.match(source, /const paymentMethodPlaceholder = "__select_payment_method";/);
+  assert.match(source, /paymentState: "unpaid"/);
+  assert.match(source, /paymentMethodType: paymentMethodPlaceholder/);
+
+  assertOrdered(billDialog, [
+    "label=\"Recurring Expense (optional)\"",
+    "<Label>Payment state</Label>",
+    "Unpaid / pay later",
+    "Already paid",
+    "Payment details",
+    "label=\"Payment date\"",
+    "label=\"Method\"",
+    "label=\"Institution\"",
+    "label=\"Last 4\"",
+    "label=\"Confirmation\"",
+  ]);
+  assert.match(billDialog, /const isAlreadyPaid = isCreate && form\.paymentState === "already_paid"/);
+  assert.match(billDialog, /form\.paymentDate\.trim\(\)\.length > 0/);
+  assert.match(billDialog, /form\.paymentMethodType !== paymentMethodPlaceholder/);
+  assert.match(billDialog, /<Button type="submit" disabled=\{!canSubmit\}>\{isSubmitting \? "Saving" : "Save"\}<\/Button>/);
+  assert.match(billDialog, /if \(canSubmit\) onSubmit\(form\)/);
+
+  assert.match(submit, /form\.paymentState === "already_paid"/);
+  assert.match(submit, /`\$\{V2_FINANCE_BASE\}\/bills\/record-paid`/);
+  assert.match(submit, /const \{ status: _status, \.\.\.recordPaidBody \} = body;/);
+  assert.match(submit, /paymentDate: form\.paymentDate\.trim\(\)/);
+  assert.match(submit, /methodType: form\.paymentMethodType/);
+  assert.match(submit, /maskedLast4: optionalText\(form\.paymentMaskedLast4\)/);
+  assert.match(submit, /externalConfirmationRef: optionalNullableText\(form\.paymentExternalConfirmationRef\)/);
+  assert.doesNotMatch(submit, /record-paid[\s\S]*invoiceNumber[\s\S]*externalConfirmationRef: optionalNullableText\(form\.invoiceNumber\)/);
+  assert.doesNotMatch(submit, /record-paid[\s\S]*\/record-payment/);
+});
+
+test("V2 bill row actions are state-aware and keep manual apply secondary", () => {
+  assert.match(source, /function canVoidBillDirectly\(bill: FinanceBill\)/);
+  assert.match(source, /bill\.settlementState !== "paid"/);
+  assert.match(source, /bill\.settlementState !== "partially_paid"/);
+  assert.match(source, /bill\.settlementState !== "overpaid"/);
+  assert.match(source, /function canRecordBillPayment\(bill: FinanceBill\)/);
+  assert.match(source, /bill\.status === "approved" && billHasOpenBalance\(bill\)/);
+  assert.match(source, /function canApproveAndRecordBillPayment\(bill: FinanceBill\)/);
+  assert.match(source, /bill\.status === "received" && billHasOpenBalance\(bill\)/);
+  assert.match(source, /function canManuallyApplyToBill\(bill: FinanceBill\)/);
+
+  const billsTable = sourceBetween("{tab === \"bills\" && (", "{tab === \"payments\" && (");
+  assert.match(billsTable, /canApproveAndRecordBillPayment\(bill\)/);
+  assert.match(billsTable, /openBillPaymentDialog\(bill, true\)/);
+  assert.match(billsTable, /Approve & pay/);
+  assert.match(billsTable, /bill\.status === "received" && billHasOpenBalance\(bill\)/);
+  assert.match(billsTable, /canRecordBillPayment\(bill\)/);
+  assert.match(billsTable, /openBillPaymentDialog\(bill\)/);
+  assert.match(billsTable, /canManuallyApplyToBill\(bill\)/);
+  assert.match(billsTable, /canVoidBillDirectly\(bill\)/);
+  assert.doesNotMatch(billsTable, /bill\.status !== "voided" && \(/);
+});
+
 test("V2 bill-first record payment keeps payment allocation workflow off the data model", () => {
   const paymentForm = sourceBetween("function paymentFormFrom", "function applicationFormFrom");
   const paymentDialog = sourceBetween("function PaymentDialog", "function ApplicationDialog");
   const submit = sourceBetween("function submitPayment", "function submitApplication");
   const sourceBillSubmit = sourceBetween("} else if (paymentDialog?.sourceBill) {", "} else {");
 
-  assert.match(source, /type PaymentDialogState = \{[\s\S]*?sourceBill\?: FinanceBill;[\s\S]*?\};/);
-  assert.match(source, /function openBillPaymentDialog\(bill: FinanceBill\)/);
+  assert.match(source, /type PaymentDialogState = \{[\s\S]*?sourceBill\?: FinanceBill;[\s\S]*?approveBillFirst\?: boolean;[\s\S]*?\};/);
+  assert.match(source, /function openBillPaymentDialog\(bill: FinanceBill, approveBillFirst = false\)/);
   assert.match(source, /sourceBill: bill/);
+  assert.match(source, /approveBillFirst/);
   assert.match(source, /paymentFormFrom\(legalEntities, activeVendors, undefined, bill\)/);
-  assert.match(source, /<ActionTooltip content="Create a payment and apply it to this bill in one transaction\.">[\s\S]*?<Button size="sm" variant="outline" onClick=\{\(\) => openBillPaymentDialog\(bill\)\}><WalletCards className="h-4 w-4" \/>Record payment<\/Button>[\s\S]*?<\/ActionTooltip>/);
+  assert.match(source, /<ActionTooltip content="Record an actual payment and apply it to this bill\.">[\s\S]*?<Button size="sm" variant="outline" onClick=\{\(\) => openBillPaymentDialog\(bill\)\}><WalletCards className="h-4 w-4" \/>Record payment<\/Button>[\s\S]*?<\/ActionTooltip>/);
   assert.doesNotMatch(sourceBetween("type FinancePayment", "type FinanceBillApplication"), /billId|vendorBillId|targetVendorBillId/);
 
   assert.match(paymentForm, /sourceBill\?: FinanceBill/);
@@ -311,7 +382,8 @@ test("V2 bill-first record payment keeps payment allocation workflow off the dat
 
   assert.match(submit, /paymentDate: form\.paymentDate\.trim\(\)/);
   assert.match(sourceBillSubmit, /POST/);
-  assert.match(sourceBillSubmit, /`\$\{V2_FINANCE_BASE\}\/bills\/\$\{paymentDialog\.sourceBill\.id\}\/record-payment`/);
+  assert.match(sourceBillSubmit, /approve-and-record-payment/);
+  assert.match(sourceBillSubmit, /record-payment/);
   assert.match(sourceBillSubmit, /paymentFacts/);
   assert.doesNotMatch(sourceBillSubmit, /legalEntityId|vendorId|currency|invoiceNumber/);
 });

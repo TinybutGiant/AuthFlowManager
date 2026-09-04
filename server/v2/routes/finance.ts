@@ -4,6 +4,7 @@ import {
   applyExpensePaymentPayloadSchema,
   applyFinanceCreditToBill,
   applyFinancePaymentToBill,
+  approveAndRecordFinanceBillPayment,
   archiveFinanceVendor,
   cancelFinanceSubscription,
   cancelRecurringExpensePayloadSchema,
@@ -38,6 +39,8 @@ import {
   recordBillPaymentPayloadSchema,
   recordFinanceBillPayment,
   recordFinancePayment,
+  recordPaidFinanceBill,
+  recordPaidVendorBillPayloadSchema,
   reconciliationExceptionTransitionPayloadSchema,
   resumeFinanceSubscription,
   reverseFinanceBillApplication,
@@ -96,12 +99,14 @@ export const financeRouteModule = {
     "POST /api/v2/finance/subscriptions/:subscriptionId/cancel",
     "GET /api/v2/finance/bills",
     "POST /api/v2/finance/bills",
+    "POST /api/v2/finance/bills/record-paid",
     "PATCH /api/v2/finance/bills/:billId",
     "POST /api/v2/finance/bills/:billId/receive",
     "POST /api/v2/finance/bills/:billId/approve",
     "POST /api/v2/finance/bills/:billId/dispute",
     "POST /api/v2/finance/bills/:billId/void",
     "POST /api/v2/finance/bills/:billId/record-payment",
+    "POST /api/v2/finance/bills/:billId/approve-and-record-payment",
     "GET /api/v2/finance/payments",
     "POST /api/v2/finance/payments",
     "PATCH /api/v2/finance/payments/:paymentId",
@@ -392,6 +397,25 @@ export async function handleFinanceRouteWithRepository(
       return methodNotAllowed(["GET", "HEAD", "POST"]);
     }
 
+    if (segments.length === 2 && segments[0] === "bills" && segments[1] === "record-paid") {
+      if (request.method !== "POST") {
+        return methodNotAllowed(["POST"]);
+      }
+      const result = await recordPaidFinanceBill(repository, {
+        ...(await parsedBody(request, recordPaidVendorBillPayloadSchema)),
+        actorAdminId,
+      });
+      return json({
+        bill: financeBillResponse(result.bill),
+        payment: financePaymentResponse({
+          ...result.payment,
+          activeAppliedAmountCents: result.application.amountCents,
+          remainingAmountCents: result.payment.amountCents - result.application.amountCents,
+        }),
+        application: financeBillApplicationResponse(result.application),
+      }, { status: 201 });
+    }
+
     if (segments.length === 2 && segments[0] === "bills") {
       if (request.method !== "PATCH") {
         return methodNotAllowed(["PATCH"]);
@@ -407,17 +431,39 @@ export async function handleFinanceRouteWithRepository(
       return json(financeBillResponse(bill));
     }
 
-    if (segments.length === 3 && segments[0] === "bills" && segments[2] === "record-payment") {
+    if (
+      segments.length === 3 &&
+      segments[0] === "bills" &&
+      (segments[2] === "record-payment" || segments[2] === "approve-and-record-payment")
+    ) {
       if (request.method !== "POST") {
         return methodNotAllowed(["POST"]);
       }
+      const paymentPayload = {
+        ...(await parsedBody(request, recordBillPaymentPayloadSchema)),
+        actorAdminId,
+      };
+      const billId = financeIdParamSchema.parse(segments[1]);
+      if (segments[2] === "approve-and-record-payment") {
+        const result = await approveAndRecordFinanceBillPayment(
+          repository,
+          billId,
+          paymentPayload,
+        );
+        return json({
+          bill: financeBillResponse(result.bill),
+          payment: financePaymentResponse({
+            ...result.payment,
+            activeAppliedAmountCents: result.application.amountCents,
+            remainingAmountCents: result.payment.amountCents - result.application.amountCents,
+          }),
+          application: financeBillApplicationResponse(result.application),
+        }, { status: 201 });
+      }
       const result = await recordFinanceBillPayment(
         repository,
-        financeIdParamSchema.parse(segments[1]),
-        {
-          ...(await parsedBody(request, recordBillPaymentPayloadSchema)),
-          actorAdminId,
-        },
+        billId,
+        paymentPayload,
       );
       return json({
         payment: financePaymentResponse({
