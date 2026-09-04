@@ -23,6 +23,7 @@ import {
   financeBillTransitionPayloadSchema,
   financeIdParamSchema,
   financeListQuerySchema,
+  financePaymentListQuerySchema,
   financePaymentResponse,
   financeReconciliationExceptionResponse,
   financeSubscriptionResponse,
@@ -30,8 +31,8 @@ import {
   getFinanceOverview,
   listFinanceBillApplications,
   listFinanceBills,
+  listFinancePaymentLedger,
   listFinanceLegalEntities,
-  listFinancePayments,
   listFinanceReconciliationExceptions,
   listFinanceSubscriptions,
   listFinanceVendors,
@@ -221,6 +222,10 @@ async function readJsonBody(request: Request): Promise<unknown> {
 
 function parseQuery(url: URL) {
   return financeListQuerySchema.parse(Object.fromEntries(url.searchParams));
+}
+
+function parsePaymentQuery(url: URL) {
+  return financePaymentListQuerySchema.parse(Object.fromEntries(url.searchParams));
 }
 
 function routeSegments(url: URL): string[] {
@@ -502,7 +507,7 @@ export async function handleFinanceRouteWithRepository(
 
     if (segments.length === 1 && segments[0] === "payments") {
       if (request.method === "GET" || request.method === "HEAD") {
-        return json(await listFinancePayments(repository, parseQuery(url)));
+        return json(await listFinancePaymentLedger(repository, parsePaymentQuery(url)));
       }
 
       if (request.method === "POST") {

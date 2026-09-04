@@ -147,6 +147,16 @@ function repo(overrides: {
     findVendorBillInvoiceConflict: async () => undefined,
     getExpensePayment: async () => undefined,
     listExpensePayments: async () => [],
+    listExpensePaymentLedger: async () => ({
+      payments: [],
+      summary: {
+        count: 0,
+        totalAmountByCurrency: [],
+        appliedAmountByCurrency: [],
+        unappliedAmountByCurrency: [],
+      },
+      filters: {},
+    }),
     createExpensePayment: async () => {
       throw new Error("not used");
     },
@@ -247,6 +257,43 @@ test("V2 finance authorizes only active effective super_admin or finance_admin g
     const payload = await response.json() as Array<{ name: string }>;
     assert.equal(payload[0].name, "Vendor A");
   }
+});
+
+test("V2 finance payments route accepts saved ledger view query state", async () => {
+  let capturedFilters: Record<string, unknown> | undefined;
+  const repository = repo();
+  repository.listExpensePaymentLedger = async (filters) => {
+    capturedFilters = filters as Record<string, unknown>;
+    return {
+      payments: [],
+      summary: {
+        count: 2,
+        totalAmountByCurrency: [{ currency: "USD", amountCents: 2092 }],
+        appliedAmountByCurrency: [{ currency: "USD", amountCents: 2092 }],
+        unappliedAmountByCurrency: [],
+      },
+      filters: {
+        scope: filters.scope,
+        paymentFrom: filters.paymentFrom,
+        paymentTo: filters.paymentTo,
+      },
+    };
+  };
+
+  const response = await handleFinanceRouteWithRepository(
+    request("/api/v2/finance/payments?period=custom&scope=completed-outflow&paymentFrom=2026-08-01&paymentTo=2026-08-31&pageSize=100"),
+    principal(["finance_admin"]),
+    repository,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedFilters?.scope, "completed-outflow");
+  assert.equal(capturedFilters?.paymentFrom, "2026-08-01");
+  assert.equal(capturedFilters?.paymentTo, "2026-08-31");
+  assert.equal(capturedFilters?.pageSize, 100);
+  const payload = await response.json() as Record<string, any>;
+  assert.deepEqual(payload.summary.totalAmountByCurrency, [{ currency: "USD", amountCents: 2092 }]);
+  assert.equal(payload.summary.count, 2);
 });
 
 test("V2 finance vendor route preserves AP response contract and actor mapping", async () => {

@@ -14,6 +14,7 @@ import {
   financeBillResponse,
   getFinanceOverview,
   listFinanceBills,
+  listFinancePaymentLedger,
   listFinancePayments,
   recordPaidFinanceBill,
   approveAndRecordFinanceBillPayment,
@@ -771,6 +772,153 @@ test(
       ]);
       assert.deepEqual(overview.metrics.paidYtdByCurrency, [
         { currency: "USD", amountCents: 3000 },
+      ]);
+    });
+  },
+);
+
+test(
+  "V2 AP payment ledger saved views filter completed outflow rows for drill-down subtotals",
+  {
+    skip: POSTGRES_TEST_DATABASE_URL
+      ? false
+      : "Set MIGRATION_RUNNER_TEST_DATABASE_URL to a disposable PostgreSQL database to run.",
+  },
+  async () => {
+    await withApSchema(async (client) => {
+      const repo = repoForClient(client);
+      await client.query(`INSERT INTO "vendors" ("id", "name", "vendor_type", "status") VALUES (20, 'Cloudflare', 'cloud', 'active')`);
+      await client.query(`
+        INSERT INTO "vendor_bills"
+          ("id", "legal_entity_id", "vendor_id", "invoice_number", "bill_kind", "due_date", "amount_cents", "currency", "category_code", "status")
+        VALUES
+          (100, 1, 20, 'IN-A', 'invoice', '2026-09-10', 1000, 'USD', 'cloud', 'approved'),
+          (101, 1, 20, 'IN-B', 'invoice', '2026-09-11', 1000, 'USD', 'cloud', 'approved')
+      `);
+      await client.query(`
+        INSERT INTO "expense_payments"
+          ("id", "legal_entity_id", "vendor_id", "amount_cents", "currency", "direction", "payment_date", "method_type", "status")
+        VALUES
+          (200, 1, 20, 1000, 'USD', 'outflow', '2026-09-02', 'card', 'cleared'),
+          (201, 1, 20, 2000, 'USD', 'outflow', '2026-01-15', 'card', 'cleared'),
+          (202, 1, 20, 3000, 'USD', 'refund', '2026-09-03', 'card', 'cleared'),
+          (203, 1, 20, 4000, 'USD', 'outflow', '2026-09-03', 'card', 'pending'),
+          (204, 1, 20, 5000, 'USD', 'outflow', '2026-09-03', 'card', 'failed'),
+          (205, 1, 20, 6000, 'USD', 'outflow', '2026-09-03', 'card', 'voided'),
+          (206, 1, 20, 7000, 'USD', 'outflow', '2026-09-03', 'card', 'reversed'),
+          (207, 1, 20, 8000, 'USD', 'outflow', '2025-12-31', 'card', 'cleared')
+      `);
+      await client.query(`
+        INSERT INTO "vendor_bill_applications"
+          ("target_vendor_bill_id", "expense_payment_id", "amount_cents", "currency", "status")
+        VALUES
+          (100, 200, 400, 'USD', 'active'),
+          (101, 200, 600, 'USD', 'active')
+      `);
+
+      const ytdLedger = await listFinancePaymentLedger(repo, {
+        pageSize: 1,
+        period: "custom",
+        scope: "completed-outflow",
+        paymentFrom: "2026-01-01",
+        paymentTo: "2026-09-04",
+      });
+      assert.deepEqual(ytdLedger.payments.map((payment) => payment.id), [200]);
+      assert.equal(ytdLedger.summary.count, 2);
+      assert.deepEqual(ytdLedger.summary.totalAmountByCurrency, [{ currency: "USD", amountCents: 3000 }]);
+      assert.deepEqual(ytdLedger.summary.appliedAmountByCurrency, [{ currency: "USD", amountCents: 1000 }]);
+      assert.deepEqual(ytdLedger.summary.unappliedAmountByCurrency, [{ currency: "USD", amountCents: 2000 }]);
+
+      const monthLedger = await listFinancePaymentLedger(repo, {
+        pageSize: 100,
+        period: "custom",
+        scope: "completed-outflow",
+        paymentFrom: "2026-09-01",
+        paymentTo: "2026-09-30",
+      });
+      assert.deepEqual(monthLedger.payments.map((payment) => payment.id), [200]);
+      assert.deepEqual(monthLedger.summary.totalAmountByCurrency, [{ currency: "USD", amountCents: 1000 }]);
+      assert.deepEqual(monthLedger.summary.appliedAmountByCurrency, [{ currency: "USD", amountCents: 1000 }]);
+      assert.deepEqual(monthLedger.summary.unappliedAmountByCurrency, [{ currency: "USD", amountCents: 0 }]);
+    });
+  },
+);
+
+test(
+  "V2 AP payment ledger dates follow paymentDate for historical bookkeeping",
+  {
+    skip: POSTGRES_TEST_DATABASE_URL
+      ? false
+      : "Set MIGRATION_RUNNER_TEST_DATABASE_URL to a disposable PostgreSQL database to run.",
+  },
+  async () => {
+    await withApSchema(async (client) => {
+      const repo = repoForClient(client);
+      await client.query(`INSERT INTO "vendors" ("id", "name", "vendor_type", "status") VALUES (20, 'Cloudflare', 'cloud', 'active')`);
+      await client.query(`
+        INSERT INTO "vendor_bills"
+          ("id", "legal_entity_id", "vendor_id", "invoice_number", "bill_kind", "due_date", "amount_cents", "currency", "category_code", "status")
+        VALUES
+          (100, 1, 20, 'IN-48888602', 'invoice', '2025-09-28', 1046, 'USD', 'domain', 'approved'),
+          (101, 1, 20, 'IN-77096614', 'invoice', '2026-08-29', 1046, 'USD', 'domain', 'approved')
+      `);
+      await client.query(`
+        INSERT INTO "expense_payments"
+          ("id", "legal_entity_id", "vendor_id", "amount_cents", "currency", "direction", "payment_date", "method_type", "method_label", "status", "created_at")
+        VALUES
+          (200, 1, 20, 1046, 'USD', 'outflow', '2025-09-28', 'other', 'PayPal', 'cleared', '2026-09-04'),
+          (201, 1, 20, 1046, 'USD', 'outflow', '2026-08-29', 'card', 'Apple Card', 'cleared', '2026-09-04')
+      `);
+      await client.query(`
+        INSERT INTO "vendor_bill_applications"
+          ("target_vendor_bill_id", "expense_payment_id", "amount_cents", "currency", "status")
+        VALUES
+          (100, 200, 1046, 'USD', 'active'),
+          (101, 201, 1046, 'USD', 'active')
+      `);
+
+      const overview = await getFinanceOverview(repo, "2026-09-04");
+      assert.deepEqual(overview.metrics.paidThisMonthByCurrency, []);
+      assert.deepEqual(overview.metrics.paidYtdByCurrency, [
+        { currency: "USD", amountCents: 1046 },
+      ]);
+
+      const thisMonthLedger = await listFinancePaymentLedger(repo, {
+        pageSize: 100,
+        period: "custom",
+        scope: "completed-outflow",
+        paymentFrom: "2026-09-01",
+        paymentTo: "2026-09-04",
+      });
+      assert.equal(thisMonthLedger.summary.count, 0);
+      assert.deepEqual(thisMonthLedger.summary.totalAmountByCurrency, []);
+
+      const ytdLedger = await listFinancePaymentLedger(repo, {
+        pageSize: 100,
+        period: "custom",
+        scope: "completed-outflow",
+        paymentFrom: "2026-01-01",
+        paymentTo: "2026-09-04",
+      });
+      assert.equal(ytdLedger.summary.count, 1);
+      assert.deepEqual(ytdLedger.summary.totalAmountByCurrency, [
+        { currency: "USD", amountCents: 1046 },
+      ]);
+
+      const allTimeLedger = await listFinancePaymentLedger(repo, {
+        pageSize: 100,
+        period: "all-time",
+        scope: "completed-outflow",
+      });
+      assert.equal(allTimeLedger.summary.count, 2);
+      assert.deepEqual(allTimeLedger.summary.totalAmountByCurrency, [
+        { currency: "USD", amountCents: 2092 },
+      ]);
+      assert.deepEqual(allTimeLedger.summary.appliedAmountByCurrency, [
+        { currency: "USD", amountCents: 2092 },
+      ]);
+      assert.deepEqual(allTimeLedger.summary.unappliedAmountByCurrency, [
+        { currency: "USD", amountCents: 0 },
       ]);
     });
   },

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation, useSearch } from "wouter";
 import {
   AlertCircle,
   Archive,
@@ -58,6 +59,10 @@ import {
 import { useToast } from "@/hooks/use-toast";
 
 type FinanceTab = "bills" | "payments" | "subscriptions" | "vendors" | "reconciliation";
+type PaymentPeriod = "this-month" | "last-month" | "ytd" | "last-12-months" | "all-time" | "custom";
+type PaymentScope = "all" | "completed-outflow";
+type BillView = "all" | "open" | "overdue";
+type SubscriptionView = "all" | "active";
 
 type FinanceLegalEntity = {
   id: number;
@@ -141,6 +146,18 @@ type FinancePayment = {
   remainingAmountCents?: number;
 };
 
+type FinancePaymentLedgerSummary = {
+  count: number;
+  totalAmountByCurrency: CurrencyAmount[];
+  appliedAmountByCurrency: CurrencyAmount[];
+  unappliedAmountByCurrency: CurrencyAmount[];
+};
+
+type FinancePaymentLedger = {
+  payments: FinancePayment[];
+  summary: FinancePaymentLedgerSummary;
+};
+
 type FinanceBillApplication = {
   id: number;
   targetVendorBillId: number;
@@ -173,6 +190,7 @@ type CurrencyAmount = {
 };
 
 type FinanceOverview = {
+  asOfDate?: string;
   metrics?: {
     openBillsCount: number;
     overdueBillsCount: number;
@@ -289,6 +307,17 @@ const tabs: Array<{ value: FinanceTab; label: string }> = [
   { value: "vendors", label: "Vendors" },
   { value: "reconciliation", label: "Reconciliation" },
 ];
+const paymentPeriods: Array<{ value: PaymentPeriod; label: string }> = [
+  { value: "this-month", label: "This month" },
+  { value: "last-month", label: "Last month" },
+  { value: "ytd", label: "YTD" },
+  { value: "last-12-months", label: "Last 12 months" },
+  { value: "all-time", label: "All time" },
+  { value: "custom", label: "Custom range" },
+];
+const paymentPeriodValues = new Set<PaymentPeriod>(paymentPeriods.map((period) => period.value));
+const billViewValues = new Set<BillView>(["all", "open", "overdue"]);
+const subscriptionViewValues = new Set<SubscriptionView>(["all", "active"]);
 
 const vendorTypes = ["saas", "cloud", "utility", "professional_service", "contractor_vendor", "supplier", "other"];
 const vendorStatuses = ["active", "inactive", "archived"];
@@ -476,7 +505,7 @@ function canManuallyApplyToBill(bill: FinanceBill) {
 
 function subscriptionLabel(subscription: FinanceSubscription) {
   const vendor = subscription.vendorName || `Vendor #${subscription.vendorId}`;
-  return `${vendor} — ${subscription.name}`;
+  return `${vendor} - ${subscription.name}`;
 }
 
 function recurringExpenseSummary(subscription: FinanceSubscription) {
@@ -494,7 +523,7 @@ function recurringExpenseContextSummary(subscription: FinanceSubscription) {
     humanize(subscription.cadence),
     amount,
     nextBill ? `Next bill ${nextBill}` : null,
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean).join(" - ");
 }
 
 function paymentLabel(payment: FinancePayment) {
@@ -505,6 +534,85 @@ function paymentLabel(payment: FinancePayment) {
 
 function activeApplicationsForPayment(payment: FinancePayment, applications: FinanceBillApplication[]) {
   return applications.filter((application) => application.expensePaymentId === payment.id && application.status === "active");
+}
+
+function financePathForTab(tab: FinanceTab) {
+  return tab === "bills" ? "/v2/finance" : `/v2/finance/${tab}`;
+}
+
+function financeTabFromLocation(location: string): FinanceTab {
+  const path = location.split("?")[0] ?? "";
+  const segment = path.replace(/^\/v2\/finance\/?/, "").split("/")[0];
+  return tabs.some((item) => item.value === segment) ? segment as FinanceTab : "bills";
+}
+
+function parsePaymentPeriod(value: string | null): PaymentPeriod {
+  return value && paymentPeriodValues.has(value as PaymentPeriod) ? value as PaymentPeriod : "all-time";
+}
+
+function parsePaymentScope(value: string | null, hasPeriodQuery: boolean): PaymentScope {
+  if (value === "completed-outflow") return "completed-outflow";
+  if (value === "all") return "all";
+  return hasPeriodQuery ? "completed-outflow" : "all";
+}
+
+function parseBillView(value: string | null): BillView {
+  return value && billViewValues.has(value as BillView) ? value as BillView : "all";
+}
+
+function parseSubscriptionView(value: string | null): SubscriptionView {
+  return value && subscriptionViewValues.has(value as SubscriptionView) ? value as SubscriptionView : "all";
+}
+
+function paymentPeriodLabel(period: PaymentPeriod) {
+  return paymentPeriods.find((item) => item.value === period)?.label ?? "All time";
+}
+
+function paymentQueryPath(period: PaymentPeriod, scope: PaymentScope, paymentFrom: string, paymentTo: string) {
+  const params = new URLSearchParams({ pageSize: "100", period, scope });
+  if (period === "custom") {
+    if (paymentFrom.trim()) params.set("paymentFrom", paymentFrom.trim());
+    if (paymentTo.trim()) params.set("paymentTo", paymentTo.trim());
+  }
+  return `${V2_FINANCE_BASE}/payments?${params.toString()}`;
+}
+
+function financeUrl(tab: FinanceTab, params: Record<string, string | undefined> = {}) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) search.set(key, value);
+  }
+  const query = search.toString();
+  return `${financePathForTab(tab)}${query ? `?${query}` : ""}`;
+}
+
+function paymentBillInvoiceLabel(payment: FinancePayment, applications: FinanceBillApplication[], billById: Map<number, FinanceBill>) {
+  const labels = activeApplicationsForPayment(payment, applications).map((application) => {
+    const bill = billById.get(application.targetVendorBillId);
+    return bill ? billReferenceLabel(bill) : `Bill #${application.targetVendorBillId}`;
+  });
+  return labels.length > 0 ? labels.join(", ") : "-";
+}
+
+function paymentLedgerTotals(payments: FinancePayment[]): FinancePaymentLedgerSummary {
+  const totalAmountByCurrency = new Map<string, number>();
+  const appliedByCurrency = new Map<string, number>();
+  const unappliedByCurrency = new Map<string, number>();
+  for (const payment of payments) {
+    totalAmountByCurrency.set(payment.currency, (totalAmountByCurrency.get(payment.currency) ?? 0) + payment.amountCents);
+    appliedByCurrency.set(payment.currency, (appliedByCurrency.get(payment.currency) ?? 0) + (payment.activeAppliedAmountCents ?? 0));
+    unappliedByCurrency.set(payment.currency, (unappliedByCurrency.get(payment.currency) ?? 0) + (payment.remainingAmountCents ?? payment.amountCents));
+  }
+  const toCurrencyAmounts = (map: Map<string, number>) =>
+    Array.from(map.entries())
+      .map(([currency, amountCents]) => ({ currency, amountCents }))
+      .sort((left, right) => left.currency.localeCompare(right.currency));
+  return {
+    count: payments.length,
+    totalAmountByCurrency: toCurrencyAmounts(totalAmountByCurrency),
+    appliedAmountByCurrency: toCurrencyAmounts(appliedByCurrency),
+    unappliedAmountByCurrency: toCurrencyAmounts(unappliedByCurrency),
+  };
 }
 
 function statusBadge(status?: string | null) {
@@ -604,13 +712,21 @@ function Metric({
   label,
   value,
   icon: Icon,
+  onClick,
 }: {
   label: string;
   value: React.ReactNode;
   icon: React.ComponentType<{ className?: string }>;
+  onClick?: () => void;
 }) {
+  const clickable = Boolean(onClick);
   return (
-    <div className="rounded-lg border bg-card p-4 shadow-sm">
+    <button
+      type="button"
+      className={`rounded-lg border bg-card p-4 text-left shadow-sm ${clickable ? "transition-colors hover:border-primary/60 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" : "cursor-default"}`}
+      onClick={onClick}
+      disabled={!clickable}
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-sm text-muted-foreground">{label}</div>
@@ -618,7 +734,7 @@ function Metric({
         </div>
         <Icon className="h-5 w-5 text-muted-foreground" />
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -1534,7 +1650,16 @@ function ReconciliationDialog({
 }
 
 export default function V2FinanceManagement() {
-  const [tab, setTab] = React.useState<FinanceTab>("bills");
+  const [location, setLocation] = useLocation();
+  const search = useSearch();
+  const searchParams = React.useMemo(() => new URLSearchParams(search), [search]);
+  const tab = financeTabFromLocation(location);
+  const paymentPeriod = parsePaymentPeriod(searchParams.get("period"));
+  const paymentScope = parsePaymentScope(searchParams.get("scope"), searchParams.has("period"));
+  const customPaymentFrom = searchParams.get("paymentFrom") ?? "";
+  const customPaymentTo = searchParams.get("paymentTo") ?? "";
+  const billView = parseBillView(searchParams.get("view"));
+  const subscriptionView = parseSubscriptionView(searchParams.get("view"));
   const [vendorDialog, setVendorDialog] = React.useState<{ mode: "create" | "edit"; vendor?: FinanceVendor; form: VendorForm } | null>(null);
   const [subscriptionDialog, setSubscriptionDialog] = React.useState<{ mode: "create" | "edit"; subscription?: FinanceSubscription; form: SubscriptionForm } | null>(null);
   const [billDialog, setBillDialog] = React.useState<{ mode: "create" | "edit"; bill?: FinanceBill; form: BillForm } | null>(null);
@@ -1564,9 +1689,9 @@ export default function V2FinanceManagement() {
     queryKey: [`${V2_FINANCE_BASE}/bills?pageSize=100`],
     queryFn: () => v2FinanceJson<FinanceBill[]>(`${V2_FINANCE_BASE}/bills?pageSize=100`),
   });
-  const paymentsQuery = useQuery<FinancePayment[]>({
-    queryKey: [`${V2_FINANCE_BASE}/payments?pageSize=100`],
-    queryFn: () => v2FinanceJson<FinancePayment[]>(`${V2_FINANCE_BASE}/payments?pageSize=100`),
+  const paymentsQuery = useQuery<FinancePaymentLedger>({
+    queryKey: [paymentQueryPath(paymentPeriod, paymentScope, customPaymentFrom, customPaymentTo)],
+    queryFn: ({ queryKey }) => v2FinanceJson<FinancePaymentLedger>(String(queryKey[0])),
   });
   const applicationsQuery = useQuery<FinanceBillApplication[]>({
     queryKey: [`${V2_FINANCE_BASE}/bill-applications?pageSize=100`],
@@ -1585,11 +1710,28 @@ export default function V2FinanceManagement() {
   const activeVendors = vendors.filter((vendor) => vendor.status !== "archived");
   const subscriptions = subscriptionsQuery.data ?? [];
   const bills = billsQuery.data ?? [];
-  const payments = paymentsQuery.data ?? [];
+  const payments = paymentsQuery.data?.payments ?? [];
   const applications = applicationsQuery.data ?? [];
   const reconciliation = reconciliationQuery.data ?? [];
   const billById = React.useMemo(() => new Map(bills.map((bill) => [bill.id, bill])), [bills]);
   const paymentById = React.useMemo(() => new Map(payments.map((payment) => [payment.id, payment])), [payments]);
+  const today = overviewQuery.data?.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const displayedBills = React.useMemo(() => bills.filter((bill) => {
+    if (billView === "all") return true;
+    if (!billHasOpenBalance(bill) || bill.status === "draft" || bill.status === "voided" || bill.billKind === "credit_memo") {
+      return false;
+    }
+    if (billView === "overdue") {
+      return Boolean(bill.dueDate && bill.dueDate < today);
+    }
+    return true;
+  }), [billView, bills, today]);
+  const displayedSubscriptions = React.useMemo(() => (
+    subscriptionView === "active"
+      ? subscriptions.filter((subscription) => subscription.status === "active")
+      : subscriptions
+  ), [subscriptionView, subscriptions]);
+  const paymentTotals = paymentsQuery.data?.summary ?? paymentLedgerTotals(payments);
   const isLoading = [
     overviewQuery,
     legalEntitiesQuery,
@@ -1612,6 +1754,18 @@ export default function V2FinanceManagement() {
   ].find((query) => query.error)?.error;
   const legalEntityConfigurationRequired = !isLoading && !error && legalEntities.length === 0;
   const canCreateLegalEntityScopedRecord = legalEntities.length > 0;
+
+  function navigateFinance(tab: FinanceTab, params: Record<string, string | undefined> = {}) {
+    setLocation(financeUrl(tab, params));
+  }
+
+  function navigatePaymentPeriod(period: PaymentPeriod, extra: Record<string, string | undefined> = {}) {
+    navigateFinance("payments", {
+      period,
+      scope: "completed-outflow",
+      ...extra,
+    });
+  }
 
   function mutate(method: string, path: string, body?: unknown, onSuccess?: () => void) {
     mutation.mutate(
@@ -1824,23 +1978,41 @@ export default function V2FinanceManagement() {
         </header>
 
         <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-          <Metric label="Open bills" value={overviewQuery.data?.metrics?.openBillsCount ?? 0} icon={ReceiptText} />
-          <Metric label="Overdue" value={overviewQuery.data?.metrics?.overdueBillsCount ?? 0} icon={AlertCircle} />
-          <Metric label="Recurring expenses" value={overviewQuery.data?.metrics?.activeSubscriptionsCount ?? 0} icon={Building2} />
+          <Metric
+            label="Open bills"
+            value={overviewQuery.data?.metrics?.openBillsCount ?? 0}
+            icon={ReceiptText}
+            onClick={() => navigateFinance("bills", { view: "open" })}
+          />
+          <Metric
+            label="Overdue"
+            value={overviewQuery.data?.metrics?.overdueBillsCount ?? 0}
+            icon={AlertCircle}
+            onClick={() => navigateFinance("bills", { view: "overdue" })}
+          />
+          <Metric
+            label="Recurring expenses"
+            value={overviewQuery.data?.metrics?.activeSubscriptionsCount ?? 0}
+            icon={Building2}
+            onClick={() => navigateFinance("subscriptions", { view: "active" })}
+          />
           <Metric
             label="Open total"
             value={formatMoneyBreakdown(overviewQuery.data?.metrics?.openBillTotalsByCurrency)}
             icon={WalletCards}
+            onClick={() => navigateFinance("bills", { view: "open" })}
           />
           <Metric
             label="Paid this month"
             value={formatMoneyBreakdown(overviewQuery.data?.metrics?.paidThisMonthByCurrency)}
             icon={WalletCards}
+            onClick={() => navigatePaymentPeriod("this-month")}
           />
           <Metric
             label="Paid YTD"
             value={formatMoneyBreakdown(overviewQuery.data?.metrics?.paidYtdByCurrency)}
             icon={WalletCards}
+            onClick={() => navigatePaymentPeriod("ytd")}
           />
         </div>
 
@@ -1849,7 +2021,7 @@ export default function V2FinanceManagement() {
             <Button
               key={item.value}
               variant={tab === item.value ? "default" : "outline"}
-              onClick={() => setTab(item.value)}
+              onClick={() => navigateFinance(item.value)}
             >
               {item.label}
             </Button>
@@ -1877,10 +2049,10 @@ export default function V2FinanceManagement() {
           >
             {isLoading ? (
               <EmptyState title="Loading bills" description="Loading vendor bills and settlement details." />
-            ) : bills.length === 0 ? (
+            ) : displayedBills.length === 0 ? (
               <EmptyState
-                title="No bills yet"
-                description="Add vendor bills as they arrive so due dates, balances, and receipts stay visible."
+                title={billView === "all" ? "No bills yet" : "No bills match this view"}
+                description={billView === "all" ? "Add vendor bills as they arrive so due dates, balances, and receipts stay visible." : "Change the saved view or add a bill when a new payable arrives."}
                 actionLabel={canCreateLegalEntityScopedRecord ? "Add bill" : undefined}
                 onAction={canCreateLegalEntityScopedRecord ? () => setBillDialog({ mode: "create", form: billFormFrom(legalEntities, activeVendors) }) : undefined}
               />
@@ -1898,7 +2070,7 @@ export default function V2FinanceManagement() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {bills.map((bill) => (
+                  {displayedBills.map((bill) => (
                     <TableRow key={bill.id}>
                       <TableCell>{bill.vendorName || `Vendor #${bill.vendorId}`}</TableCell>
                       <TableCell>
@@ -1973,74 +2145,129 @@ export default function V2FinanceManagement() {
               </ActionTooltip>
             )}
           >
+            <div className="mb-4 flex flex-wrap items-end gap-3">
+              <div className="grid min-w-44 gap-2">
+                <Label>Period</Label>
+                <Select
+                  value={paymentPeriod}
+                  onValueChange={(period) => navigatePaymentPeriod(period as PaymentPeriod, period === "custom" ? { paymentFrom: customPaymentFrom, paymentTo: customPaymentTo } : {})}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentPeriods.map((period) => (
+                      <SelectItem key={period.value} value={period.value}>
+                        {period.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {paymentPeriod === "custom" && (
+                <>
+                  <TextField
+                    label="From"
+                    type="date"
+                    value={customPaymentFrom}
+                    onChange={(paymentFrom) => navigatePaymentPeriod("custom", { paymentFrom, paymentTo: customPaymentTo })}
+                  />
+                  <TextField
+                    label="To"
+                    type="date"
+                    value={customPaymentTo}
+                    onChange={(paymentTo) => navigatePaymentPeriod("custom", { paymentFrom: customPaymentFrom, paymentTo })}
+                  />
+                </>
+              )}
+              {paymentScope === "completed-outflow" && (
+                <Badge variant="secondary" className="mb-2">
+                  Completed AP spend
+                </Badge>
+              )}
+            </div>
             {isLoading ? (
               <EmptyState title="Loading payments" description="Loading payment records and unapplied balances." />
             ) : payments.length === 0 ? (
               <EmptyState
-                title="No payments recorded"
-                description="Record an actual payment after money has moved or is in flight."
+                title={paymentScope === "completed-outflow" ? `No completed AP spend for ${paymentPeriodLabel(paymentPeriod)}` : "No payments recorded"}
+                description={paymentScope === "completed-outflow" ? "This saved view only includes cleared outflow payments in the selected period." : "Record an actual payment after money has moved or is in flight."}
                 actionLabel={canCreateLegalEntityScopedRecord ? "Record payment" : undefined}
                 onAction={canCreateLegalEntityScopedRecord ? () => setPaymentDialog({ mode: "create", form: paymentFormFrom(legalEntities, activeVendors) }) : undefined}
               />
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Vendor</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Method</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead className="text-right">Unapplied</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {payments.map((payment) => (
-                    <TableRow key={payment.id}>
-                      <TableCell>{payment.vendorName || (payment.vendorId ? `Vendor #${payment.vendorId}` : "Unassigned")}</TableCell>
-                      <TableCell>{formatDate(payment.paymentDate)}</TableCell>
-                      <TableCell>{payment.methodLabel || humanize(payment.methodType)}</TableCell>
-                      <TableCell>{statusBadge(payment.status)}</TableCell>
-                      <TableCell className="text-right">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
-                      <TableCell className="text-right">{formatMoney(payment.remainingAmountCents ?? payment.amountCents, payment.currency)}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <ActionTooltip content="View stored payment method details and active bill applications.">
-                            <Button size="sm" variant="outline" onClick={() => setPaymentDetail(payment)}><Eye className="h-4 w-4" />View details</Button>
-                          </ActionTooltip>
-                          {payment.status === "pending" && (
-                            <>
-                              <ActionTooltip content="Edit pending payment details before posting or clearing.">
-                                <Button size="sm" variant="outline" onClick={() => setPaymentDialog({ mode: "edit", payment, form: paymentFormFrom(legalEntities, activeVendors, payment) })}><Edit3 className="h-4 w-4" />Edit</Button>
-                              </ActionTooltip>
-                              <ActionTooltip content="Mark this pending payment as sent or posted.">
-                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/post`)}><CheckCircle2 className="h-4 w-4" />Post</Button>
-                              </ActionTooltip>
-                              <ActionTooltip content="Mark this pending payment as failed.">
-                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/fail`)}><XCircle className="h-4 w-4" />Fail</Button>
-                              </ActionTooltip>
-                              <ActionTooltip content="Void this pending payment before it posts.">
-                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/void`)}><Archive className="h-4 w-4" />Void</Button>
-                              </ActionTooltip>
-                            </>
-                          )}
-                          {payment.status === "posted" && (
-                            <ActionTooltip content="Mark this posted payment as cleared.">
-                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/clear`)}><CheckCircle2 className="h-4 w-4" />Clear</Button>
-                            </ActionTooltip>
-                          )}
-                          {["posted", "cleared"].includes(payment.status) && (
-                            <ActionTooltip content="Reverse this posted or cleared payment and its active applications.">
-                              <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/reverse`)}><RotateCcw className="h-4 w-4" />Reverse</Button>
-                            </ActionTooltip>
-                          )}
-                        </div>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table className="min-w-[1080px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Vendor</TableHead>
+                      <TableHead>Bill / Invoice</TableHead>
+                      <TableHead>Method</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right">Applied</TableHead>
+                      <TableHead className="text-right">Unapplied</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {payments.map((payment) => (
+                      <TableRow key={payment.id}>
+                        <TableCell>{formatDate(payment.paymentDate)}</TableCell>
+                        <TableCell>{payment.vendorName || (payment.vendorId ? `Vendor #${payment.vendorId}` : "Unassigned")}</TableCell>
+                        <TableCell>{paymentBillInvoiceLabel(payment, applications, billById)}</TableCell>
+                        <TableCell>{payment.methodLabel || humanize(payment.methodType)}</TableCell>
+                        <TableCell>{statusBadge(payment.status)}</TableCell>
+                        <TableCell className="text-right">{formatMoney(payment.amountCents, payment.currency)}</TableCell>
+                        <TableCell className="text-right">{formatMoney(payment.activeAppliedAmountCents ?? 0, payment.currency)}</TableCell>
+                        <TableCell className="text-right">{formatMoney(payment.remainingAmountCents ?? payment.amountCents, payment.currency)}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <ActionTooltip content="View stored payment method details and active bill applications.">
+                              <Button size="sm" variant="outline" onClick={() => setPaymentDetail(payment)}><Eye className="h-4 w-4" />View details</Button>
+                            </ActionTooltip>
+                            {payment.status === "pending" && (
+                              <>
+                                <ActionTooltip content="Edit pending payment details before posting or clearing.">
+                                  <Button size="sm" variant="outline" onClick={() => setPaymentDialog({ mode: "edit", payment, form: paymentFormFrom(legalEntities, activeVendors, payment) })}><Edit3 className="h-4 w-4" />Edit</Button>
+                                </ActionTooltip>
+                                <ActionTooltip content="Mark this pending payment as sent or posted.">
+                                  <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/post`)}><CheckCircle2 className="h-4 w-4" />Post</Button>
+                                </ActionTooltip>
+                                <ActionTooltip content="Mark this pending payment as failed.">
+                                  <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/fail`)}><XCircle className="h-4 w-4" />Fail</Button>
+                                </ActionTooltip>
+                                <ActionTooltip content="Void this pending payment before it posts.">
+                                  <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/void`)}><Archive className="h-4 w-4" />Void</Button>
+                                </ActionTooltip>
+                              </>
+                            )}
+                            {payment.status === "posted" && (
+                              <ActionTooltip content="Mark this posted payment as cleared.">
+                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/clear`)}><CheckCircle2 className="h-4 w-4" />Clear</Button>
+                              </ActionTooltip>
+                            )}
+                            {["posted", "cleared"].includes(payment.status) && (
+                              <ActionTooltip content="Reverse this posted or cleared payment and its active applications.">
+                                <Button size="sm" variant="outline" onClick={() => mutate("POST", `${V2_FINANCE_BASE}/payments/${payment.id}/reverse`)}><RotateCcw className="h-4 w-4" />Reverse</Button>
+                              </ActionTooltip>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t px-2 py-3 text-sm">
+                  <div className="font-medium">{paymentTotals.count} payments</div>
+                  <div className="flex flex-wrap gap-x-6 gap-y-2 text-muted-foreground">
+                    <span>Total <span className="font-medium text-foreground">{formatMoneyBreakdown(paymentTotals.totalAmountByCurrency)}</span></span>
+                    <span>Applied <span className="font-medium text-foreground">{formatMoneyBreakdown(paymentTotals.appliedAmountByCurrency)}</span></span>
+                    <span>Unapplied <span className="font-medium text-foreground">{formatMoneyBreakdown(paymentTotals.unappliedAmountByCurrency)}</span></span>
+                  </div>
+                </div>
+              </div>
             )}
           </Section>
         )}
@@ -2053,10 +2280,10 @@ export default function V2FinanceManagement() {
           >
             {isLoading ? (
               <EmptyState title="Loading recurring expenses" description="Loading expected recurring obligations." />
-            ) : subscriptions.length === 0 ? (
+            ) : displayedSubscriptions.length === 0 ? (
               <EmptyState
-                title="No recurring expenses yet"
-                description="Track SaaS, payroll providers, utilities, and services before bills arrive."
+                title={subscriptionView === "all" ? "No recurring expenses yet" : "No recurring expenses match this view"}
+                description={subscriptionView === "all" ? "Track SaaS, payroll providers, utilities, and services before bills arrive." : "Change the saved view or add a recurring expense when a new obligation starts."}
                 actionLabel={canCreateLegalEntityScopedRecord ? "Add recurring expense" : undefined}
                 onAction={canCreateLegalEntityScopedRecord ? () => setSubscriptionDialog({ mode: "create", form: subscriptionFormFrom(legalEntities, activeVendors) }) : undefined}
               />
@@ -2073,7 +2300,7 @@ export default function V2FinanceManagement() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {subscriptions.map((subscription) => (
+                  {displayedSubscriptions.map((subscription) => (
                     <TableRow key={subscription.id}>
                       <TableCell>
                         <div>{subscription.name}</div>

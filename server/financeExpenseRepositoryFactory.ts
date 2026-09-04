@@ -28,8 +28,10 @@ import type {
   ExpensePaymentListItem,
   FinanceExpenseRepository,
   FinanceListQuery,
+  FinancePaymentLedgerSummary,
   FinanceOverviewInput,
   FinanceVendorListItem,
+  ResolvedFinancePaymentListQuery,
   RecurringExpenseListItem,
   ReconciliationExceptionListItem,
   VendorBillListItem,
@@ -45,6 +47,10 @@ function compact<T extends Record<string, unknown>>(value: T): T {
 }
 
 function queryLimit(filters: FinanceListQuery) {
+  return Math.min(250, Math.max(1, filters.pageSize ?? 100));
+}
+
+function paymentQueryLimit(filters: ResolvedFinancePaymentListQuery) {
   return Math.min(250, Math.max(1, filters.pageSize ?? 100));
 }
 
@@ -154,6 +160,96 @@ function mapPaymentRows(
       remainingAmountCents: balance.unappliedAmountCents,
     };
   });
+}
+
+function paymentConditions(filters: ResolvedFinancePaymentListQuery) {
+  const conditions = [];
+  if (filters.status && filters.status !== "all") {
+    conditions.push(eq(expensePayments.status, filters.status));
+  }
+  if (filters.scope === "completed-outflow") {
+    conditions.push(eq(expensePayments.status, "cleared"));
+    conditions.push(eq(expensePayments.direction, "outflow"));
+  }
+  if (filters.vendorId) {
+    conditions.push(eq(expensePayments.vendorId, filters.vendorId));
+  }
+  if (filters.legalEntityId) {
+    conditions.push(eq(expensePayments.legalEntityId, filters.legalEntityId));
+  }
+  if (filters.paymentFrom) {
+    conditions.push(gte(expensePayments.paymentDate, filters.paymentFrom));
+  }
+  if (filters.paymentTo) {
+    conditions.push(lte(expensePayments.paymentDate, filters.paymentTo));
+  }
+  return conditions;
+}
+
+function summarizePaymentLedger(payments: ExpensePaymentListItem[]): FinancePaymentLedgerSummary {
+  const totalAmountByCurrency = new Map<string, number>();
+  const appliedAmountByCurrency = new Map<string, number>();
+  const unappliedAmountByCurrency = new Map<string, number>();
+  for (const payment of payments) {
+    totalAmountByCurrency.set(
+      payment.currency,
+      (totalAmountByCurrency.get(payment.currency) ?? 0) + payment.amountCents,
+    );
+    appliedAmountByCurrency.set(
+      payment.currency,
+      (appliedAmountByCurrency.get(payment.currency) ?? 0) + payment.activeAppliedAmountCents,
+    );
+    unappliedAmountByCurrency.set(
+      payment.currency,
+      (unappliedAmountByCurrency.get(payment.currency) ?? 0) + payment.remainingAmountCents,
+    );
+  }
+  const toCurrencyAmounts = (values: Map<string, number>) =>
+    Array.from(values.entries())
+      .map(([currency, amountCents]) => ({ currency, amountCents }))
+      .sort((left, right) => left.currency.localeCompare(right.currency));
+  return {
+    count: payments.length,
+    totalAmountByCurrency: toCurrencyAmounts(totalAmountByCurrency),
+    appliedAmountByCurrency: toCurrencyAmounts(appliedAmountByCurrency),
+    unappliedAmountByCurrency: toCurrencyAmounts(unappliedAmountByCurrency),
+  };
+}
+
+async function selectExpensePaymentRows(
+  database: DrizzleDb,
+  filters: ResolvedFinancePaymentListQuery,
+  options: { limit: boolean },
+) {
+  const conditions = paymentConditions(filters);
+  let query = database
+    .select({
+      payment: {
+        id: expensePayments.id,
+        legalEntityId: expensePayments.legalEntityId,
+        vendorId: expensePayments.vendorId,
+        amountCents: expensePayments.amountCents,
+        currency: expensePayments.currency,
+        direction: expensePayments.direction,
+        paymentDate: expensePayments.paymentDate,
+        methodType: expensePayments.methodType,
+        methodLabel: expensePayments.methodLabel,
+        institutionName: expensePayments.institutionName,
+        maskedLast4: expensePayments.maskedLast4,
+        externalConfirmationRef: expensePayments.externalConfirmationRef,
+        status: expensePayments.status,
+      },
+      vendorName: vendors.name,
+    })
+    .from(expensePayments)
+    .leftJoin(vendors, eq(expensePayments.vendorId, vendors.id))
+    .$dynamic();
+  if (conditions.length > 0) {
+    query = query.where(and(...conditions));
+  }
+
+  query = query.orderBy(desc(expensePayments.paymentDate), desc(expensePayments.createdAt));
+  return options.limit ? await query.limit(paymentQueryLimit(filters)) : await query;
 }
 
 async function documentCountsForBills(database: DrizzleDb, billIds: number[]) {
@@ -459,48 +555,31 @@ export function createFinanceExpenseRepository(database: DrizzleDb): FinanceExpe
     },
 
     listExpensePayments: async (filters) => {
-      const conditions = [];
-      if (filters.status && filters.status !== "all") {
-        conditions.push(eq(expensePayments.status, filters.status));
-      }
-      if (filters.vendorId) {
-        conditions.push(eq(expensePayments.vendorId, filters.vendorId));
-      }
-      if (filters.legalEntityId) {
-        conditions.push(eq(expensePayments.legalEntityId, filters.legalEntityId));
-      }
-
-      let query = database
-        .select({
-          payment: {
-            id: expensePayments.id,
-            legalEntityId: expensePayments.legalEntityId,
-            vendorId: expensePayments.vendorId,
-            amountCents: expensePayments.amountCents,
-            currency: expensePayments.currency,
-            direction: expensePayments.direction,
-            paymentDate: expensePayments.paymentDate,
-            methodType: expensePayments.methodType,
-            methodLabel: expensePayments.methodLabel,
-            institutionName: expensePayments.institutionName,
-            maskedLast4: expensePayments.maskedLast4,
-            externalConfirmationRef: expensePayments.externalConfirmationRef,
-            status: expensePayments.status,
-          },
-          vendorName: vendors.name,
-        })
-        .from(expensePayments)
-        .leftJoin(vendors, eq(expensePayments.vendorId, vendors.id))
-        .$dynamic();
-      if (conditions.length > 0) {
-        query = query.where(and(...conditions));
-      }
-
-      const rows = await query
-        .orderBy(desc(expensePayments.paymentDate), desc(expensePayments.createdAt))
-        .limit(queryLimit(filters));
+      const rows = await selectExpensePaymentRows(database, filters, { limit: true });
       const applications = await applicationsForPayments(database, rows.map((row: any) => row.payment.id));
       return mapPaymentRows(rows, applications);
+    },
+
+    listExpensePaymentLedger: async (filters) => {
+      const [rows, summaryRows] = await Promise.all([
+        selectExpensePaymentRows(database, filters, { limit: true }),
+        selectExpensePaymentRows(database, filters, { limit: false }),
+      ]);
+      const summaryApplications = await applicationsForPayments(
+        database,
+        summaryRows.map((row: any) => row.payment.id),
+      );
+      const displayPayments = mapPaymentRows(rows, summaryApplications);
+      const summaryPayments = mapPaymentRows(summaryRows, summaryApplications);
+      return {
+        payments: displayPayments,
+        summary: summarizePaymentLedger(summaryPayments),
+        filters: {
+          scope: filters.scope,
+          paymentFrom: filters.paymentFrom,
+          paymentTo: filters.paymentTo,
+        },
+      };
     },
 
     createExpensePayment: async (values) => {

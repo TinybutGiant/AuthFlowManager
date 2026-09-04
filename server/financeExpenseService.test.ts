@@ -26,6 +26,7 @@ import {
   recordFinancePayment,
   reverseFinanceBillApplication,
   reverseFinancePayment,
+  resolveFinancePaymentListQuery,
   resumeFinanceSubscription,
   transitionFinanceBillStatus,
   transitionFinanceReconciliationException,
@@ -682,6 +683,91 @@ test("finance overview separates expected subscriptions from actual bills and pa
   assert.equal(overview.metrics.missingDocumentsCount, 1);
   assert.equal(overview.metrics.subscriptionPriceVarianceCount, 1);
   assert.equal(overview.subscriptionPriceVariances[0].differenceAmountCents, 500);
+});
+
+test("finance payment saved views resolve to explicit reusable ledger filters", () => {
+  assert.deepEqual(
+    resolveFinancePaymentListQuery({ pageSize: 100, period: "this-month", scope: "completed-outflow" }, "2026-09-04"),
+    {
+      search: undefined,
+      status: undefined,
+      vendorId: undefined,
+      legalEntityId: undefined,
+      dueFrom: undefined,
+      dueTo: undefined,
+      pageSize: 100,
+      paymentFrom: "2026-09-01",
+      paymentTo: "2026-09-04",
+      scope: "completed-outflow",
+    },
+  );
+  assert.equal(resolveFinancePaymentListQuery({ pageSize: 100, period: "ytd", scope: "completed-outflow" }, "2026-09-04").paymentFrom, "2026-01-01");
+  assert.equal(resolveFinancePaymentListQuery({ pageSize: 100, period: "last-month", scope: "completed-outflow" }, "2026-09-04").paymentTo, "2026-08-31");
+  assert.equal(resolveFinancePaymentListQuery({ pageSize: 100, period: "last-12-months", scope: "completed-outflow" }, "2026-09-04").paymentFrom, "2025-09-04");
+  assert.equal(resolveFinancePaymentListQuery({ pageSize: 100, period: "all-time", scope: "completed-outflow" }, "2026-09-04").paymentFrom, undefined);
+  assert.deepEqual(
+    resolveFinancePaymentListQuery({
+      pageSize: 100,
+      period: "custom",
+      scope: "completed-outflow",
+      paymentFrom: "2026-08-01",
+      paymentTo: "2026-08-31",
+    }, "2026-09-04"),
+    {
+      search: undefined,
+      status: undefined,
+      vendorId: undefined,
+      legalEntityId: undefined,
+      dueFrom: undefined,
+      dueTo: undefined,
+      pageSize: 100,
+      paymentFrom: "2026-08-01",
+      paymentTo: "2026-08-31",
+      scope: "completed-outflow",
+    },
+  );
+  assertFinanceError(
+    () => resolveFinancePaymentListQuery({
+      pageSize: 100,
+      period: "custom",
+      scope: "completed-outflow",
+      paymentFrom: "2026-09-30",
+      paymentTo: "2026-09-01",
+    }, "2026-09-04"),
+    "PAYMENT_DATE_RANGE_INVALID",
+  );
+});
+
+test("AP paid metrics use paymentDate for historical bookkeeping periods", () => {
+  const overview = deriveFinanceOverviewFromRows({
+    today: "2026-09-04",
+    bills: [],
+    subscriptions: [],
+    payments: [
+      {
+        id: 2025,
+        amountCents: 1046,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2025-09-28",
+        status: "cleared",
+      },
+      {
+        id: 2026,
+        amountCents: 1046,
+        currency: "USD",
+        direction: "outflow",
+        paymentDate: "2026-08-29",
+        status: "cleared",
+      },
+    ],
+    reconciliationExceptions: [],
+  });
+
+  assert.deepEqual(overview.metrics.paidThisMonthByCurrency, []);
+  assert.deepEqual(overview.metrics.paidYtdByCurrency, [
+    { currency: "USD", amountCents: 1046 },
+  ]);
 });
 
 test("monthly recurring spend converts fixed active cadences and excludes variable subscriptions", () => {

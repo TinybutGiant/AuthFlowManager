@@ -38,7 +38,6 @@ test("V2 finance read queries declare explicit V2 query functions", () => {
     "/vendors?pageSize=100",
     "/subscriptions?pageSize=100",
     "/bills?pageSize=100",
-    "/payments?pageSize=100",
     "/bill-applications?pageSize=100",
     "/reconciliation-exceptions?pageSize=100",
   ];
@@ -51,6 +50,9 @@ test("V2 finance read queries declare explicit V2 query functions", () => {
       ),
     );
   }
+
+  assert.match(source, /queryKey: \[paymentQueryPath\(paymentPeriod, paymentScope, customPaymentFrom, customPaymentTo\)\]/);
+  assert.match(source, /queryFn: \(\{ queryKey \}\) => v2FinanceJson<FinancePaymentLedger>\(String\(queryKey\[0\]\)\)/);
 });
 
 test("V2 finance shows payment-sourced spend metrics and payment details", () => {
@@ -101,6 +103,71 @@ test("V2 finance shows payment-sourced spend metrics and payment details", () =>
   assert.doesNotMatch(detailDialog, /accountNumber|cardNumber|fullCard|fullAccount/i);
 });
 
+test("V2 finance makes overview metrics clickable saved ledger views", () => {
+  assert.match(source, /import \{ useLocation, useSearch \} from "wouter";/);
+  assert.match(source, /type PaymentPeriod = "this-month" \| "last-month" \| "ytd" \| "last-12-months" \| "all-time" \| "custom";/);
+  assert.match(source, /type PaymentScope = "all" \| "completed-outflow";/);
+  assert.match(source, /function financeTabFromLocation\(location: string\)/);
+  assert.match(source, /function paymentQueryPath\(period: PaymentPeriod, scope: PaymentScope, paymentFrom: string, paymentTo: string\)/);
+  assert.match(source, /function navigatePaymentPeriod\(period: PaymentPeriod/);
+  assert.match(source, /setLocation\(financeUrl\(tab, params\)\)/);
+  assert.match(source, /const search = useSearch\(\);/);
+  assert.match(source, /const searchParams = React\.useMemo\(\(\) => new URLSearchParams\(search\), \[search\]\);/);
+  assert.match(source, /const tab = financeTabFromLocation\(location\);/);
+  assert.match(source, /const paymentPeriod = parsePaymentPeriod\(searchParams\.get\("period"\)\);/);
+  assert.match(source, /const paymentScope = parsePaymentScope\(searchParams\.get\("scope"\), searchParams\.has\("period"\)\);/);
+  assert.match(source, /const customPaymentFrom = searchParams\.get\("paymentFrom"\) \?\? "";/);
+  assert.match(source, /const customPaymentTo = searchParams\.get\("paymentTo"\) \?\? "";/);
+
+  const metrics = sourceBetween("<div className=\"grid gap-4 md:grid-cols-3 xl:grid-cols-6\">", "<div className=\"flex flex-wrap gap-2\">");
+  assert.match(metrics, /onClick=\{\(\) => navigateFinance\("bills", \{ view: "open" \}\)\}/);
+  assert.match(metrics, /onClick=\{\(\) => navigateFinance\("bills", \{ view: "overdue" \}\)\}/);
+  assert.match(metrics, /onClick=\{\(\) => navigateFinance\("subscriptions", \{ view: "active" \}\)\}/);
+  assert.match(metrics, /onClick=\{\(\) => navigatePaymentPeriod\("this-month"\)\}/);
+  assert.match(metrics, /onClick=\{\(\) => navigatePaymentPeriod\("ytd"\)\}/);
+});
+
+test("V2 finance payments ledger exposes period filters and row subtotals", () => {
+  const paymentsTable = sourceBetween("{tab === \"payments\" && (", "{tab === \"subscriptions\" && (");
+
+  assert.match(source, /type FinancePaymentLedgerSummary = \{/);
+  assert.match(source, /type FinancePaymentLedger = \{[\s\S]*?payments: FinancePayment\[\];[\s\S]*?summary: FinancePaymentLedgerSummary;[\s\S]*?\};/);
+  assert.match(source, /const payments = paymentsQuery\.data\?\.payments \?\? \[\];/);
+  assert.match(source, /const paymentTotals = paymentsQuery\.data\?\.summary \?\? paymentLedgerTotals\(payments\);/);
+  for (const label of ["This month", "Last month", "YTD", "Last 12 months", "All time", "Custom range"]) {
+    assert.match(source, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assertOrdered(paymentsTable, [
+    "<Label>Period</Label>",
+    "paymentPeriods.map",
+    "Completed AP spend",
+    "Date",
+    "Vendor",
+    "Bill / Invoice",
+    "Method",
+    "Status",
+    "Amount",
+    "Applied",
+    "Unapplied",
+    "Actions",
+    "View details",
+    "{paymentTotals.count} payments",
+    "Total",
+    "Applied",
+    "Unapplied",
+  ]);
+  assert.match(paymentsTable, /paymentBillInvoiceLabel\(payment, applications, billById\)/);
+  assert.match(paymentsTable, /formatMoney\(payment\.activeAppliedAmountCents \?\? 0, payment\.currency\)/);
+  assert.match(paymentsTable, /formatMoney\(payment\.remainingAmountCents \?\? payment\.amountCents, payment\.currency\)/);
+  assert.match(paymentsTable, /formatMoneyBreakdown\(paymentTotals\.totalAmountByCurrency\)/);
+  assert.match(paymentsTable, /formatMoneyBreakdown\(paymentTotals\.appliedAmountByCurrency\)/);
+  assert.match(paymentsTable, /formatMoneyBreakdown\(paymentTotals\.unappliedAmountByCurrency\)/);
+  assert.match(source, /function paymentLedgerTotals\(payments: FinancePayment\[\]\): FinancePaymentLedgerSummary/);
+  assert.match(source, /totalAmountByCurrency\.set\(payment\.currency/);
+  assert.match(source, /appliedByCurrency\.set\(payment\.currency/);
+  assert.match(source, /unappliedByCurrency\.set\(payment\.currency/);
+});
+
 test("V2 finance restores AP notes without adding legacy finance coupling", () => {
   assert.match(source, /type FinanceVendor = \{[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
   assert.match(source, /type FinanceSubscription = \{[\s\S]*?name: string;[\s\S]*?notes\?: string \| null;[\s\S]*?\};/);
@@ -121,7 +188,7 @@ test("V2 finance uses loaded AP labels instead of raw IDs when available", () =>
   assert.match(source, /function billLabel\(bill: FinanceBill\)/);
   assert.match(source, /function subscriptionLabel\(subscription: FinanceSubscription\)/);
   assert.match(source, /function paymentLabel\(payment: FinancePayment\)/);
-  assert.match(source, /return `\$\{vendor\} — \$\{subscription\.name\}`;/);
+  assert.match(source, /return `\$\{vendor\} - \$\{subscription\.name\}`;/);
 
   assert.doesNotMatch(source, /options=\{legalEntities\.map\(\(entity\) => String\(entity\.id\)\)\}/);
   assert.doesNotMatch(source, /options=\{vendors\.map\(\(vendor\) => String\(vendor\.id\)\)\}/);

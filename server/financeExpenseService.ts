@@ -87,6 +87,8 @@ const EXPENSE_PAYMENT_METHODS = ["provider", "ach", "check", "card", "wire", "ma
 const EXPENSE_PAYMENT_STATUSES = ["pending", "posted", "cleared", "failed", "reversed", "voided"] as const;
 const EXPENSE_PAYMENT_MUTABLE_STATUSES = ["pending"] as const;
 const EXPENSE_PAYMENT_TRANSITION_STATUSES = ["posted", "cleared", "failed", "voided"] as const;
+const FINANCE_PAYMENT_PERIODS = ["this-month", "last-month", "ytd", "last-12-months", "all-time", "custom"] as const;
+const FINANCE_PAYMENT_SCOPES = ["all", "completed-outflow"] as const;
 const FINANCE_AUDIT_ENTITY_TYPES = [
   "vendor",
   "recurring_expense",
@@ -258,6 +260,30 @@ function endOfUtcMonth(date: string) {
   return dateOnly(end);
 }
 
+function startOfUtcMonth(date: string) {
+  return `${date.slice(0, 7)}-01`;
+}
+
+function startOfUtcYear(date: string) {
+  return `${date.slice(0, 4)}-01-01`;
+}
+
+function previousUtcMonthRange(date: string) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  const start = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() - 1, 1));
+  const end = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 0));
+  return {
+    from: dateOnly(start),
+    to: dateOnly(end),
+  };
+}
+
+function addUtcMonths(date: string, months: number) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCMonth(value.getUTCMonth() + months);
+  return dateOnly(value);
+}
+
 export const financeListQuerySchema = z.object({
   search: optionalText(200),
   status: optionalText(40),
@@ -275,6 +301,19 @@ export const financeListQuerySchema = z.object({
     (value) => value === "" || value === undefined ? 100 : value,
     z.coerce.number().int().min(1).max(250).default(100),
   ),
+}).strict();
+
+export const financePaymentListQuerySchema = financeListQuerySchema.extend({
+  period: z.preprocess(
+    (value) => value === "" || value === undefined ? "all-time" : value,
+    z.enum(FINANCE_PAYMENT_PERIODS).default("all-time"),
+  ),
+  scope: z.preprocess(
+    (value) => value === "" || value === undefined ? "all" : value,
+    z.enum(FINANCE_PAYMENT_SCOPES).default("all"),
+  ),
+  paymentFrom: optionalDateOnlySchema,
+  paymentTo: optionalDateOnlySchema,
 }).strict();
 
 const vendorWriteFields = {
@@ -688,6 +727,12 @@ export const createFinanceDocumentPayloadSchema = z.object({
 }).strict();
 
 export type FinanceListQuery = z.infer<typeof financeListQuerySchema>;
+export type FinancePaymentListQuery = z.input<typeof financePaymentListQuerySchema>;
+export type ResolvedFinancePaymentListQuery = FinanceListQuery & {
+  paymentFrom?: string | null;
+  paymentTo?: string | null;
+  scope?: (typeof FINANCE_PAYMENT_SCOPES)[number];
+};
 export type CreateVendorPayload = z.infer<typeof createVendorPayloadSchema>;
 export type UpdateVendorPayload = z.infer<typeof updateVendorPayloadSchema>;
 export type CreateRecurringExpensePayload = z.infer<typeof createRecurringExpensePayloadSchema>;
@@ -812,6 +857,23 @@ export interface ExpensePaymentListItem {
   status: string;
   activeAppliedAmountCents: number;
   remainingAmountCents: number;
+}
+
+export interface FinancePaymentLedgerSummary {
+  count: number;
+  totalAmountByCurrency: CurrencyAmount[];
+  appliedAmountByCurrency: CurrencyAmount[];
+  unappliedAmountByCurrency: CurrencyAmount[];
+}
+
+export interface FinancePaymentLedger {
+  payments: ExpensePaymentListItem[];
+  summary: FinancePaymentLedgerSummary;
+  filters: {
+    scope?: ResolvedFinancePaymentListQuery["scope"];
+    paymentFrom?: string | null;
+    paymentTo?: string | null;
+  };
 }
 
 export interface VendorBillApplicationListItem {
@@ -967,7 +1029,8 @@ export interface FinanceExpenseRepository {
     excludeVendorBillId?: number;
   }): Promise<Pick<VendorBill, "id"> | undefined>;
   getExpensePayment(id: number): Promise<ExpensePayment | undefined>;
-  listExpensePayments(filters: FinanceListQuery): Promise<ExpensePaymentListItem[]>;
+  listExpensePayments(filters: ResolvedFinancePaymentListQuery): Promise<ExpensePaymentListItem[]>;
+  listExpensePaymentLedger(filters: ResolvedFinancePaymentListQuery): Promise<FinancePaymentLedger>;
   createExpensePayment(values: InsertExpensePayment): Promise<ExpensePayment>;
   updateExpensePayment(id: number, values: Partial<InsertExpensePayment>): Promise<ExpensePayment | undefined>;
   getVendorBillApplication(id: number): Promise<VendorBillApplication | undefined>;
@@ -1237,18 +1300,60 @@ function isOpenPayableBill(bill: Pick<FinanceOverviewBillRow, "billKind" | "stat
   return remainingBillAmountCents(bill) > 0;
 }
 
-function startOfUtcMonth(date: string) {
-  return `${date.slice(0, 7)}-01`;
-}
-
-function startOfUtcYear(date: string) {
-  return `${date.slice(0, 4)}-01-01`;
-}
-
-function isCompletedOutflowPayment(
+export function isCompletedOutflowPayment(
   payment: Pick<FinanceOverviewPaymentRow, "direction" | "paymentDate" | "status">,
 ) {
   return payment.status === "cleared" && payment.direction === "outflow" && Boolean(normalizeDate(payment.paymentDate));
+}
+
+export function resolveFinancePaymentListQuery(
+  query: FinancePaymentListQuery,
+  today = dateOnly(),
+): ResolvedFinancePaymentListQuery {
+  const parsed = financePaymentListQuerySchema.parse(query);
+  let paymentFrom = parsed.paymentFrom ?? undefined;
+  let paymentTo = parsed.paymentTo ?? undefined;
+
+  switch (parsed.period) {
+    case "this-month":
+      paymentFrom = startOfUtcMonth(today);
+      paymentTo = today;
+      break;
+    case "last-month": {
+      const range = previousUtcMonthRange(today);
+      paymentFrom = range.from;
+      paymentTo = range.to;
+      break;
+    }
+    case "ytd":
+      paymentFrom = startOfUtcYear(today);
+      paymentTo = today;
+      break;
+    case "last-12-months":
+      paymentFrom = addUtcMonths(today, -12);
+      paymentTo = today;
+      break;
+    case "all-time":
+    case "custom":
+      break;
+  }
+
+  if (paymentFrom && paymentTo && paymentFrom > paymentTo) {
+    fail(400, "PAYMENT_DATE_RANGE_INVALID", "Payment start date must be on or before payment end date.");
+  }
+
+  return {
+    search: parsed.search,
+    status: parsed.status,
+    vendorId: parsed.vendorId,
+    legalEntityId: parsed.legalEntityId,
+    dueFrom: parsed.dueFrom,
+    dueTo: parsed.dueTo,
+    pageSize: parsed.pageSize,
+    paymentFrom,
+    paymentTo,
+    scope: parsed.scope,
+  };
 }
 
 function paidByCurrency(
@@ -2057,8 +2162,12 @@ export async function transitionFinanceBillStatus(
   });
 }
 
-export function listFinancePayments(repo: FinanceExpenseRepository, query: FinanceListQuery) {
-  return repo.listExpensePayments(query);
+export function listFinancePayments(repo: FinanceExpenseRepository, query: FinancePaymentListQuery) {
+  return repo.listExpensePayments(resolveFinancePaymentListQuery(query));
+}
+
+export function listFinancePaymentLedger(repo: FinanceExpenseRepository, query: FinancePaymentListQuery) {
+  return repo.listExpensePaymentLedger(resolveFinancePaymentListQuery(query));
 }
 
 export async function recordFinancePayment(
